@@ -1,0 +1,48 @@
+services:
+  # Web Service - Dashboard and API
+  - type: web
+    name: alphatrades-web
+    env: python
+    region: oregon
+    plan: starter
+    buildCommand: pip install -r requirements.txt && python init_db.py
+    startCommand: gunicorn app:app
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: DATABASE_URL
+        fromDatabase:
+          name: alphatrades-db
+          property: connectionString
+      - key: FINNHUB_API_KEY
+        sync: false  # Set manually in Render dashboard
+      - key: TRADING_MODE
+        value: paper
+  
+  # Background Worker - Market Monitor
+  - type: worker
+    name: alphatrades-worker
+    env: python
+    region: oregon
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python worker.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: DATABASE_URL
+        fromDatabase:
+          name: alphatrades-db
+          property: connectionString
+      - key: FINNHUB_API_KEY
+        sync: false  # Set manually in Render dashboard
+      - key: TRADING_MODE
+        value: paper
+
+databases:
+  - name: alphatrades-db
+    databaseName: alphatrades
+    user: alphatrades
+    plan: starter  # $7/month
+    region: oregon
