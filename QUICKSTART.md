@@ -9,12 +9,19 @@
 
 ## Your Database
 
-**Connection String:**
+**Internal URL (for Render services):**
+```
+postgresql://alphatrades_db_user:kY5KYLQ16AQ43Ylp5foW0enqfSyiCZxK@dpg-d6kak47kijhs73cat0o0-a/alphatrades_db
+```
+
+**External URL (for local testing):**
 ```
 postgresql://alphatrades_db_user:kY5KYLQ16AQ43Ylp5foW0enqfSyiCZxK@dpg-d6kak47kijhs73cat0o0-a.oregon-postgres.render.com/alphatrades_db
 ```
 
 **Status:** ✅ Connected and initialized with all tables
+
+> **Note:** Use internal URL for deployed services (faster, more secure)
 
 ## Next Steps (5 minutes)
 
@@ -47,7 +54,7 @@ You'll be prompted for GitHub credentials or token.
    - **Plan:** Starter ($7/month)
 
 5. **Environment Variables:**
-   - `DATABASE_URL` = (paste your database URL above)
+   - `DATABASE_URL` = `postgresql://alphatrades_db_user:kY5KYLQ16AQ43Ylp5foW0enqfSyiCZxK@dpg-d6kak47kijhs73cat0o0-a/alphatrades_db` (internal URL - faster)
    - `FINNHUB_API_KEY` = (paste your Finnhub key)
    - `TRADING_MODE` = `paper`
 
@@ -66,7 +73,7 @@ You'll be prompted for GitHub credentials or token.
    - **Plan:** Starter ($7/month)
 
 4. **Environment Variables:** (same as web service)
-   - `DATABASE_URL` = (paste your database URL above)
+   - `DATABASE_URL` = `postgresql://alphatrades_db_user:kY5KYLQ16AQ43Ylp5foW0enqfSyiCZxK@dpg-d6kak47kijhs73cat0o0-a/alphatrades_db` (internal URL)
    - `FINNHUB_API_KEY` = (paste your Finnhub key)
    - `TRADING_MODE` = `paper`
 
