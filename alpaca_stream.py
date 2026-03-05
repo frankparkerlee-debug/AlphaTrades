@@ -55,12 +55,15 @@ class AlpacaStream:
         response = await websocket.recv()
         data = json.loads(response)
         
-        if data[0].get('T') == 'success' and data[0].get('msg') == 'authenticated':
-            logger.info("✅ WebSocket authenticated successfully")
-            return True
-        else:
-            logger.error(f"❌ Authentication failed: {data}")
-            return False
+        # Check for success message (Alpaca sends 'connected' on initial auth)
+        if data[0].get('T') == 'success':
+            msg = data[0].get('msg', '')
+            if msg in ['authenticated', 'connected']:
+                logger.info(f"✅ WebSocket authenticated successfully ({msg})")
+                return True
+        
+        logger.error(f"❌ Authentication failed: {data}")
+        return False
     
     async def _subscribe(self, websocket):
         """Subscribe to stock trade updates"""
