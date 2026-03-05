@@ -15,8 +15,14 @@ services:
         fromDatabase:
           name: alphatrades-db
           property: connectionString
-      - key: FINNHUB_API_KEY
+      - key: ALPACA_API_KEY
         sync: false  # Set manually in Render dashboard
+      - key: ALPACA_SECRET_KEY
+        sync: false  # Set manually in Render dashboard
+      - key: ALPACA_BASE_URL
+        value: https://paper-api.alpaca.markets
+      - key: ALPACA_DATA_URL
+        value: https://data.alpaca.markets
       - key: TRADING_MODE
         value: paper
   
@@ -35,8 +41,14 @@ services:
         fromDatabase:
           name: alphatrades-db
           property: connectionString
-      - key: FINNHUB_API_KEY
+      - key: ALPACA_API_KEY
         sync: false  # Set manually in Render dashboard
+      - key: ALPACA_SECRET_KEY
+        sync: false  # Set manually in Render dashboard
+      - key: ALPACA_BASE_URL
+        value: https://paper-api.alpaca.markets
+      - key: ALPACA_DATA_URL
+        value: https://data.alpaca.markets
       - key: TRADING_MODE
         value: paper
 
