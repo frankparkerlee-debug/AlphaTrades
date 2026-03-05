@@ -20,23 +20,14 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Lazy-load stream (initialize on first request, not at import time)
+# TEMPORARY: WebSocket streaming disabled due to worker timeout issues
+# Will re-enable after debugging gevent/asyncio compatibility
 alpaca_stream = None
 
 def get_alpaca_stream():
-    """Lazy-load the Alpaca stream to avoid blocking worker startup"""
-    global alpaca_stream
-    if alpaca_stream is None:
-        try:
-            # Initialize stream with timeout protection
-            logger.info("🔄 Initializing Alpaca WebSocket stream...")
-            alpaca_stream = get_stream()
-            logger.info("✅ Alpaca WebSocket stream initialized")
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize stream: {e}", exc_info=True)
-            # Don't retry immediately - return None and let caller handle it
-            return None
-    return alpaca_stream
+    """WebSocket stream temporarily disabled - returns None"""
+    # TODO: Re-enable after fixing gevent/asyncio compatibility
+    return None
 
 # Alpaca API credentials
 ALPACA_API_KEY = os.getenv('ALPACA_API_KEY', '')

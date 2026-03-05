@@ -757,23 +757,36 @@ updateStockCards();
 
 // Update every 15 seconds (52 calls/min - safely under 60/min limit)
 // 13 calls per update × 4 updates/min = 52 calls/min
-// Real-Time Streaming with Server-Sent Events
+// Real-Time Streaming with Server-Sent Events (TEMPORARILY DISABLED)
 let eventSource = null;
 let priceCache = {}; // Cache latest prices from stream
+let streamAttempts = 0;
+let usePolling = false;  // Flag to fall back to polling
 
 function initRealTimeStream() {
+    // Check if we should use polling instead (after 3 failed attempts)
+    if (usePolling || streamAttempts >= 3) {
+        console.log('⚠️ WebSocket stream unavailable, using REST API polling');
+        document.getElementById('updateTime').textContent = 'Polling (2s intervals)';
+        usePolling = true;
+        return;
+    }
+    
+    streamAttempts++;
+    
     // Close existing connection if any
     if (eventSource) {
         eventSource.close();
     }
     
-    console.log('🔌 Connecting to real-time price stream...');
+    console.log(`🔌 Connecting to real-time price stream (attempt ${streamAttempts}/3)...`);
     eventSource = new EventSource('/api/stream/prices');
     
     eventSource.onopen = function() {
         console.log('✅ Connected to real-time stream');
         document.getElementById('updateTime').textContent = 'Live • Real-Time';
         document.getElementById('updateIndicator').classList.add('pulse');
+        streamAttempts = 0;  // Reset on success
     };
     
     eventSource.onmessage = function(event) {
@@ -786,7 +799,10 @@ function initRealTimeStream() {
             }
             
             if (update.error) {
-                console.error('Stream error:', update.error);
+                console.error('⚠️ Stream not available:', update.error);
+                eventSource.close();
+                usePolling = true;  // Fall back to polling
+                document.getElementById('updateTime').textContent = 'Polling (2s intervals)';
                 return;
             }
             
@@ -805,11 +821,20 @@ function initRealTimeStream() {
     };
     
     eventSource.onerror = function(error) {
-        console.error('❌ Stream error, reconnecting...', error);
+        console.warn(`⚠️ Stream error (attempt ${streamAttempts}/3)`);
         document.getElementById('updateTime').textContent = 'Reconnecting...';
         document.getElementById('updateIndicator').classList.remove('pulse');
         
-        // Reconnect after 2 seconds
+        // Close and fall back to polling after 3 attempts
+        if (streamAttempts >= 3) {
+            console.log('❌ Stream failed 3 times, falling back to polling');
+            eventSource.close();
+            usePolling = true;
+            document.getElementById('updateTime').textContent = 'Polling (2s intervals)';
+            return;
+        }
+        
+        // Try reconnecting after 2 seconds
         setTimeout(() => {
             initRealTimeStream();
         }, 2000);
@@ -962,17 +987,23 @@ function updateSPYTrend() {
 // Load initial data on page load
 updateStockCards();
 
-// Start real-time stream
+// Try real-time stream first
 initRealTimeStream();
 
-// Fallback: Refresh every 60 seconds in case stream dies
+// Polling fallback (runs every 2 seconds if stream unavailable)
 setInterval(() => {
-    const lastUpdate = document.getElementById('updateTime').textContent;
-    if (lastUpdate.includes('Reconnecting') || lastUpdate.includes('Connecting')) {
-        console.log('Stream appears dead, forcing refresh...');
+    if (usePolling) {
+        console.log('📡 Polling for updates...');
         updateStockCards();
+    } else {
+        // Check if stream is dead
+        const lastUpdate = document.getElementById('updateTime').textContent;
+        if (lastUpdate.includes('Reconnecting') || lastUpdate.includes('Connecting')) {
+            console.log('Stream appears dead, forcing refresh...');
+            updateStockCards();
+        }
     }
-}, 60000);
+}, 2000);  // Poll every 2 seconds (was 60 seconds)
 
 // Add CSS for price flash animation
 const style = document.createElement('style');
