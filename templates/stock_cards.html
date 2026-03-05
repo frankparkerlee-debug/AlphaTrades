@@ -966,13 +966,8 @@ async function showDetails(ticker, quote) {
     modal.classList.add('active');
 }
 
-        
-        // Update timestamp
-        const timestamp = card.querySelector('.score-timestamp');
-        if (timestamp) {
-            timestamp.textContent = new Date().toLocaleTimeString();
-        }
-    }
+function closeModal() {
+    document.getElementById('detailModal').classList.remove('active');
 }
 
 function updateSPYTrend() {
