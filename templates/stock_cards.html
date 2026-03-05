@@ -678,28 +678,40 @@ async function showDetails(ticker, quote) {
     const directionIcon = result.direction === 'CALL' ? '📈' : '📉';
     const gradeTime = new Date(result.timestamp * 1000).toLocaleString();
     
-    // Fetch real options pricing
+    // Fetch real options pricing - use "nearest" endpoint to find actual available contracts
     let optionsData = null;
     try {
         const optionType = result.direction.toLowerCase();
-        const apiUrl = `/api/options/${ticker}?strike=${result.strike}&type=${optionType}&expiration=${result.expirationDate}`;
-        console.log(`🔍 Fetching options: ${apiUrl}`);
+        // Use "nearest" endpoint to find closest matching contract that exists
+        const apiUrl = `/api/options/nearest/${ticker}?strike=${result.strike}&type=${optionType}&expiration=${result.expirationDate}`;
+        console.log(`🔍 Fetching nearest available option: ${apiUrl}`);
         
         const response = await fetch(apiUrl);
         console.log(`📡 Options API response status: ${response.status}`);
         
         if (response.ok) {
             optionsData = await response.json();
-            console.log('✅ Real options data:', optionsData);
+            console.log('✅ Real options data (nearest match):', optionsData);
             
             // Check if we got actual data or an error message
             if (optionsData.error) {
                 console.warn('⚠️ Options API returned error:', optionsData.error);
                 optionsData = null;
+            } else {
+                // Update result with actual expiration found
+                if (optionsData.expiration !== result.expirationDate) {
+                    console.log(`ℹ️ Using nearest expiration: ${optionsData.expiration} (requested: ${result.expirationDate})`);
+                    result.expirationDate = optionsData.expiration;
+                    result.dte = optionsData.dte;
+                }
+                if (optionsData.strike !== result.strike) {
+                    console.log(`ℹ️ Using nearest strike: ${optionsData.strike} (requested: ${result.strike})`);
+                    result.strike = optionsData.strike;
+                }
             }
         } else {
-            const errorText = await response.text();
-            console.error(`❌ Options API failed (${response.status}):`, errorText);
+            const errorData = await response.json().catch(() => ({}));
+            console.error(`❌ Options API failed (${response.status}):`, errorData);
         }
     } catch (error) {
         console.error('❌ Could not fetch options data:', error);
