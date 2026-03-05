@@ -9,6 +9,7 @@ from flask import Flask, jsonify, request, render_template, Response, stream_wit
 from models import Alert, Trade, DailyPerformance, ModelConfig, AccountState, get_session
 from alpaca_client import AlpacaClient
 from options_selector import get_selector
+from scorer_convergence import get_convergence_scorer
 # DISABLED: Stream causing worker timeouts even without monkey patching
 # from alpaca_stream_gevent import get_stream
 from datetime import datetime, timedelta
@@ -599,6 +600,101 @@ def api_options_debug(symbol):
     except Exception as e:
         logger.error(f"Debug endpoint error: {e}", exc_info=True)
         return jsonify({'error': str(e), 'traceback': str(e)}), 500
+
+@app.route('/api/signal/<symbol>')
+def api_signal(symbol):
+    """Get complete convergence signal + optimal option for a ticker"""
+    try:
+        alpaca = AlpacaClient()
+        
+        # Get stock quote
+        quote = alpaca.get_snapshot(symbol.upper())
+        stock_price = quote.get('c', 0)
+        
+        if not stock_price:
+            return jsonify({'error': 'Could not get stock price'}), 500
+        
+        # Get SPY for market context
+        spy_quote = alpaca.get_snapshot('SPY')
+        spy_current = spy_quote.get('c', 0)
+        spy_prev = spy_quote.get('pc', spy_current)
+        market_data = {
+            'is_up': spy_current >= spy_prev,
+            'change_pct': ((spy_current - spy_prev) / spy_prev * 100) if spy_prev else 0
+        }
+        
+        # Run convergence scoring
+        scorer = get_convergence_scorer(ALPACA_API_KEY, ALPACA_SECRET_KEY)
+        convergence_result = scorer.score_ticker(symbol.upper(), quote, market_data)
+        
+        # Get optimal option based on convergence direction
+        # Use momentum signal to determine direction
+        momentum_move = convergence_result['signals']['momentum']['metrics'].get('move_from_open', 0)
+        option_type = 'call' if momentum_move >= 0 else 'put'
+        
+        # Get options chain
+        chain_data = alpaca.get_options_chain(symbol.upper())
+        
+        optimal_option = None
+        if 'error' not in chain_data and chain_data.get('snapshots'):
+            selector = get_selector()
+            optimal_option = selector.select_best_contract(
+                chain_data.get('snapshots', {}),
+                stock_price,
+                option_type
+            )
+        
+        # Combine results
+        result = {
+            'ticker': symbol.upper(),
+            'stock_price': stock_price,
+            'convergence': convergence_result,
+            'option': optimal_option,
+            'recommendation': _generate_recommendation(convergence_result, optimal_option)
+        }
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error generating signal for {symbol}: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+def _generate_recommendation(convergence, option):
+    """Generate trading recommendation based on convergence + options"""
+    score = convergence['total_score']
+    grade = convergence['grade']
+    convergence_count = convergence['convergence_count']
+    confidence = convergence['confidence']
+    
+    if not option:
+        return {
+            'action': 'NO TRADE',
+            'reason': 'No suitable options contract available',
+            'confidence': 'N/A'
+        }
+    
+    if score >= 85 and convergence_count >= 4:
+        action = 'STRONG BUY'
+        reason = f"{convergence_count} signals converged. Grade {grade}. High probability setup."
+    elif score >= 75 and convergence_count >= 3:
+        action = 'BUY'
+        reason = f"{convergence_count} signals converged. Grade {grade}. Good setup."
+    elif score >= 65:
+        action = 'CONSIDER'
+        reason = f"Grade {grade}. Moderate setup. Watch for more convergence."
+    else:
+        action = 'PASS'
+        reason = f"Grade {grade}. Insufficient convergence. Wait for better setup."
+    
+    return {
+        'action': action,
+        'reason': reason,
+        'confidence': confidence,
+        'entry': option.get('mid'),
+        'stop': round(option.get('mid', 0) * 0.70, 2),
+        'target': round(option.get('mid', 0) * 1.50, 2),
+        'risk_reward': '1:1.67'
+    }
 
 @app.route('/health')
 def health():
