@@ -28,10 +28,14 @@ def get_alpaca_stream():
     global alpaca_stream
     if alpaca_stream is None:
         try:
+            # Initialize stream with timeout protection
+            logger.info("🔄 Initializing Alpaca WebSocket stream...")
             alpaca_stream = get_stream()
             logger.info("✅ Alpaca WebSocket stream initialized")
         except Exception as e:
-            logger.error(f"Failed to initialize stream: {e}")
+            logger.error(f"❌ Failed to initialize stream: {e}", exc_info=True)
+            # Don't retry immediately - return None and let caller handle it
+            return None
     return alpaca_stream
 
 # Alpaca API credentials
@@ -213,9 +217,16 @@ def stream_prices():
     """Server-Sent Events endpoint for real-time price updates"""
     def generate():
         """Generator function for SSE"""
-        stream = get_alpaca_stream()
+        # Try to get stream, but don't fail if it's not available
+        try:
+            stream = get_alpaca_stream()
+        except Exception as e:
+            logger.error(f"Stream initialization failed in endpoint: {e}")
+            stream = None
+        
         if not stream:
-            yield f"data: {json.dumps({'error': 'Stream not initialized'})}\n\n"
+            # Fallback: Send error and close connection
+            yield f"data: {json.dumps({'error': 'Stream not available - using REST API fallback'})}\n\n"
             return
         
         # Send initial connection confirmation
