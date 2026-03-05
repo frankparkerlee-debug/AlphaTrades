@@ -5,11 +5,6 @@ Multiple independent signals that score separately - convergence = high probabil
 import logging
 import requests
 from datetime import datetime, timedelta
-from technical_indicators import (
-    calculate_rsi, calculate_macd, calculate_bollinger_bands,
-    calculate_ema, calculate_sma, calculate_adx,
-    calculate_volume_ratio, is_higher_highs, is_higher_lows
-)
 
 logger = logging.getLogger(__name__)
 
@@ -20,18 +15,14 @@ class ConvergenceScorer:
         self.alpaca_api_key = alpaca_api_key
         self.alpaca_secret_key = alpaca_secret_key
         
-        # Data URLs
-        self.data_url = 'https://data.alpaca.markets'
-        
         # Signal weights (total = 100)
         self.weights = {
             'momentum': 25,      # Price momentum strength
-            'volume': 20,        # Volume surge vs historical
-            'trend': 15,         # Trend analysis (EMAs, ADX)
-            'technical': 10,     # Technical indicators (RSI, MACD, BB)
-            'news': 15,          # Breaking news/announcements
-            'sentiment': 10,     # Social sentiment (StockTwits)
-            'market': 5          # Market relativity (vs SPY)
+            'volume': 20,        # Volume surge/trend
+            'news': 20,          # Breaking news/announcements
+            'sentiment': 15,     # Social sentiment (StockTwits)
+            'market': 10,        # Market relativity (vs SPY)
+            'technical': 10      # Support/resistance, trend
         }
         
     def score_ticker(self, ticker, quote_data, market_data):
@@ -51,7 +42,7 @@ class ConvergenceScorer:
                     'market': {...},
                     'technical': {...}
                 },
-                'convergence_count': 0-7,  # How many signals aligned
+                'convergence_count': 0-6,  # How many signals aligned
                 'catalysts': [],  # List of identified catalysts
                 'confidence': 'HIGH/MEDIUM/LOW'
             }
@@ -67,39 +58,31 @@ class ConvergenceScorer:
         if momentum_result['score'] >= 20:
             catalysts.append(momentum_result['reason'])
         
-        # 2. Volume Surge Score (20 pts)
+        # 2. Volume Score (20 pts)
         volume_result = self._score_volume(ticker, quote_data)
         signals['volume'] = volume_result
         if volume_result['score'] >= 16:
             catalysts.append(volume_result['reason'])
         
-        # 3. Trend Analysis Score (15 pts)
-        trend_result = self._score_trend(ticker, quote_data)
-        signals['trend'] = trend_result
-        if trend_result['score'] >= 12:
-            catalysts.append(trend_result['reason'])
-        
-        # 4. Technical Indicators Score (10 pts)
-        technical_result = self._score_technicals(ticker, quote_data)
-        signals['technical'] = technical_result
-        if technical_result['score'] >= 8:
-            catalysts.append(technical_result['reason'])
-        
-        # 5. News Score (15 pts)
+        # 3. News Score (20 pts)
         news_result = self._score_news(ticker)
         signals['news'] = news_result
-        if news_result['score'] >= 12:
+        if news_result['score'] >= 16:
             catalysts.extend(news_result.get('catalysts', []))
         
-        # 6. Sentiment Score (10 pts)
+        # 4. Sentiment Score (15 pts)
         sentiment_result = self._score_sentiment(ticker)
         signals['sentiment'] = sentiment_result
-        if sentiment_result['score'] >= 8:
+        if sentiment_result['score'] >= 12:
             catalysts.append(sentiment_result['reason'])
         
-        # 7. Market Alignment Score (5 pts)
+        # 5. Market Score (10 pts)
         market_result = self._score_market(ticker, quote_data, market_data)
         signals['market'] = market_result
+        
+        # 6. Technical Score (10 pts)
+        technical_result = self._score_technical(ticker, quote_data)
+        signals['technical'] = technical_result
         
         # Calculate totals
         total_score = sum(s['score'] for s in signals.values())
@@ -108,10 +91,10 @@ class ConvergenceScorer:
         # Determine grade
         grade = self._score_to_grade(total_score)
         
-        # Determine confidence (out of 7 signals)
-        if convergence_count >= 6:
+        # Determine confidence
+        if convergence_count >= 5:
             confidence = 'HIGH'
-        elif convergence_count >= 4:
+        elif convergence_count >= 3:
             confidence = 'MEDIUM'
         else:
             confidence = 'LOW'
@@ -128,7 +111,7 @@ class ConvergenceScorer:
         }
         
         logger.info(f"   ✅ {ticker} Score: {total_score}/100 ({grade})")
-        logger.info(f"   Convergence: {convergence_count}/7 signals aligned")
+        logger.info(f"   Convergence: {convergence_count}/6 signals aligned")
         logger.info(f"   Confidence: {confidence}")
         
         return result
@@ -189,80 +172,21 @@ class ConvergenceScorer:
         }
     
     def _score_volume(self, ticker, quote_data):
-        """Score volume surge vs 20-day average (20 pts)"""
-        try:
-            # Get 20-day historical volume
-            headers = {
-                'APCA-API-KEY-ID': self.alpaca_api_key,
-                'APCA-API-SECRET-KEY': self.alpaca_secret_key
-            }
-            
-            url = f"{self.data_url}/v2/stocks/{ticker}/bars"
-            params = {
-                'timeframe': '1Day',
-                'limit': 20
-            }
-            
-            response = requests.get(url, headers=headers, params=params, timeout=5)
-            
-            if response.status_code != 200:
-                return {'score': 10, 'status': '⚠️', 'reason': 'Volume data unavailable'}
-            
-            data = response.json()
-            bars = data.get('bars', [])
-            
-            if not bars or len(bars) < 5:
-                return {'score': 10, 'status': '⚠️', 'reason': 'Insufficient volume history'}
-            
-            # Calculate average historical volume
-            historical_volumes = [bar['v'] for bar in bars[:-1]]  # Exclude today
-            current_volume = quote_data.get('v', 0)
-            
-            if not current_volume or sum(historical_volumes) == 0:
-                return {'score': 10, 'status': '⚠️', 'reason': 'No volume data'}
-            
-            volume_ratio = calculate_volume_ratio(current_volume, historical_volumes)
-            
-            # Score based on volume surge
-            score = 0
-            if volume_ratio >= 300:
-                score = 20
-                reason = f"Extreme volume surge ({volume_ratio:.0f}% avg)"
-            elif volume_ratio >= 200:
-                score = 16
-                reason = f"High volume ({volume_ratio:.0f}% avg)"
-            elif volume_ratio >= 150:
-                score = 12
-                reason = f"Above average volume ({volume_ratio:.0f}%)"
-            elif volume_ratio >= 100:
-                score = 8
-                reason = f"Normal volume ({volume_ratio:.0f}%)"
-            elif volume_ratio >= 50:
-                score = 4
-                reason = f"Below average volume ({volume_ratio:.0f}%)"
-            else:
-                score = 0
-                reason = f"Very low volume ({volume_ratio:.0f}%)"
-            
-            status = '✅' if score >= 16 else '⚠️' if score >= 8 else '❌'
-            
-            return {
-                'score': score,
-                'status': status,
-                'reason': reason,
-                'metrics': {
-                    'volume_ratio': round(volume_ratio, 0),
-                    'current_volume': current_volume,
-                    'avg_volume': sum(historical_volumes) / len(historical_volumes)
-                }
-            }
-            
-        except Exception as e:
-            logger.error(f"Error calculating volume for {ticker}: {e}")
-            return {'score': 10, 'status': '⚠️', 'reason': 'Volume calculation error'}
+        """Score volume surge (20 pts)"""
+        # TODO: Get actual volume data from Alpaca
+        # For now, placeholder scoring
+        score = 10
+        status = '⚠️'
+        reason = "Volume data pending"
+        
+        return {
+            'score': score,
+            'status': status,
+            'reason': reason
+        }
     
     def _score_news(self, ticker):
-        """Score news/announcements (15 pts)"""
+        """Score news/announcements (20 pts)"""
         if not self.alpaca_api_key:
             return {'score': 0, 'status': '⚠️', 'reason': 'News API not configured', 'catalysts': []}
         
@@ -327,27 +251,27 @@ class ConvergenceScorer:
                 most_recent_hours = min(n['hours_ago'] for n in recent_news)
                 
                 if most_recent_hours < 2:  # Breaking news
-                    score = 15
+                    score = 20
                     reason = f"Breaking news {int(most_recent_hours)}h ago"
                 elif most_recent_hours < 6:
-                    score = 12
+                    score = 15
                     reason = f"Recent news {int(most_recent_hours)}h ago"
                 elif most_recent_hours < 24:
-                    score = 8
+                    score = 10
                     reason = f"News {int(most_recent_hours)}h ago"
                 else:
-                    score = 4
+                    score = 5
                     reason = "Older news"
                 
                 # Bonus for multiple articles (trending)
-                if len(recent_news) >= 3 and score < 15:
-                    score = min(score + 3, 15)
+                if len(recent_news) >= 3:
+                    score += 5
                     reason += f" ({len(recent_news)} articles)"
             else:
                 score = 0
                 reason = "No recent news"
             
-            status = '✅' if score >= 12 else '⚠️' if score >= 6 else '❌'
+            status = '✅' if score >= 16 else '⚠️' if score >= 8 else '❌'
             
             return {
                 'score': score,
@@ -362,7 +286,7 @@ class ConvergenceScorer:
             return {'score': 0, 'status': '⚠️', 'reason': 'News fetch error', 'catalysts': []}
     
     def _score_sentiment(self, ticker):
-        """Score social sentiment from StockTwits (10 pts)"""
+        """Score social sentiment from StockTwits (15 pts)"""
         try:
             # StockTwits API (free, no key needed for basic)
             url = f"https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
@@ -404,22 +328,22 @@ class ConvergenceScorer:
             # Score based on bullish sentiment
             score = 0
             if bullish_pct >= 70:
-                score = 10
+                score = 15
                 reason = f"Very bullish ({int(bullish_pct)}%)"
             elif bullish_pct >= 60:
-                score = 8
+                score = 12
                 reason = f"Bullish ({int(bullish_pct)}%)"
             elif bullish_pct >= 50:
-                score = 5
+                score = 8
                 reason = f"Slightly bullish ({int(bullish_pct)}%)"
             elif bearish_pct >= 60:
-                score = 2
+                score = 3
                 reason = f"Bearish ({int(bearish_pct)}%)"
             else:
-                score = 3
+                score = 5
                 reason = "Mixed sentiment"
             
-            status = '✅' if score >= 8 else '⚠️' if score >= 4 else '❌'
+            status = '✅' if score >= 12 else '⚠️' if score >= 6 else '❌'
             
             return {
                 'score': score,
@@ -437,7 +361,7 @@ class ConvergenceScorer:
             return {'score': 0, 'status': '⚠️', 'reason': 'Social sentiment unavailable'}
     
     def _score_market(self, ticker, quote_data, market_data):
-        """Score market relativity vs SPY (5 pts)"""
+        """Score market relativity vs SPY (10 pts)"""
         # Check if stock is outperforming market
         stock_move = ((quote_data.get('c', 0) - quote_data.get('pc', 0)) / quote_data.get('pc', 1)) * 100
         spy_move = market_data.get('change_pct', 0)
@@ -446,19 +370,19 @@ class ConvergenceScorer:
         
         score = 0
         if outperformance >= 3:
-            score = 5
+            score = 10
             reason = f"Strong outperformance (+{outperformance:.1f}% vs SPY)"
         elif outperformance >= 1:
-            score = 4
+            score = 7
             reason = f"Outperforming (+{outperformance:.1f}% vs SPY)"
         elif outperformance >= 0:
-            score = 3
+            score = 5
             reason = f"Slight outperformance (+{outperformance:.1f}% vs SPY)"
         else:
-            score = 1
+            score = 2
             reason = f"Underperforming ({outperformance:.1f}% vs SPY)"
         
-        status = '✅' if score >= 4 else '⚠️' if score >= 2 else '❌'
+        status = '✅' if score >= 7 else '⚠️' if score >= 5 else '❌'
         
         return {
             'score': score,
@@ -471,178 +395,40 @@ class ConvergenceScorer:
             }
         }
     
-    def _score_trend(self, ticker, quote_data):
-        """Score trend analysis - EMAs, ADX, higher highs pattern (15 pts)"""
-        try:
-            # Get 1-hour bars for trend analysis
-            headers = {
-                'APCA-API-KEY-ID': self.alpaca_api_key,
-                'APCA-API-SECRET-KEY': self.alpaca_secret_key
-            }
-            
-            url = f"{self.data_url}/v2/stocks/{ticker}/bars"
-            params = {
-                'timeframe': '1Hour',
-                'limit': 50
-            }
-            
-            response = requests.get(url, headers=headers, params=params, timeout=5)
-            
-            if response.status_code != 200:
-                return {'score': 7, 'status': '⚠️', 'reason': 'Trend data unavailable'}
-            
-            data = response.json()
-            bars = data.get('bars', [])
-            
-            if not bars or len(bars) < 21:
-                return {'score': 7, 'status': '⚠️', 'reason': 'Insufficient trend data'}
-            
-            closes = [bar['c'] for bar in bars]
-            current_price = quote_data.get('c', 0)
-            
-            # Calculate EMAs
-            ema9 = calculate_ema(closes, 9)
-            ema21 = calculate_ema(closes, 21)
-            sma50 = calculate_sma(closes, min(50, len(closes)))
-            
-            # Calculate ADX for trend strength
-            adx = calculate_adx(bars[-21:], period=14) if len(bars) >= 21 else 0
-            
-            # Check for higher highs pattern
-            making_higher_highs = is_higher_highs(bars[-10:], lookback=5)
-            
-            score = 0
-            reasons = []
-            
-            # EMA alignment (fast > slow = uptrend)
-            if ema9 > ema21 and current_price > ema9:
-                score += 6
-                reasons.append("EMA uptrend")
-            elif ema9 > ema21:
-                score += 3
-                reasons.append("Weak uptrend")
-            
-            # Price above 50 SMA (medium-term trend)
-            if current_price > sma50:
-                score += 3
-                reasons.append("Above 50-SMA")
-            
-            # ADX trend strength
-            if adx > 25:
-                score += 4
-                reasons.append(f"Strong trend (ADX={adx:.0f})")
-            elif adx > 20:
-                score += 2
-                reasons.append("Moderate trend")
-            
-            # Higher highs pattern
-            if making_higher_highs:
-                score += 2
-                reasons.append("Making new highs")
-            
-            reason = ", ".join(reasons) if reasons else "Weak trend"
-            status = '✅' if score >= 12 else '⚠️' if score >= 6 else '❌'
-            
-            return {
-                'score': min(score, 15),  # Cap at max points
-                'status': status,
-                'reason': reason,
-                'metrics': {
-                    'ema9': round(ema9, 2),
-                    'ema21': round(ema21, 2),
-                    'adx': round(adx, 1),
-                    'higher_highs': making_higher_highs
-                }
-            }
-            
-        except Exception as e:
-            logger.error(f"Error calculating trend for {ticker}: {e}")
-            return {'score': 7, 'status': '⚠️', 'reason': 'Trend calculation error'}
-    
-    def _score_technicals(self, ticker, quote_data):
-        """Score technical indicators - RSI, MACD, Bollinger Bands (10 pts)"""
-        try:
-            # Get 1-hour bars for technical indicators
-            headers = {
-                'APCA-API-KEY-ID': self.alpaca_api_key,
-                'APCA-API-SECRET-KEY': self.alpaca_secret_key
-            }
-            
-            url = f"{self.data_url}/v2/stocks/{ticker}/bars"
-            params = {
-                'timeframe': '1Hour',
-                'limit': 50
-            }
-            
-            response = requests.get(url, headers=headers, params=params, timeout=5)
-            
-            if response.status_code != 200:
-                return {'score': 5, 'status': '⚠️', 'reason': 'Technical data unavailable'}
-            
-            data = response.json()
-            bars = data.get('bars', [])
-            
-            if not bars or len(bars) < 20:
-                return {'score': 5, 'status': '⚠️', 'reason': 'Insufficient technical data'}
-            
-            closes = [bar['c'] for bar in bars]
-            current_price = quote_data.get('c', 0)
-            
-            # Calculate RSI
-            rsi = calculate_rsi(closes, period=14)
-            
-            # Calculate MACD
-            macd_line, signal_line, histogram = calculate_macd(closes)
-            
-            # Calculate Bollinger Bands
-            bb_upper, bb_middle, bb_lower = calculate_bollinger_bands(closes)
-            
-            score = 0
-            reasons = []
-            
-            # RSI scoring (sweet spot: 50-70 for uptrend)
-            if 50 <= rsi <= 70:
-                score += 4
-                reasons.append(f"RSI optimal ({rsi:.0f})")
-            elif 40 <= rsi < 50 or 70 < rsi <= 80:
-                score += 2
-                reasons.append(f"RSI acceptable ({rsi:.0f})")
-            elif rsi > 80:
-                score += 0
-                reasons.append(f"RSI overbought ({rsi:.0f})")
-            elif rsi < 30:
-                score += 0
-                reasons.append(f"RSI oversold ({rsi:.0f})")
-            
-            # MACD scoring (want positive momentum)
-            if histogram > 0:
-                score += 3
-                reasons.append("MACD bullish")
-            else:
-                reasons.append("MACD bearish")
-            
-            # Bollinger Band scoring
-            if current_price > bb_middle:
-                score += 3
-                reasons.append("Above BB mid")
-            
-            reason = ", ".join(reasons) if reasons else "Neutral technicals"
-            status = '✅' if score >= 8 else '⚠️' if score >= 4 else '❌'
-            
-            return {
-                'score': min(score, 10),  # Cap at max points
-                'status': status,
-                'reason': reason,
-                'metrics': {
-                    'rsi': round(rsi, 1),
-                    'macd': round(histogram, 2),
-                    'bb_position': 'above' if current_price > bb_middle else 'below'
-                }
-            }
-            
-        except Exception as e:
-            logger.error(f"Error calculating technicals for {ticker}: {e}")
-            return {'score': 5, 'status': '⚠️', 'reason': 'Technical calculation error'}
+    def _score_technical(self, ticker, quote_data):
+        """Score technical setup (10 pts)"""
+        current = quote_data.get('c', 0)
+        open_price = quote_data.get('o', current)
+        high = quote_data.get('h', current)
+        low = quote_data.get('l', current)
+        
+        # Simple technical scoring
+        # TODO: Add more sophisticated technical analysis
+        
+        # Check if near high of day (momentum continuation)
+        distance_from_high = ((high - current) / current) * 100 if current else 0
+        
+        score = 0
+        if distance_from_high < 0.5:
+            score = 10
+            reason = "At HOD (strong)"
+        elif distance_from_high < 1.0:
+            score = 7
+            reason = "Near HOD"
+        elif distance_from_high < 2.0:
+            score = 5
+            reason = "Below HOD"
+        else:
+            score = 3
+            reason = "Off highs"
+        
+        status = '✅' if score >= 7 else '⚠️' if score >= 4 else '❌'
+        
+        return {
+            'score': score,
+            'status': status,
+            'reason': reason
+        }
     
     def _score_to_grade(self, score):
         """Convert numeric score to letter grade"""
