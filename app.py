@@ -20,13 +20,19 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Initialize WebSocket stream on startup
-try:
-    alpaca_stream = get_stream()
-    logger.info("✅ Alpaca WebSocket stream initialized")
-except Exception as e:
-    logger.error(f"Failed to initialize stream: {e}")
-    alpaca_stream = None
+# Lazy-load stream (initialize on first request, not at import time)
+alpaca_stream = None
+
+def get_alpaca_stream():
+    """Lazy-load the Alpaca stream to avoid blocking worker startup"""
+    global alpaca_stream
+    if alpaca_stream is None:
+        try:
+            alpaca_stream = get_stream()
+            logger.info("✅ Alpaca WebSocket stream initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize stream: {e}")
+    return alpaca_stream
 
 # Alpaca API credentials
 ALPACA_API_KEY = os.getenv('ALPACA_API_KEY', '')
@@ -207,7 +213,8 @@ def stream_prices():
     """Server-Sent Events endpoint for real-time price updates"""
     def generate():
         """Generator function for SSE"""
-        if not alpaca_stream:
+        stream = get_alpaca_stream()
+        if not stream:
             yield f"data: {json.dumps({'error': 'Stream not initialized'})}\n\n"
             return
         
@@ -218,7 +225,7 @@ def stream_prices():
         while True:
             try:
                 # Get next update from stream (blocks for max 1 second)
-                update = alpaca_stream.get_price_update(timeout=1)
+                update = stream.get_price_update(timeout=1)
                 
                 if update:
                     # Send update as SSE event
@@ -249,12 +256,13 @@ def stream_prices():
 @app.route('/api/stream/latest')
 def latest_prices():
     """Get latest cached prices for all symbols"""
-    if not alpaca_stream:
+    stream = get_alpaca_stream()
+    if not stream:
         return jsonify({'error': 'Stream not initialized'}), 503
     
     prices = {}
-    for symbol in alpaca_stream.stock_symbols:
-        price_data = alpaca_stream.get_latest_price(symbol)
+    for symbol in stream.stock_symbols:
+        price_data = stream.get_latest_price(symbol)
         if price_data:
             prices[symbol] = price_data
     
