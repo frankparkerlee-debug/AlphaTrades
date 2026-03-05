@@ -2,7 +2,6 @@
 Technical Indicators for Momentum Strategy
 RSI, MACD, Bollinger Bands, EMA, SMA, ADX
 """
-import numpy as np
 from typing import List, Tuple
 
 def calculate_sma(prices: List[float], period: int) -> float:
