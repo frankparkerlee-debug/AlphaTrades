@@ -10,11 +10,11 @@ from queue import Queue
 import time
 import ssl
 import socket
-from gevent import spawn, sleep, monkey
+from gevent import spawn, sleep
 from websocket import create_connection, WebSocketConnectionClosedException
 
-# Patch standard library for gevent compatibility
-monkey.patch_all()
+# NOTE: No monkey patching - causes recursion errors when imported
+# gevent greenlets work fine without patching stdlib in this isolated module
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

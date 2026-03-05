@@ -8,7 +8,7 @@ Three-page architecture:
 from flask import Flask, jsonify, request, render_template, Response, stream_with_context
 from models import Alert, Trade, DailyPerformance, ModelConfig, AccountState, get_session
 from alpaca_client import AlpacaClient
-# from alpaca_stream_gevent import get_stream  # TEMPORARILY DISABLED - causing 500 errors
+from alpaca_stream_gevent import get_stream
 from datetime import datetime, timedelta
 import logging
 import os
@@ -20,12 +20,21 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# WebSocket stream TEMPORARILY DISABLED (causing 500 errors)
+# WebSocket stream using gevent (fixed recursion error)
 alpaca_stream = None
 
 def get_alpaca_stream():
-    """WebSocket stream temporarily disabled - debugging 500 errors"""
-    return None
+    """Lazy-load the Alpaca stream using gevent-compatible WebSocket"""
+    global alpaca_stream
+    if alpaca_stream is None:
+        try:
+            logger.info("🔄 Initializing Alpaca WebSocket stream (gevent, no monkey patch)...")
+            alpaca_stream = get_stream()
+            logger.info("✅ Alpaca WebSocket stream initialized")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize stream: {e}", exc_info=True)
+            return None
+    return alpaca_stream
 
 # Alpaca API credentials
 ALPACA_API_KEY = os.getenv('ALPACA_API_KEY', '')
