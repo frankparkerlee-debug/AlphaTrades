@@ -1,15 +1,17 @@
 """
 Flask Web Service - API and Dashboard
 """
-from flask import Flask, jsonify, request, render_template_string
+from flask import Flask, jsonify, request, render_template_string, render_template
 from models import Alert, Trade, DailyPerformance, ModelConfig, AccountState, get_session
 from datetime import datetime, timedelta
 import logging
+import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+FINNHUB_API_KEY = os.getenv('FINNHUB_API_KEY', '')
 
 # Simple HTML dashboard template
 DASHBOARD_HTML = """
@@ -240,8 +242,8 @@ def dashboard():
         # Get closed trades
         closed_trades = session.query(Trade).filter_by(status='CLOSED').order_by(Trade.exit_time.desc()).limit(20).all()
         
-        return render_template_string(
-            DASHBOARD_HTML,
+        return render_template(
+            'combined_dashboard.html',
             account=account,
             win_rate=win_rate,
             open_positions=len(open_trades),
@@ -249,6 +251,7 @@ def dashboard():
             open_trades=open_trades,
             closed_trades=closed_trades,
             hold_time=hold_time,
+            finnhub_key=FINNHUB_API_KEY,
             mode='paper'  # TODO: Get from config
         )
     except Exception as e:

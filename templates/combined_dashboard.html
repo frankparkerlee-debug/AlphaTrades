@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AlphaTrades - Live & Historical Dashboard</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { max-width: 1800px; margin: 0 auto; }
+        .section-card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            padding: 25px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-radius: 12px 12px 0 0;
+        }
+        .header h1 { font-size: 24px; }
+        .header h2 { font-size: 18px; margin-top: 5px; opacity: 0.9; }
+        
+        /* Live ticker cards */
+        .ticker-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 15px;
+            padding: 20px;
+        }
+        .ticker-card {
+            background: white;
+            border: 3px solid;
+            border-radius: 8px;
+            padding: 15px;
+        }
+        .ticker-card.grade-a { border-color: #28a745; background: linear-gradient(135deg, #e8f5e9 0%, #ffffff 100%); }
+        .ticker-card.grade-b { border-color: #ffc107; background: linear-gradient(135deg, #fff9e6 0%, #ffffff 100%); }
+        .ticker-card.grade-c { border-color: #fd7e14; background: linear-gradient(135deg, #fff3e6 0%, #ffffff 100%); }
+        .ticker-card.grade-d { border-color: #dc3545; background: linear-gradient(135deg, #ffe6e6 0%, #ffffff 100%); }
+        
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #e9ecef;
+        }
+        .ticker-symbol { font-size: 20px; font-weight: bold; color: #2a5298; }
+        .grade-badge {
+            font-size: 18px;
+            font-weight: bold;
+            padding: 4px 12px;
+            border-radius: 6px;
+            color: white;
+        }
+        .grade-badge.grade-a { background: #28a745; }
+        .grade-badge.grade-b { background: #ffc107; color: #856404; }
+        .grade-badge.grade-c { background: #fd7e14; }
+        .grade-badge.grade-d { background: #dc3545; }
+        
+        .price { font-size: 24px; font-weight: bold; color: #2a5298; }
+        .change {
+            font-size: 14px;
+            font-weight: 600;
+            padding: 3px 8px;
+            border-radius: 4px;
+            margin-left: 8px;
+        }
+        .change.positive { background: #d4edda; color: #155724; }
+        .change.negative { background: #f8d7da; color: #721c24; }
+        
+        .trade-info {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 6px;
+            margin-top: 10px;
+            font-size: 13px;
+        }
+        
+        /* Historical data tables */
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            padding: 20px;
+        }
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        .stat-value { font-size: 32px; font-weight: bold; margin: 10px 0; }
+        .stat-label { font-size: 14px; opacity: 0.9; }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        th {
+            background: #f8f9fa;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            border-bottom: 2px solid #dee2e6;
+            font-size: 13px;
+        }
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #e9ecef;
+            font-size: 13px;
+        }
+        tr:hover { background: #f8f9fa; }
+        
+        .positive { color: #28a745; font-weight: bold; }
+        .negative { color: #dc3545; font-weight: bold; }
+        .loading { text-align: center; padding: 40px; color: #6c757d; }
+        
+        .live-dot {
+            width: 8px;
+            height: 8px;
+            background: #28a745;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Live Market Data Section -->
+        <div class="section-card">
+            <div class="header">
+                <div>
+                    <h1>📊 Live Market Scanner - Strategy 1</h1>
+                    <h2>Real-time Options Trading Alerts</h2>
+                </div>
+                <div style="font-size: 14px;">
+                    <span class="live-dot"></span>
+                    <span>Updates every 5 seconds</span>
+                </div>
+            </div>
+            <div id="loading" class="loading">⚡ Loading live data...</div>
+            <div id="tickerGrid" class="ticker-grid" style="display:none;"></div>
+        </div>
+
+        <!-- Historical Performance Section -->
+        <div class="section-card">
+            <div class="header">
+                <h1>📈 Account Performance</h1>
+            </div>
+            <div class="stats">
+                <div class="stat-card">
+                    <div class="stat-label">Account Value</div>
+                    <div class="stat-value">${{ account.total_value|round(2) }}</div>
+                    <div class="stat-label">Capital: ${{ account.current_capital|round(2) }}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Total P/L</div>
+                    <div class="stat-value" style="color: {{ 'lime' if account.cumulative_pl >= 0 else 'red' }}">${{ account.cumulative_pl|round(2) }}</div>
+                    <div class="stat-label">{{ account.total_trades }} trades</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Win Rate</div>
+                    <div class="stat-value">{{ win_rate|round(1) }}%</div>
+                    <div class="stat-label">{{ account.winning_trades }}W / {{ account.losing_trades }}L</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Open Positions</div>
+                    <div class="stat-value">{{ open_positions }}</div>
+                    <div class="stat-label">Active trades</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Alerts -->
+        <div class="section-card">
+            <div class="header">
+                <h1>🚨 Recent Alerts (Last 24h)</h1>
+            </div>
+            <div style="padding: 20px; overflow-x: auto;">
+                <table>
+                    <tr>
+                        <th>Time</th>
+                        <th>Ticker</th>
+                        <th>Grade</th>
+                        <th>Score</th>
+                        <th>Move %</th>
+                        <th>Range %</th>
+                        <th>Direction</th>
+                        <th>Strike</th>
+                    </tr>
+                    {% for alert in alerts %}
+                    <tr>
+                        <td>{{ alert.timestamp.strftime('%H:%M:%S') }}</td>
+                        <td><strong>{{ alert.ticker }}</strong></td>
+                        <td><span class="grade-badge grade-{{ alert.grade[0].lower() }}">{{ alert.grade }}</span></td>
+                        <td>{{ alert.score }}/55</td>
+                        <td>{{ alert.move_pct|round(2) }}%</td>
+                        <td>{{ alert.range_pct|round(2) }}%</td>
+                        <td>{{ alert.direction }}</td>
+                        <td>${{ alert.strike|round(2) }}</td>
+                    </tr>
+                    {% endfor %}
+                </table>
+                {% if not alerts %}
+                <div class="loading">No alerts in last 24 hours. Market may be closed or Worker is starting up.</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Open Positions -->
+        <div class="section-card">
+            <div class="header">
+                <h1>💼 Open Positions</h1>
+            </div>
+            <div style="padding: 20px; overflow-x: auto;">
+                <table>
+                    <tr>
+                        <th>Entry</th>
+                        <th>Ticker</th>
+                        <th>Direction</th>
+                        <th>Strike</th>
+                        <th>Grade</th>
+                        <th>Entry $</th>
+                        <th>Position Size</th>
+                        <th>Hold Time</th>
+                    </tr>
+                    {% for trade in open_trades %}
+                    <tr>
+                        <td>{{ trade.entry_time.strftime('%m/%d %H:%M') }}</td>
+                        <td><strong>{{ trade.ticker }}</strong></td>
+                        <td>{{ trade.direction }}</td>
+                        <td>${{ trade.strike|round(2) }}</td>
+                        <td><span class="grade-badge grade-{{ trade.grade[0].lower() }}">{{ trade.grade }}</span></td>
+                        <td>${{ trade.entry_option_price|round(2) }}</td>
+                        <td>${{ trade.position_size|round(2) }}</td>
+                        <td>{{ hold_time(trade.entry_time) }}</td>
+                    </tr>
+                    {% endfor %}
+                </table>
+                {% if not open_trades %}
+                <div class="loading">No open positions. Waiting for next A+ or A grade alert.</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Closed Trades -->
+        <div class="section-card">
+            <div class="header">
+                <h1>📊 Closed Trades (Last 20)</h1>
+            </div>
+            <div style="padding: 20px; overflow-x: auto;">
+                <table>
+                    <tr>
+                        <th>Date</th>
+                        <th>Ticker</th>
+                        <th>Direction</th>
+                        <th>Strike</th>
+                        <th>Grade</th>
+                        <th>Entry</th>
+                        <th>Exit</th>
+                        <th>P/L</th>
+                        <th>P/L %</th>
+                        <th>Hold</th>
+                        <th>Exit Reason</th>
+                    </tr>
+                    {% for trade in closed_trades %}
+                    <tr>
+                        <td>{{ trade.entry_time.strftime('%m/%d') }}</td>
+                        <td><strong>{{ trade.ticker }}</strong></td>
+                        <td>{{ trade.direction }}</td>
+                        <td>${{ trade.strike|round(2) }}</td>
+                        <td><span class="grade-badge grade-{{ trade.grade[0].lower() }}">{{ trade.grade }}</span></td>
+                        <td>${{ trade.entry_option_price|round(2) }}</td>
+                        <td>${{ trade.exit_option_price|round(2) }}</td>
+                        <td class="{{ 'positive' if trade.profit_loss >= 0 else 'negative' }}">${{ trade.profit_loss|round(2) }}</td>
+                        <td class="{{ 'positive' if trade.profit_loss_pct >= 0 else 'negative' }}">{{ trade.profit_loss_pct|round(1) }}%</td>
+                        <td>{{ trade.hold_days }}d</td>
+                        <td>{{ trade.exit_reason }}</td>
+                    </tr>
+                    {% endfor %}
+                </table>
+                {% if not closed_trades %}
+                <div class="loading">No closed trades yet. System just started!</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const TICKERS = ['NVDA', 'TSLA', 'AMD', 'AAPL', 'AMZN', 'META', 'MSFT', 'GOOGL', 'NFLX', 'AVGO', 'ORCL', 'ADBE'];
+        const FINNHUB_API_KEY = '{{ finnhub_key }}';
+        let cardsCreated = false;
+
+        async function fetchQuote(ticker) {
+            const url = `https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${FINNHUB_API_KEY}`;
+            const response = await fetch(url);
+            return await response.json();
+        }
+
+        async function fetchSPY() {
+            const spy = await fetchQuote('SPY');
+            return {
+                isUp: spy.c > spy.pc,
+                change: ((spy.c - spy.pc) / spy.pc * 100).toFixed(2)
+            };
+        }
+
+        function calculateScore(quote, marketTrend) {
+            const open = quote.o || 0;
+            const current = quote.c || 0;
+            const high = quote.h || 0;
+            const low = quote.l || 0;
+            
+            if (open === 0 || current === 0) return { total: 0, grade: 'D', decision: 'SKIP' };
+            
+            const moveFromOpen = Math.abs((current - open) / open * 100);
+            const range = (high - low) / open * 100;
+            
+            let scoreMomentum = moveFromOpen >= 3.0 ? 25 : moveFromOpen >= 2.0 ? 20 : moveFromOpen >= 1.5 ? 15 : moveFromOpen >= 1.0 ? 10 : 0;
+            let scoreVolume = 5;
+            let scoreRange = range >= 3.0 ? 15 : range >= 2.0 ? 10 : range >= 1.5 ? 5 : 0;
+            let scoreMarket = marketTrend && marketTrend.isUp ? 10 : 0;
+            
+            const total = scoreMomentum + scoreVolume + scoreRange + scoreMarket;
+            
+            let grade;
+            if (total >= 50) grade = 'A+';
+            else if (total >= 47) grade = 'A';
+            else if (total >= 45) grade = 'A-';
+            else if (total >= 41) grade = 'B+';
+            else if (total >= 38) grade = 'B';
+            else if (total >= 35) grade = 'B-';
+            else if (total >= 31) grade = 'C+';
+            else if (total >= 28) grade = 'C';
+            else if (total >= 25) grade = 'C-';
+            else grade = 'D';
+            
+            const direction = current > open ? 'CALL' : 'PUT';
+            const strikeInterval = current >= 500 ? 10 : current >= 200 ? 5 : current >= 100 ? 2.5 : current >= 50 ? 1 : 0.5;
+            const strike = Math.round(current / strikeInterval) * strikeInterval;
+            
+            return { total, grade, direction, strike, moveFromOpen, range };
+        }
+
+        function createCard(ticker, quote, score, options) {
+            const current = quote.c;
+            const open = quote.o;
+            const change = ((current - open) / open * 100).toFixed(2);
+            const isPositive = change >= 0;
+            
+            return `
+                <div class="ticker-card grade-${score.grade.charAt(0).toLowerCase()}">
+                    <div class="card-header">
+                        <div class="ticker-symbol">${ticker}</div>
+                        <div class="grade-badge grade-${score.grade.charAt(0).toLowerCase()}">${score.grade}</div>
+                    </div>
+                    <div>
+                        <span class="price">$${current.toFixed(2)}</span>
+                        <span class="change ${isPositive ? 'positive' : 'negative'}">${isPositive ? '+' : ''}${change}%</span>
+                    </div>
+                    <div class="trade-info">
+                        <strong>${score.direction}</strong> $${score.strike.toFixed(2)} | Score: ${score.total}/55<br>
+                        Move: ${score.moveFromOpen.toFixed(2)}% | Range: ${score.range.toFixed(2)}%<br>
+                        <em style="font-size: 11px; color: #6c757d;">Weekly ATM option (7-14 DTE)</em>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function loadData() {
+            try {
+                const [marketTrend, ...quotes] = await Promise.all([fetchSPY(), ...TICKERS.map(t => fetchQuote(t))]);
+                const grid = document.getElementById('tickerGrid');
+                
+                let html = '';
+                TICKERS.forEach((ticker, idx) => {
+                    const quote = quotes[idx];
+                    if (!quote || !quote.c || quote.c === 0) return;
+                    const score = calculateScore(quote, marketTrend);
+                    html += createCard(ticker, quote, score, {});
+                });
+                
+                grid.innerHTML = html;
+                grid.style.display = 'grid';
+                document.getElementById('loading').style.display = 'none';
+            } catch (error) {
+                console.error('Error loading data:', error);
+                document.getElementById('loading').innerHTML = `❌ Error loading live data. Check API key.`;
+            }
+        }
+
+        // Load immediately and refresh every 5 seconds
+        loadData();
+        setInterval(loadData, 5000);
+        
+        // Refresh historical data every 30 seconds
+        setInterval(() => location.reload(), 30000);
+    </script>
+</body>
+</html>
