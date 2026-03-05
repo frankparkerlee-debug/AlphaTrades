@@ -327,6 +327,10 @@
 const TICKERS = ['NVDA', 'TSLA', 'AMD', 'AAPL', 'AMZN', 'META', 'MSFT', 'GOOGL', 'NFLX', 'AVGO', 'ORCL', 'ADBE'];
 
 let lastPrices = {};
+// Card data caching for convergence + options
+let cardDataCache = {};
+let signalCacheTimeout = {};
+
 let spyTrend = { is_up: true, change_pct: 0 };
 let updateInProgress = false;
 let updateCount = 0;
@@ -575,10 +579,12 @@ function renderInitialCards(quotes) {
     console.log(`Rendered ${quotes.filter(q => q).length} cards`);
 }
 
-function updateExistingCards(quotes) {
+async function updateExistingCards(quotes) {
     let updatedCount = 0;
-    quotes.forEach((quote, idx) => {
-        if (!quote) return;
+    
+    for (let idx = 0; idx < quotes.length; idx++) {
+        const quote = quotes[idx];
+        if (!quote) continue;
         
         const ticker = TICKERS[idx];
         const card = document.querySelector(`[data-ticker="${ticker}"]`);
@@ -587,7 +593,22 @@ function updateExistingCards(quotes) {
             const priceChanged = lastPrices[ticker] !== quote.c;
             lastPrices[ticker] = quote.c;
             
-            card.innerHTML = createStockCardContent(ticker, quote);
+            // Check if we need to fetch full signal data
+            const cacheExpired = !signalCacheTimeout[ticker] || Date.now() > signalCacheTimeout[ticker];
+            
+            if (cacheExpired) {
+                // Fetch in background, don't wait
+                fetchSignalDataIfNeeded(ticker, quote).then(signalData => {
+                    if (signalData) {
+                        cardDataCache[ticker] = signalData;
+                        signalCacheTimeout[ticker] = Date.now() + 15000; // Cache for 15 seconds
+                        card.innerHTML = createStockCardContent(ticker, quote, signalData);
+                    }
+                });
+            } else {
+                // Use cached data
+                card.innerHTML = createStockCardContent(ticker, quote, cardDataCache[ticker]);
+            }
             
             if (priceChanged) {
                 const priceEl = card.querySelector('.price-value');
@@ -598,10 +619,37 @@ function updateExistingCards(quotes) {
                 updatedCount++;
             }
         }
-    });
+    }
     
     if (updatedCount > 0) {
         console.log(`Updated ${updatedCount} price changes`);
+    }
+}
+
+
+async function fetchSignalDataIfNeeded(ticker, quote) {
+    try {
+        // Quick check: does this stock have momentum?
+        const move = Math.abs((quote.c - quote.o) / quote.o * 100);
+        if (move < 1.0) {
+            // Skip API call for low-movement stocks
+            return null;
+        }
+        
+        const response = await fetch(`/api/signal/${ticker}`);
+        if (!response.ok) return null;
+        
+        const data = await response.json();
+        
+        // Only cache if it's a meaningful signal (C+ or better)
+        if (data.convergence.total_score >= 60) {
+            return data;
+        }
+        
+        return null;
+    } catch (error) {
+        console.error(`Error fetching signal for ${ticker}:`, error);
+        return null;
     }
 }
 
@@ -616,15 +664,78 @@ function createStockCardHTML(ticker, quote) {
     `;
 }
 
-function createStockCardContent(ticker, quote) {
+function createStockCardContent(ticker, quote, signalData) {
     const changePercent = ((quote.c - quote.pc) / quote.pc) * 100;
     const isPositive = changePercent >= 0;
     
-    const result = scorer.calculate(quote, spyTrend);
-    if (!result) return '<div class="loading">⚠️ Error</div>';
+    // If no signal data, show simple card (Strategy 1 style)
+    if (!signalData) {
+        const result = scorer.calculate(quote, spyTrend);
+        if (!result) return '<div class="loading">⚠️ Error</div>';
+        
+        const directionIcon = result.direction === 'CALL' ? '📈' : '📉';
+        const gradeTime = new Date(result.timestamp * 1000).toLocaleTimeString();
+        
+        return `
+            <div class="stock-header">
+                <div class="stock-ticker">${ticker}</div>
+                <div class="stock-price">
+                    <div class="price-value">$${quote.c.toFixed(2)}</div>
+                    <div class="price-change ${isPositive ? 'positive' : 'negative'}">
+                        ${isPositive ? '▲' : '▼'} ${Math.abs(changePercent).toFixed(2)}%
+                    </div>
+                </div>
+            </div>
+            
+            <div class="opportunity-section">
+                <div class="opportunity-badge ${result.direction.toLowerCase()}">
+                    ${directionIcon} ${result.direction}
+                </div>
+                <div class="grade-display">
+                    <span class="grade-${result.grade[0]}">${result.grade}</span>
+                </div>
+                <div class="trade-details" style="font-size: 12px;">
+                    <strong>Score:</strong> ${result.score}/55<br>
+                    <strong>Click for full analysis</strong>
+                    <div class="timestamp">@${gradeTime}</div>
+                </div>
+            </div>
+        `;
+    }
     
-    const directionIcon = result.direction === 'CALL' ? '📈' : '📉';
-    const gradeTime = new Date(result.timestamp * 1000).toLocaleTimeString();
+    // Full convergence card with options
+    const conv = signalData.convergence;
+    const option = signalData.option;
+    const rec = signalData.recommendation;
+    
+    const momentumMove = conv.signals.momentum.metrics.move_from_open;
+    const direction = momentumMove >= 0 ? 'CALL' : 'PUT';
+    const directionIcon = direction === 'CALL' ? '📈' : '📉';
+    const gradeTime = new Date(conv.timestamp).toLocaleTimeString();
+    
+    // Build options display
+    let optionsHTML = '';
+    if (option) {
+        const stopPrice = rec.stop || (option.mid * 0.70).toFixed(2);
+        const targetPrice = rec.target || (option.mid * 1.50).toFixed(2);
+        
+        optionsHTML = `
+            <div style="background: #f8f9fa; padding: 6px; border-radius: 4px; margin-top: 6px; font-size: 10px; line-height: 1.4;">
+                <strong>${option.symbol}</strong> $${option.mid.toFixed(2)}<br>
+                $${option.strike.toFixed(2)} ${option.expiration} (${option.dte}D)<br>
+                <span style="color: #dc3545;">Stop: $${stopPrice}</span> | 
+                <span style="color: #28a745;">Target: $${targetPrice}</span><br>
+                Δ=${option.delta.toFixed(2)} IV=${(option.iv * 100).toFixed(0)}% Score=${option.score.toFixed(0)}
+            </div>
+        `;
+    } else if (conv.total_score >= 70) {
+        // High score but no options = show warning
+        optionsHTML = `
+            <div style="background: #ffc107; color: #000; padding: 6px; border-radius: 4px; margin-top: 6px; font-size: 10px; text-align: center;">
+                ⚠️ No suitable options available
+            </div>
+        `;
+    }
     
     return `
         <div class="stock-header">
@@ -638,29 +749,19 @@ function createStockCardContent(ticker, quote) {
         </div>
         
         <div class="opportunity-section">
-            <div class="opportunity-badge ${result.direction.toLowerCase()}">
-                ${directionIcon} ${result.direction}
+            <div class="opportunity-badge ${direction.toLowerCase()}">
+                ${directionIcon} ${direction}
             </div>
             <div class="grade-display">
-                <span class="grade-${result.grade[0]}">${result.grade}</span>
+                <span class="grade-${conv.grade[0]}">${conv.grade}</span>
             </div>
-            <div class="trade-details">
-                <strong>Strike:</strong> $${result.strike}<br>
-                <strong>Expiry:</strong> ${result.expirationDate} (${result.dte}DTE)<br>
-                <strong style="color: #dc3545;">⚠️ Click for pricing</strong><br>
-                <strong>Score:</strong> ${result.score}/55
-                <div class="timestamp">Graded: ${gradeTime}</div>
+            <div class="trade-details" style="font-size: 11px;">
+                <strong>${conv.convergence_count}/6</strong> signals<br>
+                <strong>${conv.total_score}/100</strong> points<br>
+                <strong>${rec.action}</strong>
+                <div class="timestamp">@${gradeTime}</div>
             </div>
-            <div class="risk-reward">
-                <div class="risk-box">
-                    <div class="label">STOP</div>
-                    <div class="value" style="font-size: 12px; color: #6c757d;">Click card</div>
-                </div>
-                <div class="reward-box">
-                    <div class="label">TARGET</div>
-                    <div class="value" style="font-size: 12px; color: #6c757d;">for prices</div>
-                </div>
-            </div>
+            ${optionsHTML}
         </div>
     `;
 }
