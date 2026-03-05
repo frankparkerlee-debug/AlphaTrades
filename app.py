@@ -424,6 +424,86 @@ def api_quote(symbol):
         logger.error(f"Error fetching quote for {symbol}: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/options/<symbol>')
+def api_options(symbol):
+    """Get options chain data from Alpaca for a specific strike"""
+    try:
+        # Get query parameters
+        strike = request.args.get('strike', type=float)
+        option_type = request.args.get('type', 'call').lower()  # 'call' or 'put'
+        expiration = request.args.get('expiration', '')  # YYYY-MM-DD format
+        
+        alpaca = AlpacaClient()
+        
+        # Get full options chain
+        chain_data = alpaca.get_options_chain(symbol.upper())
+        
+        if 'error' in chain_data:
+            return jsonify(chain_data), 403
+        
+        # If no specific parameters, return summary of nearest ATM options
+        if not strike or not expiration:
+            # Get current stock price
+            quote = alpaca.get_snapshot(symbol.upper())
+            current_price = quote.get('c', quote.get('latestTrade', {}).get('p', 0))
+            
+            # Find nearest strikes and expirations
+            summary = {
+                'symbol': symbol.upper(),
+                'stock_price': current_price,
+                'message': 'Provide strike and expiration for specific option data',
+                'example': f'/api/options/{symbol}?strike=150&type=call&expiration=2026-03-21'
+            }
+            return jsonify(summary)
+        
+        # Find the specific option contract
+        # Alpaca options format: {underlying}_{expiration}_{strike}{C/P}
+        option_symbol = f"{symbol.upper()}_{expiration.replace('-', '')}_{int(strike * 1000):08d}{'C' if option_type == 'call' else 'P'}"
+        
+        # Search for the contract in chain data
+        options = chain_data.get('snapshots', {})
+        
+        if option_symbol in options:
+            option_data = options[option_symbol]
+            
+            # Extract relevant pricing info
+            latest_quote = option_data.get('latestQuote', {})
+            latest_trade = option_data.get('latestTrade', {})
+            greeks = option_data.get('greeks', {})
+            
+            result = {
+                'symbol': option_symbol,
+                'underlying': symbol.upper(),
+                'strike': strike,
+                'type': option_type,
+                'expiration': expiration,
+                'bid': latest_quote.get('bp', 0),
+                'ask': latest_quote.get('ap', 0),
+                'mid': (latest_quote.get('bp', 0) + latest_quote.get('ap', 0)) / 2 if latest_quote.get('bp') and latest_quote.get('ap') else 0,
+                'last': latest_trade.get('p', 0),
+                'volume': latest_trade.get('s', 0),
+                'bid_size': latest_quote.get('bs', 0),
+                'ask_size': latest_quote.get('as', 0),
+                'implied_volatility': greeks.get('impliedVolatility', 0),
+                'delta': greeks.get('delta', 0),
+                'gamma': greeks.get('gamma', 0),
+                'theta': greeks.get('theta', 0),
+                'vega': greeks.get('vega', 0),
+                'open_interest': option_data.get('openInterest', 0)
+            }
+            
+            return jsonify(result)
+        else:
+            return jsonify({
+                'error': 'Option contract not found',
+                'searched_for': option_symbol,
+                'available_contracts': len(options)
+            }), 404
+            
+    except Exception as e:
+        logger.error(f"Error fetching options for {symbol}: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/health')
 def health():
     """Health check endpoint"""

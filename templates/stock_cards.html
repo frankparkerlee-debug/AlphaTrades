@@ -639,7 +639,7 @@ function createStockCardContent(ticker, quote) {
     `;
 }
 
-function showDetails(ticker, quote) {
+async function showDetails(ticker, quote) {
     const modal = document.getElementById('detailModal');
     const title = document.getElementById('modalTitle');
     const body = document.getElementById('modalBody');
@@ -651,6 +651,19 @@ function showDetails(ticker, quote) {
     
     const directionIcon = result.direction === 'CALL' ? '📈' : '📉';
     const gradeTime = new Date(result.timestamp * 1000).toLocaleString();
+    
+    // Fetch real options pricing
+    let optionsData = null;
+    try {
+        const optionType = result.direction.toLowerCase();
+        const response = await fetch(`/api/options/${ticker}?strike=${result.strike}&type=${optionType}&expiration=${result.expirationDate}`);
+        if (response.ok) {
+            optionsData = await response.json();
+            console.log('📊 Real options data:', optionsData);
+        }
+    } catch (error) {
+        console.error('Could not fetch options data:', error);
+    }
     
     body.innerHTML = `
         <div style="background: ${result.direction === 'CALL' ? '#e5f7e5' : '#ffe5e5'}; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
@@ -716,23 +729,66 @@ function showDetails(ticker, quote) {
                 <td style="padding: 10px; border: 1px solid #dee2e6;">Strike Price</td>
                 <td style="padding: 10px; border: 1px solid #dee2e6;"><strong>$${result.strike}</strong> (ATM)</td>
             </tr>
+            ${optionsData ? `
             <tr>
-                <td style="padding: 10px; border: 1px solid #dee2e6;">Entry Price</td>
-                <td style="padding: 10px; border: 1px solid #dee2e6;"><strong>$${result.entryPrice}/contract</strong></td>
+                <td style="padding: 10px; border: 1px solid #dee2e6;">Bid / Ask</td>
+                <td style="padding: 10px; border: 1px solid #dee2e6;"><strong>$${optionsData.bid.toFixed(2)} / $${optionsData.ask.toFixed(2)}</strong></td>
             </tr>
             <tr>
+                <td style="padding: 10px; border: 1px solid #dee2e6;">Mid Price (Entry)</td>
+                <td style="padding: 10px; border: 1px solid #dee2e6;"><strong>$${optionsData.mid.toFixed(2)}/contract</strong> <span style="color: #28a745;">● LIVE</span></td>
+            </tr>
+            <tr>
+                <td style="padding: 10px; border: 1px solid #dee2e6;">Implied Volatility</td>
+                <td style="padding: 10px; border: 1px solid #dee2e6;"><strong>${(optionsData.implied_volatility * 100).toFixed(1)}%</strong></td>
+            </tr>
+            <tr>
+                <td style="padding: 10px; border: 1px solid #dee2e6;">Delta</td>
+                <td style="padding: 10px; border: 1px solid #dee2e6;"><strong>${optionsData.delta.toFixed(3)}</strong> (${(optionsData.delta * 100).toFixed(1)}% stock move)</td>
+            </tr>
+            <tr>
+                <td style="padding: 10px; border: 1px solid #dee2e6;">Open Interest</td>
+                <td style="padding: 10px; border: 1px solid #dee2e6;"><strong>${optionsData.open_interest.toLocaleString()}</strong> contracts</td>
+            </tr>
+            <tr>
+                <td style="padding: 10px; border: 1px solid #dee2e6;">Volume</td>
+                <td style="padding: 10px; border: 1px solid #dee2e6;"><strong>${optionsData.volume.toLocaleString()}</strong></td>
+            </tr>
+            ` : `
+            <tr>
+                <td style="padding: 10px; border: 1px solid #dee2e6;">Entry Price</td>
+                <td style="padding: 10px; border: 1px solid #dee2e6;"><strong>$${result.entryPrice}/contract</strong> <span style="color: #6c757d;">● Estimated</span></td>
+            </tr>
+            `}
+            <tr>
                 <td style="padding: 10px; border: 1px solid #dee2e6;">Stop Loss (-30%)</td>
-                <td style="padding: 10px; border: 1px solid #dee2e6; color: #dc3545;"><strong>$${result.stopPrice}</strong></td>
+                <td style="padding: 10px; border: 1px solid #dee2e6; color: #dc3545;"><strong>$${optionsData ? (optionsData.mid * 0.70).toFixed(2) : result.stopPrice}</strong></td>
             </tr>
             <tr>
                 <td style="padding: 10px; border: 1px solid #dee2e6;">Target (+50%)</td>
-                <td style="padding: 10px; border: 1px solid #dee2e6; color: #28a745;"><strong>$${result.targetPrice}</strong></td>
+                <td style="padding: 10px; border: 1px solid #dee2e6; color: #28a745;"><strong>$${optionsData ? (optionsData.mid * 1.50).toFixed(2) : result.targetPrice}</strong></td>
             </tr>
             <tr>
                 <td style="padding: 10px; border: 1px solid #dee2e6;">Expiration</td>
                 <td style="padding: 10px; border: 1px solid #dee2e6;"><strong>${result.dte} days</strong> (next Friday)</td>
             </tr>
         </table>
+        
+        ${optionsData ? `
+        <div style="background: #e5f7e5; padding: 15px; border-radius: 8px; margin-top: 15px;">
+            <strong>📊 Greeks (Advanced)</strong><br>
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 10px; font-size: 14px;">
+                <div><strong>Delta:</strong> ${optionsData.delta.toFixed(3)}</div>
+                <div><strong>Gamma:</strong> ${optionsData.gamma.toFixed(4)}</div>
+                <div><strong>Theta:</strong> ${optionsData.theta.toFixed(3)}/day</div>
+                <div><strong>Vega:</strong> ${optionsData.vega.toFixed(3)}</div>
+            </div>
+        </div>
+        ` : `
+        <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin-top: 15px; color: #856404;">
+            <strong>⚠️ Options pricing estimated.</strong> Real market data unavailable or outside market hours.
+        </div>
+        `}
         
         <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-top: 20px;">
             <strong>📊 Strategy 1 Rules:</strong><br>
