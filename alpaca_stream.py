@@ -31,9 +31,9 @@ class AlpacaStream:
             'ORCL', 'ADBE', 'SPY'
         ]
         
-        # Message queues for different consumers
-        self.price_queue = Queue(maxsize=1000)  # For frontend updates
-        self.scoring_queue = Queue(maxsize=1000)  # For worker scoring
+        # Message queues for different consumers (smaller to prevent memory buildup)
+        self.price_queue = Queue(maxsize=100)  # For frontend updates
+        self.scoring_queue = Queue(maxsize=100)  # For worker scoring
         
         # Latest prices cache (thread-safe)
         self.latest_prices = {}
