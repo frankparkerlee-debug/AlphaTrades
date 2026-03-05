@@ -603,11 +603,15 @@ async function updateExistingCards(quotes) {
             const cacheExpired = !signalCacheTimeout[ticker] || Date.now() > signalCacheTimeout[ticker];
             
             if (cacheExpired) {
-                // Fetch in background, will update on next cycle
+                // Fetch and IMMEDIATELY update card when data arrives
                 fetchSignalDataIfNeeded(ticker, quote).then(signalData => {
                     if (signalData) {
                         cardDataCache[ticker] = signalData;
                         signalCacheTimeout[ticker] = Date.now() + 2000; // Cache for 2 seconds
+                        
+                        // IMMEDIATELY re-render card with new data
+                        card.innerHTML = createStockCardContent(ticker, quote, signalData);
+                        console.log(`✅ ${ticker} updated with convergence + options`);
                     }
                 });
             }
@@ -763,23 +767,37 @@ async function showDetails(ticker, quote) {
     const title = document.getElementById('modalTitle');
     const body = document.getElementById('modalBody');
     
-    // Show loading state
-    body.innerHTML = '<div style="text-align: center; padding: 40px;"><div class="spinner"></div><p>Loading convergence analysis...</p></div>';
-    modal.style.display = 'block';
+    // Check if we have cached signal data (fast path)
+    let signalData = cardDataCache[ticker];
     
-    // Fetch full convergence signal
-    let signalData = null;
-    try {
-        const response = await fetch(`/api/signal/${ticker}`);
-        if (response.ok) {
-            signalData = await response.json();
-            console.log('🎯 Full signal data:', signalData);
-        } else {
-            throw new Error(`API returned ${response.status}`);
+    if (signalData) {
+        // Use cached data immediately (instant load)
+        console.log('⚡ Using cached signal data for', ticker);
+        modal.classList.add('active');
+    } else {
+        // Show loading state while fetching
+        body.innerHTML = '<div style="text-align: center; padding: 40px;"><div class="spinner"></div><p>Loading convergence analysis...</p></div>';
+        modal.classList.add('active');
+        console.log('📂 Fetching signal data for', ticker);
+        
+        try {
+            const response = await fetch(`/api/signal/${ticker}`);
+            if (response.ok) {
+                signalData = await response.json();
+                cardDataCache[ticker] = signalData; // Cache it
+                console.log('🎯 Full signal data:', signalData);
+            } else {
+                throw new Error(`API returned ${response.status}`);
+            }
+        } catch (error) {
+            console.error('❌ Could not fetch signal data:', error);
+            body.innerHTML = `<div style="color: #dc3545; padding: 20px;">Failed to load convergence data: ${error.message}</div>`;
+            return;
         }
-    } catch (error) {
-        console.error('❌ Could not fetch signal data:', error);
-        body.innerHTML = `<div style="color: #dc3545; padding: 20px;">Failed to load convergence data: ${error.message}</div>`;
+    }
+    
+    if (!signalData) {
+        body.innerHTML = `<div style="color: #dc3545; padding: 20px;">No signal data available</div>`;
         return;
     }
     
@@ -967,8 +985,28 @@ async function showDetails(ticker, quote) {
 }
 
 function closeModal() {
-    document.getElementById('detailModal').classList.remove('active');
+    const modal = document.getElementById('detailModal');
+    modal.classList.remove('active');
+    modal.style.display = 'none';
+    console.log('✅ Modal closed');
 }
+
+// Click outside modal to close
+document.addEventListener('DOMContentLoaded', () => {
+    const modal = document.getElementById('detailModal');
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            closeModal();
+        }
+    });
+    
+    // ESC key to close
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && modal.classList.contains('active')) {
+            closeModal();
+        }
+    });
+});
 
 function updateSPYTrend() {
     const spy = priceCache['SPY'];
