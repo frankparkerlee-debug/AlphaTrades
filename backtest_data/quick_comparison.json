@@ -1,0 +1,1030 @@
+[
+  {
+    "period": "90d",
+    "s1": {
+      "error": "No trades executed",
+      "total_return_pct": 0,
+      "final_equity": 600
+    },
+    "s1_2": {
+      "strategy": "Strategy 1.2 (Event-Driven)",
+      "period": "2025-12-05 to 2026-03-05",
+      "total_trades": 3,
+      "wins": 2,
+      "losses": 1,
+      "win_rate": 66.66666666666666,
+      "total_return_pct": 0.14999898274739581,
+      "initial_capital": 600,
+      "final_capital": 600.8999938964844,
+      "avg_return_per_trade": 0.37390588617342907,
+      "best_trade": 2.4419450480855507,
+      "worst_trade": -1.7185361237024959,
+      "avg_hold_days": 5.0,
+      "catalyst_performance": {
+        "news": {
+          "trades": 1,
+          "win_rate": 100.0,
+          "avg_return": 2.4419450480855507
+        },
+        "earnings": {
+          "trades": 2,
+          "win_rate": 50.0,
+          "avg_return": -0.6601136947826318
+        }
+      },
+      "trades": [
+        {
+          "ticker": "NFLX",
+          "entry_date": "2026-01-21",
+          "exit_date": "2026-01-26",
+          "entry_price": 85.36000061035156,
+          "exit_price": 85.69999694824219,
+          "shares": 1,
+          "entry_value": 85.36000061035156,
+          "exit_value": 85.69999694824219,
+          "pnl": 0.339996337890625,
+          "pnl_pct": 0.3983087341372322,
+          "days_held": 5,
+          "exit_reason": "Max hold days",
+          "entry_score": 65,
+          "entry_grade": "B+",
+          "catalyst_type": "earnings"
+        },
+        {
+          "ticker": "NFLX",
+          "entry_date": "2026-01-22",
+          "exit_date": "2026-01-27",
+          "entry_price": 83.54000091552734,
+          "exit_price": 85.58000183105469,
+          "shares": 1,
+          "entry_value": 83.54000091552734,
+          "exit_value": 85.58000183105469,
+          "pnl": 2.0400009155273438,
+          "pnl_pct": 2.4419450480855507,
+          "days_held": 5,
+          "exit_reason": "Max hold days",
+          "entry_score": 85,
+          "entry_grade": "A",
+          "catalyst_type": "news"
+        },
+        {
+          "ticker": "NFLX",
+          "entry_date": "2026-01-23",
+          "exit_date": "2026-01-28",
+          "entry_price": 86.12000274658203,
+          "exit_price": 84.63999938964844,
+          "shares": 1,
+          "entry_value": 86.12000274658203,
+          "exit_value": 84.63999938964844,
+          "pnl": -1.4800033569335938,
+          "pnl_pct": -1.7185361237024959,
+          "days_held": 5,
+          "exit_reason": "Max hold days",
+          "entry_score": 65,
+          "entry_grade": "B+",
+          "catalyst_type": "earnings"
+        }
+      ],
+      "equity_curve": [
+        {
+          "date": "2025-12-08 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-09 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-10 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-11 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-12 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-15 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-16 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-17 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-18 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-19 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-22 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-23 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-24 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-26 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-29 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-30 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-31 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-02 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-05 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-06 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-07 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-08 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-09 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-12 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-13 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-14 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-15 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-16 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-20 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-21 00:00:00",
+          "equity": 600.0,
+          "capital": 514.6399993896484,
+          "positions": 1
+        },
+        {
+          "date": "2026-01-22 00:00:00",
+          "equity": 598.1800003051758,
+          "capital": 431.0999984741211,
+          "positions": 2
+        },
+        {
+          "date": "2026-01-23 00:00:00",
+          "equity": 603.3400039672852,
+          "capital": 344.97999572753906,
+          "positions": 3
+        },
+        {
+          "date": "2026-01-26 00:00:00",
+          "equity": 602.0799865722656,
+          "capital": 430.67999267578125,
+          "positions": 2
+        },
+        {
+          "date": "2026-01-27 00:00:00",
+          "equity": 601.8399963378906,
+          "capital": 516.2599945068359,
+          "positions": 1
+        },
+        {
+          "date": "2026-01-28 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-29 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-30 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-02 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-03 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-04 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-05 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-06 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-09 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-10 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-11 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-12 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-13 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-17 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-18 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-19 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-20 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-23 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-24 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-25 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-26 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-27 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-03-02 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-03-03 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-03-04 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-03-05 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        }
+      ]
+    },
+    "improvement": 0.14999898274739581
+  },
+  {
+    "period": "120d",
+    "s1": {
+      "error": "No trades executed",
+      "total_return_pct": 0,
+      "final_equity": 600
+    },
+    "s1_2": {
+      "strategy": "Strategy 1.2 (Event-Driven)",
+      "period": "2025-11-05 to 2026-03-05",
+      "total_trades": 3,
+      "wins": 2,
+      "losses": 1,
+      "win_rate": 66.66666666666666,
+      "total_return_pct": 0.14999898274739581,
+      "initial_capital": 600,
+      "final_capital": 600.8999938964844,
+      "avg_return_per_trade": 0.37390588617342907,
+      "best_trade": 2.4419450480855507,
+      "worst_trade": -1.7185361237024959,
+      "avg_hold_days": 5.0,
+      "catalyst_performance": {
+        "news": {
+          "trades": 1,
+          "win_rate": 100.0,
+          "avg_return": 2.4419450480855507
+        },
+        "earnings": {
+          "trades": 2,
+          "win_rate": 50.0,
+          "avg_return": -0.6601136947826318
+        }
+      },
+      "trades": [
+        {
+          "ticker": "NFLX",
+          "entry_date": "2026-01-21",
+          "exit_date": "2026-01-26",
+          "entry_price": 85.36000061035156,
+          "exit_price": 85.69999694824219,
+          "shares": 1,
+          "entry_value": 85.36000061035156,
+          "exit_value": 85.69999694824219,
+          "pnl": 0.339996337890625,
+          "pnl_pct": 0.3983087341372322,
+          "days_held": 5,
+          "exit_reason": "Max hold days",
+          "entry_score": 65,
+          "entry_grade": "B+",
+          "catalyst_type": "earnings"
+        },
+        {
+          "ticker": "NFLX",
+          "entry_date": "2026-01-22",
+          "exit_date": "2026-01-27",
+          "entry_price": 83.54000091552734,
+          "exit_price": 85.58000183105469,
+          "shares": 1,
+          "entry_value": 83.54000091552734,
+          "exit_value": 85.58000183105469,
+          "pnl": 2.0400009155273438,
+          "pnl_pct": 2.4419450480855507,
+          "days_held": 5,
+          "exit_reason": "Max hold days",
+          "entry_score": 85,
+          "entry_grade": "A",
+          "catalyst_type": "news"
+        },
+        {
+          "ticker": "NFLX",
+          "entry_date": "2026-01-23",
+          "exit_date": "2026-01-28",
+          "entry_price": 86.12000274658203,
+          "exit_price": 84.63999938964844,
+          "shares": 1,
+          "entry_value": 86.12000274658203,
+          "exit_value": 84.63999938964844,
+          "pnl": -1.4800033569335938,
+          "pnl_pct": -1.7185361237024959,
+          "days_held": 5,
+          "exit_reason": "Max hold days",
+          "entry_score": 65,
+          "entry_grade": "B+",
+          "catalyst_type": "earnings"
+        }
+      ],
+      "equity_curve": [
+        {
+          "date": "2025-11-06 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-11-07 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-11-10 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-11-11 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-11-12 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-11-13 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-11-14 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-11-17 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-11-18 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-11-19 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-11-20 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-11-21 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-11-24 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-11-25 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-11-26 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-11-28 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-01 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-02 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-03 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-04 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-05 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-08 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-09 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-10 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-11 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-12 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-15 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-16 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-17 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-18 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-19 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-22 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-23 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-24 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-26 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-29 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-30 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2025-12-31 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-02 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-05 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-06 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-07 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-08 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-09 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-12 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-13 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-14 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-15 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-16 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-20 00:00:00",
+          "equity": 600,
+          "capital": 600,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-21 00:00:00",
+          "equity": 600.0,
+          "capital": 514.6399993896484,
+          "positions": 1
+        },
+        {
+          "date": "2026-01-22 00:00:00",
+          "equity": 598.1800003051758,
+          "capital": 431.0999984741211,
+          "positions": 2
+        },
+        {
+          "date": "2026-01-23 00:00:00",
+          "equity": 603.3400039672852,
+          "capital": 344.97999572753906,
+          "positions": 3
+        },
+        {
+          "date": "2026-01-26 00:00:00",
+          "equity": 602.0799865722656,
+          "capital": 430.67999267578125,
+          "positions": 2
+        },
+        {
+          "date": "2026-01-27 00:00:00",
+          "equity": 601.8399963378906,
+          "capital": 516.2599945068359,
+          "positions": 1
+        },
+        {
+          "date": "2026-01-28 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-29 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-01-30 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-02 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-03 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-04 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-05 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-06 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-09 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-10 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-11 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-12 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-13 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-17 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-18 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-19 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-20 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-23 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-24 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-25 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-26 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-02-27 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-03-02 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-03-03 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-03-04 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        },
+        {
+          "date": "2026-03-05 00:00:00",
+          "equity": 600.8999938964844,
+          "capital": 600.8999938964844,
+          "positions": 0
+        }
+      ]
+    },
+    "improvement": 0.14999898274739581
+  }
+]

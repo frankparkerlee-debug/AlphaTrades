@@ -294,7 +294,7 @@
     <h1>📊 Strategy 1: Momentum Trades</h1>
     <p style="color: #6c757d; margin-bottom: 10px;">Real-time opportunities - Ride the momentum in ONE direction</p>
     <p style="color: #856404; background: #fff3cd; padding: 8px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 0;">
-        ⚠️ <strong>Market Hours:</strong> Prices update every 15 seconds during regular trading (9:30 AM - 4:00 PM EST). Pre-market and after-hours prices may not be reflected. <strong>Note:</strong> Social sentiment, news, and earnings are NOT yet factored into scoring. <strong>If prices freeze, we've hit the free API rate limit.</strong>
+        📊 <strong>Real-Time Data:</strong> Prices update every 15 seconds using Alpaca Premium (unlimited). <strong>Note:</strong> Social sentiment, news, and earnings are NOT yet factored into scoring.
     </p>
 </div>
 
@@ -323,7 +323,7 @@
 
 {% block scripts %}
 <script>
-const FINNHUB_API_KEY = '{{ finnhub_key }}';
+// Using Alpaca API via backend proxy (no API key needed in frontend)
 const TICKERS = ['NVDA', 'TSLA', 'AMD', 'AAPL', 'AMZN', 'META', 'MSFT', 'GOOGL', 'NFLX', 'AVGO', 'ORCL', 'ADBE'];
 
 let lastPrices = {};
@@ -456,14 +456,15 @@ class Strategy1Scorer {
 const scorer = new Strategy1Scorer();
 
 async function fetchQuote(ticker) {
-    const response = await fetch(`https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${FINNHUB_API_KEY}`);
+    // Fetch from backend API (uses Alpaca)
+    const response = await fetch(`/api/quote/${ticker}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     
-    // Check for rate limit error
-    if (data.error && data.error.includes('API limit reached')) {
-        console.error(`[${new Date().toLocaleTimeString()}] ⚠️ RATE LIMIT HIT - Remaining: 0`);
-        throw new Error('RATE_LIMIT');
+    // Check for error
+    if (data.error) {
+        console.error(`[${new Date().toLocaleTimeString()}] ⚠️ ERROR for ${ticker}: ${data.error}`);
+        throw new Error(data.error);
     }
     
     console.log(`[${new Date().toLocaleTimeString()}] ${ticker}: Current=$${data.c}, Open=$${data.o}, PC=$${data.pc}`);
@@ -522,16 +523,10 @@ async function updateStockCards() {
     } catch (error) {
         console.error('Error updating stocks:', error);
         indicator.classList.add('error');
+        document.getElementById('updateTime').textContent = '⚠️ Connection error - Retrying...';
         
-        if (error.message === 'RATE_LIMIT') {
-            document.getElementById('updateTime').textContent = '⚠️ API rate limit exceeded - Updates paused (resets in ~1 minute)';
-            if (!document.querySelector('.stock-card')) {
-                grid.innerHTML = '<div class="loading">⚠️ Finnhub API rate limit exceeded. Free tier: 60 calls/min. We need WebSocket or paid plan.</div>';
-            }
-        } else {
-            if (!document.querySelector('.stock-card')) {
-                grid.innerHTML = '<div class="loading">❌ Connection error. Retrying in 15s...</div>';
-            }
+        if (!document.querySelector('.stock-card')) {
+            grid.innerHTML = '<div class="loading">❌ Connection error. Retrying in 15s...</div>';
         }
     } finally {
         updateInProgress = false;

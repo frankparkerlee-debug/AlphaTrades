@@ -1,0 +1,15 @@
+{
+  "strategy": "Strategy 1.2 (Event-Driven)",
+  "period": "2025-12-05 to 2026-03-05",
+  "total_trades": 1,
+  "win_rate": 100.0,
+  "total_return_pct": 0.3400001525878906,
+  "final_capital": 602.0400009155273,
+  "catalyst_performance": {
+    "news": {
+      "trades": 1,
+      "win_rate": 100.0,
+      "avg_return": 2.4419450480855507
+    }
+  }
+}

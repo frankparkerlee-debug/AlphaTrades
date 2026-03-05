@@ -7,6 +7,7 @@ Three-page architecture:
 """
 from flask import Flask, jsonify, request, render_template
 from models import Alert, Trade, DailyPerformance, ModelConfig, AccountState, get_session
+from alpaca_client import AlpacaClient
 from datetime import datetime, timedelta
 import logging
 import os
@@ -15,7 +16,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-FINNHUB_API_KEY = os.getenv('FINNHUB_API_KEY', '')
+
+# Alpaca API credentials
+ALPACA_API_KEY = os.getenv('ALPACA_API_KEY', '')
+ALPACA_SECRET_KEY = os.getenv('ALPACA_SECRET_KEY', '')
+ALPACA_DATA_URL = os.getenv('ALPACA_DATA_URL', 'https://data.alpaca.markets')
 
 def hold_time(entry_time):
     """Calculate hold time from entry"""
@@ -33,7 +38,9 @@ def stock_cards():
     """Stock Cards Page - Live monitoring"""
     return render_template(
         'stock_cards.html',
-        finnhub_key=FINNHUB_API_KEY
+        alpaca_key=ALPACA_API_KEY,
+        alpaca_secret=ALPACA_SECRET_KEY,
+        alpaca_data_url=ALPACA_DATA_URL
     )
 
 @app.route('/trader')
@@ -318,6 +325,17 @@ def api_config():
         })
     finally:
         session.close()
+
+@app.route('/api/quote/<symbol>')
+def api_quote(symbol):
+    """Get real-time quote from Alpaca"""
+    try:
+        alpaca = AlpacaClient()
+        quote = alpaca.get_snapshot(symbol.upper())
+        return jsonify(quote)
+    except Exception as e:
+        logger.error(f"Error fetching quote for {symbol}: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/health')
 def health():
