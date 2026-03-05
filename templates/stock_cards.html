@@ -4,14 +4,34 @@
 
 {% block extra_styles %}
 <style>
+    .header-section {
+        max-width: 1400px;
+        margin: 0 auto 20px auto;
+        background: white;
+        border-radius: 12px;
+        padding: 20px 30px;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+    }
+    
     .stock-grid {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
-        gap: 15px;
-        margin-top: 20px;
+        gap: 20px;
         max-width: 1400px;
-        margin-left: auto;
-        margin-right: auto;
+        margin: 0 auto;
+        padding: 0 20px;
+    }
+    
+    @media (max-width: 1200px) {
+        .stock-grid {
+            grid-template-columns: repeat(2, 1fr);
+        }
+    }
+    
+    @media (max-width: 768px) {
+        .stock-grid {
+            grid-template-columns: 1fr;
+        }
     }
     
     .stock-card {
@@ -22,6 +42,7 @@
         transition: all 0.3s;
         border: 3px solid transparent;
         box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        min-height: 280px;
     }
     
     .stock-card:hover {
@@ -116,6 +137,13 @@
         color: #2a5298;
     }
     
+    .timestamp {
+        color: #6c757d;
+        font-size: 9px;
+        font-style: italic;
+        margin-top: 5px;
+    }
+    
     .risk-reward {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -166,6 +194,11 @@
         color: #6c757d;
         font-size: 12px;
         margin-top: 20px;
+        background: white;
+        padding: 10px;
+        border-radius: 8px;
+        max-width: 1400px;
+        margin: 20px auto;
     }
     
     .update-indicator {
@@ -176,6 +209,10 @@
         background: #28a745;
         margin-right: 5px;
         animation: pulse 2s infinite;
+    }
+    
+    .update-indicator.error {
+        background: #dc3545;
     }
     
     @keyframes pulse {
@@ -253,21 +290,21 @@
 {% endblock %}
 
 {% block content %}
-<div class="container">
+<div class="header-section">
     <h1>📊 Strategy 1: Momentum Trades</h1>
     <p style="color: #6c757d; margin-bottom: 10px;">Real-time opportunities - Ride the momentum in ONE direction</p>
-    <p style="color: #856404; background: #fff3cd; padding: 8px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 20px;">
-        ⚠️ <strong>Market Hours:</strong> Prices update every 10 seconds during regular trading (9:30 AM - 4:00 PM EST). Pre-market and after-hours prices may not be reflected.
+    <p style="color: #856404; background: #fff3cd; padding: 8px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 0;">
+        ⚠️ <strong>Market Hours:</strong> Prices update every 10 seconds during regular trading (9:30 AM - 4:00 PM EST). Pre-market and after-hours prices may not be reflected. <strong>Note:</strong> Social sentiment, news, and earnings are NOT yet factored into scoring.
     </p>
-    
-    <div class="stock-grid" id="stockGrid">
-        <div class="loading">⏳ Loading stock data...</div>
-    </div>
-    
-    <div class="last-update">
-        <span class="update-indicator"></span>
-        <span id="updateTime">Connecting...</span>
-    </div>
+</div>
+
+<div class="stock-grid" id="stockGrid">
+    <div class="loading">⏳ Loading stock data...</div>
+</div>
+
+<div class="last-update">
+    <span class="update-indicator" id="updateIndicator"></span>
+    <span id="updateTime">Connecting...</span>
 </div>
 
 <!-- Detail Modal -->
@@ -292,6 +329,7 @@ const TICKERS = ['NVDA', 'TSLA', 'AMD', 'AAPL', 'AMZN', 'META', 'MSFT', 'GOOGL',
 let lastPrices = {};
 let spyTrend = { is_up: true, change_pct: 0 };
 let updateInProgress = false;
+let updateCount = 0;
 
 // Strategy 1 Scorer - Matches scorer.py EXACTLY
 class Strategy1Scorer {
@@ -309,19 +347,18 @@ class Strategy1Scorer {
     }
     
     scoreMomentum(movePct) {
-        // Uses ABSOLUTE value (magnitude, not direction)
         const move = Math.abs(movePct);
-        if (move >= 3.0) return this.weights.momentum;  // 25
-        if (move >= 2.0) return Math.floor(this.weights.momentum * 0.8);  // 20
-        if (move >= 1.5) return Math.floor(this.weights.momentum * 0.6);  // 15
-        if (move >= 1.0) return Math.floor(this.weights.momentum * 0.4);  // 10
+        if (move >= 3.0) return this.weights.momentum;
+        if (move >= 2.0) return Math.floor(this.weights.momentum * 0.8);
+        if (move >= 1.5) return Math.floor(this.weights.momentum * 0.6);
+        if (move >= 1.0) return Math.floor(this.weights.momentum * 0.4);
         return 0;
     }
     
     scoreRange(rangePct) {
-        if (rangePct >= 3.0) return this.weights.range;  // 15
-        if (rangePct >= 2.0) return Math.floor(this.weights.range * 0.67);  // 10
-        if (rangePct >= 1.5) return Math.floor(this.weights.range * 0.33);  // 5
+        if (rangePct >= 3.0) return this.weights.range;
+        if (rangePct >= 2.0) return Math.floor(this.weights.range * 0.67);
+        if (rangePct >= 1.5) return Math.floor(this.weights.range * 0.33);
         return 0;
     }
     
@@ -348,11 +385,9 @@ class Strategy1Scorer {
             return null;
         }
         
-        // Calculate move from open (NOT previous close!)
         const moveFromOpen = ((current - open) / open) * 100;
         const rangePct = ((high - low) / open) * 100;
         
-        // Score based on ABSOLUTE move (magnitude)
         const momentum = this.scoreMomentum(moveFromOpen);
         const range = this.scoreRange(rangePct);
         const volume = this.weights.volume;
@@ -361,13 +396,8 @@ class Strategy1Scorer {
         const totalScore = momentum + range + volume + market;
         const grade = this.scoreToGrade(totalScore);
         
-        // Direction: CALL if up, PUT if down (ONE direction only)
         const direction = moveFromOpen >= 0 ? 'CALL' : 'PUT';
-        
-        // Calculate strike
         const strike = this.calculateStrike(current);
-        
-        // Estimate option price
         const optionPrice = this.estimateOptionPrice(current, strike);
         
         return {
@@ -387,7 +417,8 @@ class Strategy1Scorer {
             entryPrice: optionPrice.toFixed(2),
             stopPrice: (optionPrice * 0.70).toFixed(2),
             targetPrice: (optionPrice * 1.50).toFixed(2),
-            dte: this.calculateDTE()
+            dte: this.calculateDTE(),
+            timestamp: quote.t
         };
     }
     
@@ -429,8 +460,7 @@ async function fetchQuote(ticker) {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     
-    // Log for debugging price issues
-    console.log(`${ticker}: Current=${data.c}, Open=${data.o}, PC=${data.pc}, Time=${new Date().toISOString()}`);
+    console.log(`[${new Date().toLocaleTimeString()}] ${ticker}: Current=$${data.c}, Open=$${data.o}, PC=$${data.pc}`);
     
     return data;
 }
@@ -448,12 +478,19 @@ async function fetchSPYTrend() {
 }
 
 async function updateStockCards() {
-    if (updateInProgress) return;
+    if (updateInProgress) {
+        console.log('Update already in progress, skipping...');
+        return;
+    }
     updateInProgress = true;
+    updateCount++;
     
     const grid = document.getElementById('stockGrid');
+    const indicator = document.getElementById('updateIndicator');
     
     try {
+        console.log(`[${new Date().toLocaleTimeString()}] Starting update #${updateCount}...`);
+        
         await fetchSPYTrend();
         
         const quotes = await Promise.all(TICKERS.map(async ticker => {
@@ -471,11 +508,16 @@ async function updateStockCards() {
             updateExistingCards(quotes);
         }
         
-        document.getElementById('updateTime').textContent = `Last update: ${new Date().toLocaleTimeString()}`;
+        const now = new Date();
+        document.getElementById('updateTime').textContent = `Last update: ${now.toLocaleTimeString()} (Update #${updateCount})`;
+        indicator.classList.remove('error');
+        
+        console.log(`[${now.toLocaleTimeString()}] Update #${updateCount} complete`);
     } catch (error) {
         console.error('Error updating stocks:', error);
+        indicator.classList.add('error');
         if (!document.querySelector('.stock-card')) {
-            grid.innerHTML = '<div class="loading">❌ Connection error. Retrying in 5s...</div>';
+            grid.innerHTML = '<div class="loading">❌ Connection error. Retrying in 10s...</div>';
         }
     } finally {
         updateInProgress = false;
@@ -495,9 +537,12 @@ function renderInitialCards(quotes) {
     quotes.forEach((quote, idx) => {
         if (quote) lastPrices[TICKERS[idx]] = quote.c;
     });
+    
+    console.log(`Rendered ${quotes.filter(q => q).length} cards`);
 }
 
 function updateExistingCards(quotes) {
+    let updatedCount = 0;
     quotes.forEach((quote, idx) => {
         if (!quote) return;
         
@@ -516,9 +561,14 @@ function updateExistingCards(quotes) {
                     priceEl.classList.add('flash');
                     setTimeout(() => priceEl.classList.remove('flash'), 500);
                 }
+                updatedCount++;
             }
         }
     });
+    
+    if (updatedCount > 0) {
+        console.log(`Updated ${updatedCount} price changes`);
+    }
 }
 
 function createStockCardHTML(ticker, quote) {
@@ -540,6 +590,7 @@ function createStockCardContent(ticker, quote) {
     if (!result) return '<div class="loading">⚠️ Error</div>';
     
     const directionIcon = result.direction === 'CALL' ? '📈' : '📉';
+    const gradeTime = new Date(result.timestamp * 1000).toLocaleTimeString();
     
     return `
         <div class="stock-header">
@@ -562,8 +613,8 @@ function createStockCardContent(ticker, quote) {
             <div class="trade-details">
                 <strong>Strike:</strong> $${result.strike} (${result.dte}D)<br>
                 <strong>Entry:</strong> $${result.entryPrice}/contract<br>
-                <strong>Score:</strong> ${result.score}/55<br>
-                <small style="color: #6c757d; font-size: 9px;">Updated: ${new Date(quote.t * 1000).toLocaleTimeString()}</small>
+                <strong>Score:</strong> ${result.score}/55
+                <div class="timestamp">Graded: ${gradeTime}</div>
             </div>
             <div class="risk-reward">
                 <div class="risk-box">
@@ -590,11 +641,13 @@ function showDetails(ticker, quote) {
     title.textContent = `${ticker} - ${result.direction} Opportunity`;
     
     const directionIcon = result.direction === 'CALL' ? '📈' : '📉';
+    const gradeTime = new Date(result.timestamp * 1000).toLocaleString();
     
     body.innerHTML = `
         <div style="background: ${result.direction === 'CALL' ? '#e5f7e5' : '#ffe5e5'}; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
             <h3 style="margin: 0;">${directionIcon} ${result.direction} - Grade ${result.grade}</h3>
             <p style="margin: 5px 0 0 0; font-size: 14px;">Momentum is ${parseFloat(result.metrics.moveFromOpen) >= 0 ? 'UP' : 'DOWN'} ${Math.abs(result.metrics.moveFromOpen)}% from open</p>
+            <p style="margin: 5px 0 0 0; font-size: 12px; color: #6c757d;">Graded at: ${gradeTime}</p>
         </div>
         
         <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; margin-bottom: 20px;">
@@ -632,7 +685,15 @@ function showDetails(ticker, quote) {
         </div>
         <p style="margin-top: 15px; text-align: center; font-size: 18px;"><strong>Total Score: ${result.score}/55 → Grade ${result.grade}</strong></p>
         
-        <h3 style="margin-top: 30px;">Trade Execution</h3>
+        <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin-top: 20px; color: #856404;">
+            <strong>⚠️ Limitations:</strong><br>
+            • Social sentiment NOT included<br>
+            • News events NOT included<br>
+            • Earnings reports NOT included<br>
+            • Only momentum + range + market trend
+        </div>
+        
+        <h3 style="margin-top: 20px;">Trade Execution</h3>
         <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
             <tr style="background: #f8f9fa;">
                 <th style="padding: 10px; text-align: left; border: 1px solid #dee2e6;">Parameter</th>
@@ -682,12 +743,13 @@ function closeModal() {
 }
 
 // Initial load
+console.log('Initializing stock cards...');
 updateStockCards();
 
-// Update every 10 seconds (to stay under Finnhub rate limit of 60/min)
-// 12 stocks + 1 SPY = 13 calls per update
-// 10 second interval = 6 updates/min × 13 calls = 78 calls/min (close to limit)
-// Consider 15 seconds (52 calls/min) for safer margin
-setInterval(updateStockCards, 10000);
+// Update every 10 seconds
+setInterval(() => {
+    console.log('Triggering scheduled update...');
+    updateStockCards();
+}, 10000);
 </script>
 {% endblock %}

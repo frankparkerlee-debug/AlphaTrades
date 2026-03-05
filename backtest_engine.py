@@ -83,12 +83,19 @@ class Strategy1Backtest:
             return None
         
         row = df.loc[date]
-        open_price = row['Open']
-        current = row['Close']
-        high = row['High']
-        low = row['Low']
         
-        if open_price == 0 or pd.isna(open_price):
+        # Handle both Series and DataFrame returns
+        if isinstance(row, pd.DataFrame):
+            if len(row) == 0:
+                return None
+            row = row.iloc[0]
+        
+        open_price = float(row['Open'])
+        current = float(row['Close'])
+        high = float(row['High'])
+        low = float(row['Low'])
+        
+        if open_price == 0 or np.isnan(open_price):
             return None
         
         # Calculate metrics
@@ -163,7 +170,14 @@ class Strategy1Backtest:
             return False
         
         spy = self.data['SPY'].loc[date]
-        return spy['Close'] > spy['Open']
+        
+        # Handle both Series and DataFrame returns
+        if isinstance(spy, pd.DataFrame):
+            if len(spy) == 0:
+                return False
+            spy = spy.iloc[0]
+        
+        return float(spy['Close']) > float(spy['Open'])
     
     def check_exits(self, current_date):
         """Check exit conditions for all open positions"""
@@ -179,7 +193,13 @@ class Strategy1Backtest:
             if ticker not in self.data or current_date not in self.data[ticker].index:
                 continue
             
-            current_price = self.data[ticker].loc[current_date]['Close']
+            price_data = self.data[ticker].loc[current_date]
+            if isinstance(price_data, pd.DataFrame):
+                if len(price_data) == 0:
+                    continue
+                price_data = price_data.iloc[0]
+            
+            current_price = float(price_data['Close'])
             current_return = (current_price - entry_price) / entry_price
             
             hold_days = (current_date - entry_date).days
@@ -253,7 +273,13 @@ class Strategy1Backtest:
         if ticker not in self.data or next_date not in self.data[ticker].index:
             return False
         
-        entry_price = self.data[ticker].loc[next_date]['Open']
+        entry_data = self.data[ticker].loc[next_date]
+        if isinstance(entry_data, pd.DataFrame):
+            if len(entry_data) == 0:
+                return False
+            entry_data = entry_data.iloc[0]
+        
+        entry_price = float(entry_data['Open'])
         shares = position_value / entry_price
         
         position = {
@@ -293,7 +319,12 @@ class Strategy1Backtest:
             portfolio_value = self.capital
             for pos in self.positions:
                 if pos['ticker'] in self.data and current_date in self.data[pos['ticker']].index:
-                    current_price = self.data[pos['ticker']].loc[current_date]['Close']
+                    price_data = self.data[pos['ticker']].loc[current_date]
+                    if isinstance(price_data, pd.DataFrame):
+                        if len(price_data) == 0:
+                            continue
+                        price_data = price_data.iloc[0]
+                    current_price = float(price_data['Close'])
                     portfolio_value += pos['shares'] * current_price
             
             self.daily_equity.append({
@@ -326,7 +357,12 @@ class Strategy1Backtest:
             for pos in self.positions:
                 ticker = pos['ticker']
                 if ticker in self.data and self.end_date in self.data[ticker].index:
-                    exit_price = self.data[ticker].loc[self.end_date]['Close']
+                    price_data = self.data[ticker].loc[self.end_date]
+                    if isinstance(price_data, pd.DataFrame):
+                        if len(price_data) == 0:
+                            continue
+                        price_data = price_data.iloc[0]
+                    exit_price = float(price_data['Close'])
                     pnl = pos['shares'] * (exit_price - pos['entry_price'])
                     pnl_pct = ((exit_price - pos['entry_price']) / pos['entry_price']) * 100
                     
@@ -350,7 +386,12 @@ class Strategy1Backtest:
         final_equity = self.capital
         for pos in self.positions:
             if pos['ticker'] in self.data and self.end_date in self.data[pos['ticker']].index:
-                current_price = self.data[pos['ticker']].loc[self.end_date]['Close']
+                price_data = self.data[pos['ticker']].loc[self.end_date]
+                if isinstance(price_data, pd.DataFrame):
+                    if len(price_data) == 0:
+                        continue
+                    price_data = price_data.iloc[0]
+                current_price = float(price_data['Close'])
                 final_equity += pos['shares'] * current_price
         
         self.final_equity = final_equity
