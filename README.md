@@ -93,13 +93,42 @@ Render auto-deploys on push.
 
 ## Usage
 
+### Dashboard (Three-Page Architecture)
+
+Access at `https://alphatrades.onrender.com` (or `http://localhost:10000` locally)
+
+**1. 📊 Stock Cards** (`/`)
+- Live monitoring grid for 12 tech stocks
+- Real-time call/put grading (A+/A/A-/B+/B/B-)
+- Entry points, strike prices, DTE (Days to Expiry)
+- Click any card for detailed scoring breakdown and recent alerts
+- Auto-refreshes every 30 seconds
+
+**2. 💼 Trader Simulation** (`/trader`)
+- Paper trading performance dashboard
+- Account value, P/L, win rate, open positions
+- Tabbed interface: Open Positions / Closed Trades / Performance Analytics
+- Grade-by-grade performance breakdown
+- Best/worst trades, average hold time, P/L per trade
+- Auto-refreshes every 30 seconds
+
+**3. 📋 Options Feed** (`/feed`)
+- Historical alert log with full details
+- Filter by: ticker, grade, direction (call/put), date range
+- Search functionality for specific symbols
+- Paginated results (50 per page)
+- Each alert shows: date/time, ticker, strike, target price, expiry, scoring details
+- Example format: "3/5/26, 12:20PM CST, AMD $200 Strike, 3/6/26 Expiry, $2.79/contract, GRADE A-"
+
 ### API Endpoints
 
 **Dashboard:**
-- `GET /` - Web dashboard
-- `GET /api/alerts` - Recent alerts
-- `GET /api/trades` - Trade history
-- `GET /api/performance` - Daily metrics
+- `GET /` - Stock Cards (live monitoring)
+- `GET /trader` - Trader Simulation (performance)
+- `GET /feed` - Options Feed (historical alerts)
+- `GET /api/alerts` - Recent alerts (JSON)
+- `GET /api/trades` - Trade history (JSON)
+- `GET /api/performance` - Daily metrics (JSON)
 
 **Admin:**
 - `GET /api/config` - Current model config

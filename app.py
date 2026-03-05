@@ -1,7 +1,11 @@
 """
 Flask Web Service - API and Dashboard
+Three-page architecture:
+1. Stock Cards - Live monitoring with call/put grades
+2. Trader Simulation - Paper trading performance
+3. Options Feed - Historical alerts with filters
 """
-from flask import Flask, jsonify, request, render_template_string, render_template
+from flask import Flask, jsonify, request, render_template
 from models import Alert, Trade, DailyPerformance, ModelConfig, AccountState, get_session
 from datetime import datetime, timedelta
 import logging
@@ -12,195 +16,6 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 FINNHUB_API_KEY = os.getenv('FINNHUB_API_KEY', '')
-
-# Simple HTML dashboard template
-DASHBOARD_HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>AlphaTrades Dashboard</title>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 20px;
-        }
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 12px;
-            padding: 30px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-        }
-        h1 { color: #2a5298; margin-bottom: 10px; }
-        h2 { color: #2a5298; margin-top: 30px; margin-bottom: 15px; border-bottom: 2px solid #e9ecef; padding-bottom: 10px; }
-        .stats {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-        .stat-card {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 20px;
-            border-radius: 10px;
-            text-align: center;
-        }
-        .stat-value { font-size: 32px; font-weight: bold; margin: 10px 0; }
-        .stat-label { font-size: 14px; opacity: 0.9; }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 15px;
-        }
-        th {
-            background: #f8f9fa;
-            padding: 12px;
-            text-align: left;
-            font-weight: 600;
-            border-bottom: 2px solid #dee2e6;
-        }
-        td {
-            padding: 12px;
-            border-bottom: 1px solid #e9ecef;
-        }
-        tr:hover { background: #f8f9fa; }
-        .grade-A { background: #28a745; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold; }
-        .grade-B { background: #ffc107; color: #856404; padding: 4px 8px; border-radius: 4px; font-weight: bold; }
-        .grade-C { background: #fd7e14; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold; }
-        .positive { color: #28a745; font-weight: bold; }
-        .negative { color: #dc3545; font-weight: bold; }
-        .status-open { background: #d1ecf1; color: #0c5460; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
-        .status-closed { background: #d4edda; color: #155724; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
-        .refresh { text-align: center; margin-top: 20px; color: #6c757d; font-size: 14px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>📊 AlphaTrades Dashboard</h1>
-        <p style="color: #6c757d; margin-bottom: 30px;">Automated Options Trading System - {{ mode|upper }} MODE</p>
-        
-        <div class="stats">
-            <div class="stat-card">
-                <div class="stat-label">Account Value</div>
-                <div class="stat-value">${{ account.total_value|round(2) }}</div>
-                <div class="stat-label">Capital: ${{ account.current_capital|round(2) }}</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Total P/L</div>
-                <div class="stat-value" style="color: {{ 'lime' if account.cumulative_pl >= 0 else 'red' }}">${{ account.cumulative_pl|round(2) }}</div>
-                <div class="stat-label">{{ account.total_trades }} trades</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Win Rate</div>
-                <div class="stat-value">{{ win_rate|round(1) }}%</div>
-                <div class="stat-label">{{ account.winning_trades }}W / {{ account.losing_trades }}L</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Open Positions</div>
-                <div class="stat-value">{{ open_positions }}</div>
-                <div class="stat-label">Active trades</div>
-            </div>
-        </div>
-        
-        <h2>🚨 Recent Alerts (Last 24h)</h2>
-        <table>
-            <tr>
-                <th>Time</th>
-                <th>Ticker</th>
-                <th>Grade</th>
-                <th>Score</th>
-                <th>Move %</th>
-                <th>Range %</th>
-                <th>Direction</th>
-                <th>Strike</th>
-            </tr>
-            {% for alert in alerts %}
-            <tr>
-                <td>{{ alert.timestamp.strftime('%H:%M:%S') }}</td>
-                <td><strong>{{ alert.ticker }}</strong></td>
-                <td><span class="grade-{{ alert.grade[0] }}">{{ alert.grade }}</span></td>
-                <td>{{ alert.score }}/55</td>
-                <td>{{ alert.move_pct|round(2) }}%</td>
-                <td>{{ alert.range_pct|round(2) }}%</td>
-                <td>{{ alert.direction }}</td>
-                <td>${{ alert.strike|round(2) }}</td>
-            </tr>
-            {% endfor %}
-        </table>
-        
-        <h2>💼 Open Positions</h2>
-        <table>
-            <tr>
-                <th>Entry</th>
-                <th>Ticker</th>
-                <th>Direction</th>
-                <th>Strike</th>
-                <th>Grade</th>
-                <th>Entry $</th>
-                <th>Hold Time</th>
-                <th>Status</th>
-            </tr>
-            {% for trade in open_trades %}
-            <tr>
-                <td>{{ trade.entry_time.strftime('%m/%d %H:%M') }}</td>
-                <td><strong>{{ trade.ticker }}</strong></td>
-                <td>{{ trade.direction }}</td>
-                <td>${{ trade.strike|round(2) }}</td>
-                <td><span class="grade-{{ trade.grade[0] }}">{{ trade.grade }}</span></td>
-                <td>${{ trade.entry_option_price|round(2) }}</td>
-                <td>{{ hold_time(trade.entry_time) }}</td>
-                <td><span class="status-{{ trade.status.lower() }}">{{ trade.status }}</span></td>
-            </tr>
-            {% endfor %}
-        </table>
-        
-        <h2>📊 Closed Trades (Last 20)</h2>
-        <table>
-            <tr>
-                <th>Date</th>
-                <th>Ticker</th>
-                <th>Direction</th>
-                <th>Grade</th>
-                <th>Entry</th>
-                <th>Exit</th>
-                <th>P/L</th>
-                <th>P/L %</th>
-                <th>Hold</th>
-                <th>Exit Reason</th>
-            </tr>
-            {% for trade in closed_trades %}
-            <tr>
-                <td>{{ trade.entry_time.strftime('%m/%d') }}</td>
-                <td><strong>{{ trade.ticker }}</strong></td>
-                <td>{{ trade.direction }}</td>
-                <td><span class="grade-{{ trade.grade[0] }}">{{ trade.grade }}</span></td>
-                <td>${{ trade.entry_option_price|round(2) }}</td>
-                <td>${{ trade.exit_option_price|round(2) }}</td>
-                <td class="{{ 'positive' if trade.profit_loss >= 0 else 'negative' }}">${{ trade.profit_loss|round(2) }}</td>
-                <td class="{{ 'positive' if trade.profit_loss_pct >= 0 else 'negative' }}">{{ trade.profit_loss_pct|round(1) }}%</td>
-                <td>{{ trade.hold_days }}d</td>
-                <td>{{ trade.exit_reason }}</td>
-            </tr>
-            {% endfor %}
-        </table>
-        
-        <div class="refresh">
-            Auto-refreshes every 30 seconds
-        </div>
-    </div>
-    
-    <script>
-        setTimeout(() => location.reload(), 30000);  // Refresh every 30s
-    </script>
-</body>
-</html>
-"""
 
 def hold_time(entry_time):
     """Calculate hold time from entry"""
@@ -214,8 +29,16 @@ def hold_time(entry_time):
     return f"{hours}h"
 
 @app.route('/')
-def dashboard():
-    """Main dashboard"""
+def stock_cards():
+    """Stock Cards Page - Live monitoring"""
+    return render_template(
+        'stock_cards.html',
+        finnhub_key=FINNHUB_API_KEY
+    )
+
+@app.route('/trader')
+def trader_simulation():
+    """Trader Simulation Page - Performance dashboard"""
     session = get_session()
     
     try:
@@ -230,44 +53,156 @@ def dashboard():
         else:
             win_rate = 0
         
-        # Get recent alerts (last 24 hours)
-        yesterday = datetime.now() - timedelta(days=1)
-        alerts = session.query(Alert).filter(
-            Alert.timestamp >= yesterday
-        ).order_by(Alert.timestamp.desc()).limit(50).all()
-        
         # Get open positions
         open_trades = session.query(Trade).filter_by(status='OPEN').order_by(Trade.entry_time.desc()).all()
         
         # Get closed trades
-        closed_trades = session.query(Trade).filter_by(status='CLOSED').order_by(Trade.exit_time.desc()).limit(20).all()
+        closed_trades = session.query(Trade).filter_by(status='CLOSED').order_by(Trade.exit_time.desc()).limit(50).all()
+        
+        # Performance stats
+        best_trade = session.query(Trade).filter_by(status='CLOSED').order_by(Trade.profit_loss.desc()).first()
+        worst_trade = session.query(Trade).filter_by(status='CLOSED').order_by(Trade.profit_loss.asc()).first()
+        
+        # Average hold time
+        closed_with_days = [t for t in closed_trades if t.hold_days is not None]
+        avg_hold_days = sum(t.hold_days for t in closed_with_days) / len(closed_with_days) if closed_with_days else 0
+        
+        # Average P/L per trade
+        avg_pl_per_trade = account.cumulative_pl / account.total_trades if account.total_trades > 0 else 0
+        
+        # Grade statistics
+        grade_stats = {}
+        for grade in ['A+', 'A', 'A-', 'B+', 'B', 'B-']:
+            grade_trades = [t for t in closed_trades if t.grade == grade]
+            if grade_trades:
+                wins = len([t for t in grade_trades if t.profit_loss >= 0])
+                grade_stats[grade] = {
+                    'count': len(grade_trades),
+                    'win_rate': (wins / len(grade_trades)) * 100,
+                    'total_pl': sum(t.profit_loss for t in grade_trades),
+                    'avg_pl': sum(t.profit_loss for t in grade_trades) / len(grade_trades),
+                    'best': max(t.profit_loss for t in grade_trades),
+                    'worst': min(t.profit_loss for t in grade_trades)
+                }
         
         return render_template(
-            'combined_dashboard.html',
+            'trader_simulation.html',
             account=account,
             win_rate=win_rate,
             open_positions=len(open_trades),
-            alerts=alerts,
             open_trades=open_trades,
             closed_trades=closed_trades,
+            best_trade=best_trade,
+            worst_trade=worst_trade,
+            avg_hold_days=avg_hold_days,
+            avg_pl_per_trade=avg_pl_per_trade,
+            grade_stats=grade_stats,
             hold_time=hold_time,
-            finnhub_key=FINNHUB_API_KEY,
-            mode='paper'  # TODO: Get from config
+            mode='paper'
         )
     except Exception as e:
-        logger.error(f"Error rendering dashboard: {e}")
+        logger.error(f"Error rendering trader page: {e}")
         return f"Error: {e}", 500
     finally:
         session.close()
 
+@app.route('/feed')
+def options_feed():
+    """Options Feed Page - Historical alerts with filters"""
+    session = get_session()
+    
+    try:
+        # Get filter parameters
+        ticker = request.args.get('ticker', '').upper()
+        grade = request.args.get('grade', '')
+        direction = request.args.get('direction', '')
+        start_date = request.args.get('start_date', '')
+        end_date = request.args.get('end_date', '')
+        page = request.args.get('page', 1, type=int)
+        per_page = 50
+        
+        # Build query
+        query = session.query(Alert)
+        
+        if ticker:
+            query = query.filter(Alert.ticker.like(f'%{ticker}%'))
+        
+        if grade:
+            query = query.filter_by(grade=grade)
+        
+        if direction:
+            query = query.filter_by(direction=direction)
+        
+        if start_date:
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            query = query.filter(Alert.timestamp >= start_dt)
+        
+        if end_date:
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
+            query = query.filter(Alert.timestamp < end_dt)
+        
+        # Get total count for pagination
+        total_alerts = query.count()
+        total_pages = (total_alerts + per_page - 1) // per_page
+        
+        # Get paginated results
+        alerts = query.order_by(Alert.timestamp.desc()).limit(per_page).offset((page - 1) * per_page).all()
+        
+        # Quick stats
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_alerts = session.query(Alert).filter(Alert.timestamp >= today_start).count()
+        
+        a_grade_count = session.query(Alert).filter(
+            Alert.grade.in_(['A+', 'A', 'A-'])
+        ).count()
+        
+        b_grade_count = session.query(Alert).filter(
+            Alert.grade.in_(['B+', 'B', 'B-'])
+        ).count()
+        
+        return render_template(
+            'options_feed.html',
+            alerts=alerts,
+            total_alerts=total_alerts,
+            today_alerts=today_alerts,
+            a_grade_count=a_grade_count,
+            b_grade_count=b_grade_count,
+            page=page,
+            total_pages=total_pages,
+            filters={
+                'ticker': ticker,
+                'grade': grade,
+                'direction': direction,
+                'start_date': start_date,
+                'end_date': end_date
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error rendering feed page: {e}")
+        return f"Error: {e}", 500
+    finally:
+        session.close()
+
+# API Endpoints (for stock cards live data)
 @app.route('/api/alerts')
 def api_alerts():
     """Get recent alerts"""
     session = get_session()
     try:
-        limit = request.args.get('limit', 50, type=int)
+        limit = request.args.get('limit', 100, type=int)
         alerts = session.query(Alert).order_by(Alert.timestamp.desc()).limit(limit).all()
-        return jsonify([alert.to_dict() for alert in alerts])
+        return jsonify([{
+            'timestamp': alert.timestamp.isoformat(),
+            'ticker': alert.ticker,
+            'direction': alert.direction,
+            'grade': alert.grade,
+            'score': alert.score,
+            'strike': float(alert.strike),
+            'target_option_price': float(alert.target_option_price),
+            'move_pct': float(alert.move_pct),
+            'range_pct': float(alert.range_pct),
+            'days_to_expiry': alert.days_to_expiry
+        } for alert in alerts])
     finally:
         session.close()
 
@@ -284,7 +219,21 @@ def api_trades():
             query = query.filter_by(status=status.upper())
         
         trades = query.order_by(Trade.entry_time.desc()).limit(limit).all()
-        return jsonify([trade.to_dict() for trade in trades])
+        return jsonify([{
+            'id': trade.id,
+            'ticker': trade.ticker,
+            'direction': trade.direction,
+            'grade': trade.grade,
+            'entry_time': trade.entry_time.isoformat(),
+            'exit_time': trade.exit_time.isoformat() if trade.exit_time else None,
+            'strike': float(trade.strike),
+            'entry_option_price': float(trade.entry_option_price),
+            'exit_option_price': float(trade.exit_option_price) if trade.exit_option_price else None,
+            'profit_loss': float(trade.profit_loss) if trade.profit_loss else None,
+            'profit_loss_pct': float(trade.profit_loss_pct) if trade.profit_loss_pct else None,
+            'status': trade.status,
+            'exit_reason': trade.exit_reason
+        } for trade in trades])
     finally:
         session.close()
 

@@ -1,0 +1,300 @@
+{% extends "base.html" %}
+
+{% block title %}Options Feed - AlphaTrades{% endblock %}
+
+{% block extra_styles %}
+<style>
+    .filters {
+        background: #f8f9fa;
+        padding: 20px;
+        border-radius: 10px;
+        margin-bottom: 20px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+    }
+    
+    .filter-group {
+        display: flex;
+        flex-direction: column;
+    }
+    
+    .filter-group label {
+        font-weight: 600;
+        color: #495057;
+        margin-bottom: 5px;
+        font-size: 14px;
+    }
+    
+    .filter-group input,
+    .filter-group select {
+        padding: 10px;
+        border: 1px solid #ced4da;
+        border-radius: 6px;
+        font-size: 14px;
+    }
+    
+    .filter-actions {
+        display: flex;
+        gap: 10px;
+        align-items: flex-end;
+    }
+    
+    .btn {
+        padding: 10px 20px;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-weight: 600;
+        transition: all 0.3s;
+    }
+    
+    .btn-primary {
+        background: #667eea;
+        color: white;
+    }
+    
+    .btn-primary:hover {
+        background: #5568d3;
+    }
+    
+    .btn-secondary {
+        background: #6c757d;
+        color: white;
+    }
+    
+    .btn-secondary:hover {
+        background: #5a6268;
+    }
+    
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 20px;
+    }
+    th {
+        background: #f8f9fa;
+        padding: 12px;
+        text-align: left;
+        font-weight: 600;
+        border-bottom: 2px solid #dee2e6;
+        position: sticky;
+        top: 0;
+    }
+    td {
+        padding: 12px;
+        border-bottom: 1px solid #e9ecef;
+    }
+    tr:hover { background: #f8f9fa; }
+    
+    .pagination {
+        display: flex;
+        justify-content: center;
+        gap: 10px;
+        margin-top: 20px;
+        align-items: center;
+    }
+    
+    .page-btn {
+        padding: 8px 16px;
+        border: 1px solid #dee2e6;
+        background: white;
+        border-radius: 6px;
+        cursor: pointer;
+        font-weight: 600;
+    }
+    
+    .page-btn:hover {
+        background: #f8f9fa;
+    }
+    
+    .page-btn.active {
+        background: #667eea;
+        color: white;
+        border-color: #667eea;
+    }
+    
+    .page-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+    
+    .stats-summary {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 15px;
+        margin-bottom: 20px;
+    }
+    
+    .stat-box {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 15px;
+        border-radius: 8px;
+        text-align: center;
+    }
+    
+    .stat-box-value {
+        font-size: 24px;
+        font-weight: bold;
+        margin-bottom: 5px;
+    }
+    
+    .stat-box-label {
+        font-size: 12px;
+        opacity: 0.9;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1>📋 Options Pick Feed</h1>
+    <p style="color: #6c757d; margin-bottom: 20px;">Historical alert log with filtering and search</p>
+    
+    <!-- Quick Stats -->
+    <div class="stats-summary">
+        <div class="stat-box">
+            <div class="stat-box-value">{{ total_alerts }}</div>
+            <div class="stat-box-label">Total Alerts</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-box-value">{{ today_alerts }}</div>
+            <div class="stat-box-label">Today</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-box-value">{{ a_grade_count }}</div>
+            <div class="stat-box-label">A-Grade Picks</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-box-value">{{ b_grade_count }}</div>
+            <div class="stat-box-label">B-Grade Picks</div>
+        </div>
+    </div>
+    
+    <!-- Filters -->
+    <form class="filters" id="filterForm" method="get">
+        <div class="filter-group">
+            <label>Search Ticker</label>
+            <input type="text" name="ticker" placeholder="e.g. NVDA, TSLA" value="{{ filters.ticker }}">
+        </div>
+        
+        <div class="filter-group">
+            <label>Grade</label>
+            <select name="grade">
+                <option value="">All Grades</option>
+                <option value="A+" {{ 'selected' if filters.grade == 'A+' }}>A+</option>
+                <option value="A" {{ 'selected' if filters.grade == 'A' }}>A</option>
+                <option value="A-" {{ 'selected' if filters.grade == 'A-' }}>A-</option>
+                <option value="B+" {{ 'selected' if filters.grade == 'B+' }}>B+</option>
+                <option value="B" {{ 'selected' if filters.grade == 'B' }}>B</option>
+                <option value="B-" {{ 'selected' if filters.grade == 'B-' }}>B-</option>
+                <option value="C+" {{ 'selected' if filters.grade == 'C+' }}>C+</option>
+                <option value="C" {{ 'selected' if filters.grade == 'C' }}>C</option>
+                <option value="C-" {{ 'selected' if filters.grade == 'C-' }}>C-</option>
+                <option value="D" {{ 'selected' if filters.grade == 'D' }}>D</option>
+            </select>
+        </div>
+        
+        <div class="filter-group">
+            <label>Direction</label>
+            <select name="direction">
+                <option value="">All</option>
+                <option value="CALL" {{ 'selected' if filters.direction == 'CALL' }}>CALL</option>
+                <option value="PUT" {{ 'selected' if filters.direction == 'PUT' }}>PUT</option>
+            </select>
+        </div>
+        
+        <div class="filter-group">
+            <label>Start Date</label>
+            <input type="date" name="start_date" value="{{ filters.start_date }}">
+        </div>
+        
+        <div class="filter-group">
+            <label>End Date</label>
+            <input type="date" name="end_date" value="{{ filters.end_date }}">
+        </div>
+        
+        <div class="filter-actions">
+            <button type="submit" class="btn btn-primary">🔍 Apply Filters</button>
+            <button type="button" class="btn btn-secondary" onclick="window.location.href='/feed'">🔄 Reset</button>
+        </div>
+    </form>
+    
+    <!-- Results Table -->
+    <h2>Alert History ({{ alerts|length }} results)</h2>
+    <table>
+        <tr>
+            <th>Date & Time</th>
+            <th>Ticker</th>
+            <th>Direction</th>
+            <th>Grade</th>
+            <th>Score</th>
+            <th>Strike</th>
+            <th>Target Price</th>
+            <th>Expiry (DTE)</th>
+            <th>Move %</th>
+            <th>Range %</th>
+        </tr>
+        {% if alerts %}
+            {% for alert in alerts %}
+            <tr>
+                <td>
+                    {{ alert.timestamp.strftime('%m/%d/%y') }}<br>
+                    <small style="color: #6c757d;">{{ alert.timestamp.strftime('%I:%M %p CST') }}</small>
+                </td>
+                <td><strong>{{ alert.ticker }}</strong></td>
+                <td>
+                    {% if alert.direction == 'CALL' %}
+                        📈 CALL
+                    {% else %}
+                        📉 PUT
+                    {% endif %}
+                </td>
+                <td><span class="grade-{{ alert.grade[0] }}">{{ alert.grade }}</span></td>
+                <td>{{ alert.score }}/55</td>
+                <td>${{ alert.strike|round(2) }}</td>
+                <td>${{ alert.target_option_price|round(2) }} /contract</td>
+                <td>{{ alert.expiry.strftime('%m/%d/%y') }} ({{ alert.days_to_expiry }}D)</td>
+                <td>{{ alert.move_pct|round(2) }}%</td>
+                <td>{{ alert.range_pct|round(2) }}%</td>
+            </tr>
+            {% endfor %}
+        {% else %}
+            <tr><td colspan="10" style="text-align: center; color: #6c757d; padding: 40px;">
+                No alerts match your filters. Try adjusting your search criteria.
+            </td></tr>
+        {% endif %}
+    </table>
+    
+    <!-- Pagination -->
+    {% if total_pages > 1 %}
+    <div class="pagination">
+        <button class="page-btn" onclick="changePage({{ page - 1 }})" {{ 'disabled' if page <= 1 }}>← Prev</button>
+        
+        {% for p in range(1, total_pages + 1) %}
+            {% if p == page %}
+                <button class="page-btn active">{{ p }}</button>
+            {% elif p <= 3 or p > total_pages - 3 or (p >= page - 2 and p <= page + 2) %}
+                <button class="page-btn" onclick="changePage({{ p }})">{{ p }}</button>
+            {% elif p == 4 or p == total_pages - 3 %}
+                <span style="padding: 8px;">...</span>
+            {% endif %}
+        {% endfor %}
+        
+        <button class="page-btn" onclick="changePage({{ page + 1 }})" {{ 'disabled' if page >= total_pages }}>Next →</button>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function changePage(pageNum) {
+    const form = document.getElementById('filterForm');
+    const url = new URL(window.location.href);
+    url.searchParams.set('page', pageNum);
+    window.location.href = url.toString();
+}
+</script>
+{% endblock %}

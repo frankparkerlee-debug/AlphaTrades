@@ -1,0 +1,272 @@
+{% extends "base.html" %}
+
+{% block title %}Trader Simulation - AlphaTrades{% endblock %}
+
+{% block extra_styles %}
+<style>
+    .stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 20px;
+        margin-bottom: 30px;
+    }
+    .stat-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 20px;
+        border-radius: 10px;
+        text-align: center;
+    }
+    .stat-value { font-size: 32px; font-weight: bold; margin: 10px 0; }
+    .stat-label { font-size: 14px; opacity: 0.9; }
+    
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 15px;
+    }
+    th {
+        background: #f8f9fa;
+        padding: 12px;
+        text-align: left;
+        font-weight: 600;
+        border-bottom: 2px solid #dee2e6;
+    }
+    td {
+        padding: 12px;
+        border-bottom: 1px solid #e9ecef;
+    }
+    tr:hover { background: #f8f9fa; }
+    
+    .status-open { background: #d1ecf1; color: #0c5460; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+    .status-closed { background: #d4edda; color: #155724; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+    
+    .refresh { text-align: center; margin-top: 20px; color: #6c757d; font-size: 14px; }
+    
+    .section-tabs {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 20px;
+    }
+    
+    .tab-btn {
+        padding: 10px 20px;
+        border: none;
+        background: #e9ecef;
+        color: #495057;
+        border-radius: 6px;
+        cursor: pointer;
+        font-weight: 600;
+        transition: all 0.3s;
+    }
+    
+    .tab-btn.active {
+        background: #667eea;
+        color: white;
+    }
+    
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1>💼 Paper Trading Simulation</h1>
+    <p style="color: #6c757d; margin-bottom: 30px;">Automated options trading performance - {{ mode|upper }} MODE</p>
+    
+    <div class="stats">
+        <div class="stat-card">
+            <div class="stat-label">Account Value</div>
+            <div class="stat-value">${{ account.total_value|round(2) }}</div>
+            <div class="stat-label">Capital: ${{ account.current_capital|round(2) }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Total P/L</div>
+            <div class="stat-value" style="color: {{ 'lime' if account.cumulative_pl >= 0 else 'red' }}">${{ account.cumulative_pl|round(2) }}</div>
+            <div class="stat-label">{{ account.total_trades }} trades</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Win Rate</div>
+            <div class="stat-value">{{ win_rate|round(1) }}%</div>
+            <div class="stat-label">{{ account.winning_trades }}W / {{ account.losing_trades }}L</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Open Positions</div>
+            <div class="stat-value">{{ open_positions }}</div>
+            <div class="stat-label">Active trades</div>
+        </div>
+    </div>
+    
+    <div class="section-tabs">
+        <button class="tab-btn active" onclick="switchTab('open')">📊 Open Positions</button>
+        <button class="tab-btn" onclick="switchTab('closed')">📋 Closed Trades</button>
+        <button class="tab-btn" onclick="switchTab('performance')">📈 Performance</button>
+    </div>
+    
+    <!-- Open Positions Tab -->
+    <div class="tab-content active" id="tab-open">
+        <h2>💼 Open Positions ({{ open_positions }})</h2>
+        <table>
+            <tr>
+                <th>Entry Time</th>
+                <th>Ticker</th>
+                <th>Direction</th>
+                <th>Strike</th>
+                <th>Grade</th>
+                <th>Entry Price</th>
+                <th>Hold Time</th>
+                <th>Est. Value</th>
+                <th>P/L</th>
+                <th>Status</th>
+            </tr>
+            {% if open_trades %}
+                {% for trade in open_trades %}
+                <tr>
+                    <td>{{ trade.entry_time.strftime('%m/%d %H:%M') }}</td>
+                    <td><strong>{{ trade.ticker }}</strong></td>
+                    <td>{{ trade.direction }}</td>
+                    <td>${{ trade.strike|round(2) }}</td>
+                    <td><span class="grade-{{ trade.grade[0] }}">{{ trade.grade }}</span></td>
+                    <td>${{ trade.entry_option_price|round(2) }}</td>
+                    <td>{{ hold_time(trade.entry_time) }}</td>
+                    <td>${{ trade.entry_option_price|round(2) }}</td>
+                    <td class="positive">--</td>
+                    <td><span class="status-{{ trade.status.lower() }}">{{ trade.status }}</span></td>
+                </tr>
+                {% endfor %}
+            {% else %}
+                <tr><td colspan="10" style="text-align: center; color: #6c757d;">No open positions</td></tr>
+            {% endif %}
+        </table>
+    </div>
+    
+    <!-- Closed Trades Tab -->
+    <div class="tab-content" id="tab-closed">
+        <h2>📊 Closed Trades (Last 50)</h2>
+        <table>
+            <tr>
+                <th>Entry Date</th>
+                <th>Ticker</th>
+                <th>Direction</th>
+                <th>Grade</th>
+                <th>Entry</th>
+                <th>Exit</th>
+                <th>P/L</th>
+                <th>P/L %</th>
+                <th>Hold Days</th>
+                <th>Exit Reason</th>
+            </tr>
+            {% if closed_trades %}
+                {% for trade in closed_trades %}
+                <tr>
+                    <td>{{ trade.entry_time.strftime('%m/%d %H:%M') }}</td>
+                    <td><strong>{{ trade.ticker }}</strong></td>
+                    <td>{{ trade.direction }}</td>
+                    <td><span class="grade-{{ trade.grade[0] }}">{{ trade.grade }}</span></td>
+                    <td>${{ trade.entry_option_price|round(2) }}</td>
+                    <td>${{ trade.exit_option_price|round(2) }}</td>
+                    <td class="{{ 'positive' if trade.profit_loss >= 0 else 'negative' }}">${{ trade.profit_loss|round(2) }}</td>
+                    <td class="{{ 'positive' if trade.profit_loss_pct >= 0 else 'negative' }}">{{ trade.profit_loss_pct|round(1) }}%</td>
+                    <td>{{ trade.hold_days }}d</td>
+                    <td>{{ trade.exit_reason }}</td>
+                </tr>
+                {% endfor %}
+            {% else %}
+                <tr><td colspan="10" style="text-align: center; color: #6c757d;">No closed trades yet</td></tr>
+            {% endif %}
+        </table>
+    </div>
+    
+    <!-- Performance Tab -->
+    <div class="tab-content" id="tab-performance">
+        <h2>📈 Performance Analytics</h2>
+        
+        <div class="stats" style="margin-top: 20px;">
+            <div class="stat-card" style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%);">
+                <div class="stat-label">Best Trade</div>
+                <div class="stat-value">
+                    {% if best_trade %}
+                        ${{ best_trade.profit_loss|round(2) }}
+                    {% else %}
+                        --
+                    {% endif %}
+                </div>
+                <div class="stat-label">
+                    {% if best_trade %}{{ best_trade.ticker }} {{ best_trade.grade }}{% else %}N/A{% endif %}
+                </div>
+            </div>
+            <div class="stat-card" style="background: linear-gradient(135deg, #dc3545 0%, #fd7e14 100%);">
+                <div class="stat-label">Worst Trade</div>
+                <div class="stat-value">
+                    {% if worst_trade %}
+                        ${{ worst_trade.profit_loss|round(2) }}
+                    {% else %}
+                        --
+                    {% endif %}
+                </div>
+                <div class="stat-label">
+                    {% if worst_trade %}{{ worst_trade.ticker }} {{ worst_trade.grade }}{% else %}N/A{% endif %}
+                </div>
+            </div>
+            <div class="stat-card" style="background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);">
+                <div class="stat-label">Avg Hold Time</div>
+                <div class="stat-value">{{ avg_hold_days|round(1) }}d</div>
+                <div class="stat-label">Days per trade</div>
+            </div>
+            <div class="stat-card" style="background: linear-gradient(135deg, #6f42c1 0%, #5a32a3 100%);">
+                <div class="stat-label">Avg P/L per Trade</div>
+                <div class="stat-value">${{ avg_pl_per_trade|round(2) }}</div>
+                <div class="stat-label">Per closed position</div>
+            </div>
+        </div>
+        
+        <h3 style="margin-top: 30px;">Performance by Grade</h3>
+        <table>
+            <tr>
+                <th>Grade</th>
+                <th>Trades</th>
+                <th>Win Rate</th>
+                <th>Total P/L</th>
+                <th>Avg P/L</th>
+                <th>Best</th>
+                <th>Worst</th>
+            </tr>
+            {% for grade in ['A+', 'A', 'A-', 'B+', 'B', 'B-'] %}
+            <tr>
+                <td><span class="grade-{{ grade[0] }}">{{ grade }}</span></td>
+                <td>{{ grade_stats.get(grade, {}).get('count', 0) }}</td>
+                <td>{{ grade_stats.get(grade, {}).get('win_rate', 0)|round(1) }}%</td>
+                <td class="{{ 'positive' if grade_stats.get(grade, {}).get('total_pl', 0) >= 0 else 'negative' }}">
+                    ${{ grade_stats.get(grade, {}).get('total_pl', 0)|round(2) }}
+                </td>
+                <td>${{ grade_stats.get(grade, {}).get('avg_pl', 0)|round(2) }}</td>
+                <td class="positive">${{ grade_stats.get(grade, {}).get('best', 0)|round(2) }}</td>
+                <td class="negative">${{ grade_stats.get(grade, {}).get('worst', 0)|round(2) }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+    
+    <div class="refresh">
+        Auto-refreshes every 30 seconds
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function switchTab(tabName) {
+    // Update buttons
+    document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+    event.target.classList.add('active');
+    
+    // Update content
+    document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+    document.getElementById(`tab-${tabName}`).classList.add('active');
+}
+
+// Auto-refresh every 30 seconds
+setTimeout(() => location.reload(), 30000);
+</script>
+{% endblock %}
