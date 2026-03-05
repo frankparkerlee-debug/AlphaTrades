@@ -757,16 +757,16 @@ updateStockCards();
 
 // Update every 15 seconds (52 calls/min - safely under 60/min limit)
 // 13 calls per update × 4 updates/min = 52 calls/min
-// Real-Time Streaming with Server-Sent Events (TEMPORARILY DISABLED)
+// Real-Time Streaming with Server-Sent Events (gevent-powered)
 let eventSource = null;
 let priceCache = {}; // Cache latest prices from stream
 let streamAttempts = 0;
-let usePolling = false;  // Flag to fall back to polling
+let usePolling = false;  // Flag to fall back to polling if needed
 
 function initRealTimeStream() {
-    // Check if we should use polling instead (after 3 failed attempts)
-    if (usePolling || streamAttempts >= 3) {
-        console.log('⚠️ WebSocket stream unavailable, using REST API polling');
+    // Check if we should use polling instead (after 5 failed attempts)
+    if (usePolling || streamAttempts >= 5) {
+        console.log('⚠️ WebSocket stream unavailable after 5 attempts, using REST API polling');
         document.getElementById('updateTime').textContent = 'Polling (2s intervals)';
         usePolling = true;
         return;
@@ -779,11 +779,11 @@ function initRealTimeStream() {
         eventSource.close();
     }
     
-    console.log(`🔌 Connecting to real-time price stream (attempt ${streamAttempts}/3)...`);
+    console.log(`🔌 Connecting to real-time price stream (gevent) - attempt ${streamAttempts}/5...`);
     eventSource = new EventSource('/api/stream/prices');
     
     eventSource.onopen = function() {
-        console.log('✅ Connected to real-time stream');
+        console.log('✅ Connected to real-time stream (gevent-powered)');
         document.getElementById('updateTime').textContent = 'Live • Real-Time';
         document.getElementById('updateIndicator').classList.add('pulse');
         streamAttempts = 0;  // Reset on success
@@ -794,15 +794,13 @@ function initRealTimeStream() {
             const update = JSON.parse(event.data);
             
             if (update.type === 'connected') {
-                console.log('📡 Stream connected:', update.timestamp);
+                console.log('📡 Stream connected (gevent):', update.timestamp);
                 return;
             }
             
             if (update.error) {
-                console.error('⚠️ Stream not available:', update.error);
-                eventSource.close();
-                usePolling = true;  // Fall back to polling
-                document.getElementById('updateTime').textContent = 'Polling (2s intervals)';
+                console.error('⚠️ Stream error:', update.error);
+                // Don't immediately fall back - let retry logic handle it
                 return;
             }
             
@@ -821,23 +819,23 @@ function initRealTimeStream() {
     };
     
     eventSource.onerror = function(error) {
-        console.warn(`⚠️ Stream error (attempt ${streamAttempts}/3)`);
+        console.warn(`⚠️ Stream error (attempt ${streamAttempts}/5)`);
         document.getElementById('updateTime').textContent = 'Reconnecting...';
         document.getElementById('updateIndicator').classList.remove('pulse');
         
-        // Close and fall back to polling after 3 attempts
-        if (streamAttempts >= 3) {
-            console.log('❌ Stream failed 3 times, falling back to polling');
+        // Close and fall back to polling after 5 attempts
+        if (streamAttempts >= 5) {
+            console.log('❌ Stream failed 5 times, falling back to polling');
             eventSource.close();
             usePolling = true;
             document.getElementById('updateTime').textContent = 'Polling (2s intervals)';
             return;
         }
         
-        // Try reconnecting after 2 seconds
+        // Try reconnecting after 3 seconds
         setTimeout(() => {
             initRealTimeStream();
-        }, 2000);
+        }, 3000);
     };
 }
 

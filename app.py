@@ -8,7 +8,7 @@ Three-page architecture:
 from flask import Flask, jsonify, request, render_template, Response, stream_with_context
 from models import Alert, Trade, DailyPerformance, ModelConfig, AccountState, get_session
 from alpaca_client import AlpacaClient
-from alpaca_stream import get_stream
+from alpaca_stream_gevent import get_stream
 from datetime import datetime, timedelta
 import logging
 import os
@@ -20,14 +20,21 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# TEMPORARY: WebSocket streaming disabled due to worker timeout issues
-# Will re-enable after debugging gevent/asyncio compatibility
+# WebSocket stream using gevent (no asyncio conflicts)
 alpaca_stream = None
 
 def get_alpaca_stream():
-    """WebSocket stream temporarily disabled - returns None"""
-    # TODO: Re-enable after fixing gevent/asyncio compatibility
-    return None
+    """Lazy-load the Alpaca stream using gevent-compatible WebSocket"""
+    global alpaca_stream
+    if alpaca_stream is None:
+        try:
+            logger.info("🔄 Initializing Alpaca WebSocket stream (gevent)...")
+            alpaca_stream = get_stream()
+            logger.info("✅ Alpaca WebSocket stream initialized (gevent)")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize stream: {e}", exc_info=True)
+            return None
+    return alpaca_stream
 
 # Alpaca API credentials
 ALPACA_API_KEY = os.getenv('ALPACA_API_KEY', '')

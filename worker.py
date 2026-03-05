@@ -12,7 +12,7 @@ from decimal import Decimal
 from models import Alert, Trade, ModelConfig, DailyPerformance, get_session
 from scorer import Scorer
 from trader import Trader
-from alpaca_stream import get_stream
+from alpaca_stream_gevent import get_stream
 
 logging.basicConfig(
     level=logging.INFO,
