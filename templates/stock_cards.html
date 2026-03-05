@@ -6,9 +6,12 @@
 <style>
     .stock-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+        grid-template-columns: repeat(3, 1fr);
         gap: 15px;
         margin-top: 20px;
+        max-width: 1400px;
+        margin-left: auto;
+        margin-right: auto;
     }
     
     .stock-card {
@@ -252,7 +255,10 @@
 {% block content %}
 <div class="container">
     <h1>📊 Strategy 1: Momentum Trades</h1>
-    <p style="color: #6c757d; margin-bottom: 20px;">Real-time opportunities - Ride the momentum in ONE direction</p>
+    <p style="color: #6c757d; margin-bottom: 10px;">Real-time opportunities - Ride the momentum in ONE direction</p>
+    <p style="color: #856404; background: #fff3cd; padding: 8px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 20px;">
+        ⚠️ <strong>Market Hours:</strong> Prices update every 10 seconds during regular trading (9:30 AM - 4:00 PM EST). Pre-market and after-hours prices may not be reflected.
+    </p>
     
     <div class="stock-grid" id="stockGrid">
         <div class="loading">⏳ Loading stock data...</div>
@@ -421,7 +427,12 @@ const scorer = new Strategy1Scorer();
 async function fetchQuote(ticker) {
     const response = await fetch(`https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${FINNHUB_API_KEY}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return response.json();
+    const data = await response.json();
+    
+    // Log for debugging price issues
+    console.log(`${ticker}: Current=${data.c}, Open=${data.o}, PC=${data.pc}, Time=${new Date().toISOString()}`);
+    
+    return data;
 }
 
 async function fetchSPYTrend() {
@@ -551,7 +562,8 @@ function createStockCardContent(ticker, quote) {
             <div class="trade-details">
                 <strong>Strike:</strong> $${result.strike} (${result.dte}D)<br>
                 <strong>Entry:</strong> $${result.entryPrice}/contract<br>
-                <strong>Score:</strong> ${result.score}/55
+                <strong>Score:</strong> ${result.score}/55<br>
+                <small style="color: #6c757d; font-size: 9px;">Updated: ${new Date(quote.t * 1000).toLocaleTimeString()}</small>
             </div>
             <div class="risk-reward">
                 <div class="risk-box">
@@ -672,7 +684,10 @@ function closeModal() {
 // Initial load
 updateStockCards();
 
-// Update every 5 seconds
-setInterval(updateStockCards, 5000);
+// Update every 10 seconds (to stay under Finnhub rate limit of 60/min)
+// 12 stocks + 1 SPY = 13 calls per update
+// 10 second interval = 6 updates/min × 13 calls = 78 calls/min (close to limit)
+// Consider 15 seconds (52 calls/min) for safer margin
+setInterval(updateStockCards, 10000);
 </script>
 {% endblock %}
