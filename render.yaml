@@ -6,7 +6,7 @@ services:
     region: oregon
     plan: starter
     buildCommand: pip install -r requirements.txt && python init_db.py
-    startCommand: gunicorn app:app
+    startCommand: gunicorn --worker-class gevent --workers 2 --timeout 300 --bind 0.0.0.0:$PORT app:app
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
