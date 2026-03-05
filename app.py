@@ -504,23 +504,31 @@ def api_options(symbol):
 def api_options_nearest(symbol):
     """Find nearest available option contract that matches criteria"""
     try:
+        logger.info(f"🔍 Finding nearest option for {symbol}")
+        
         # Get query parameters
         target_strike = request.args.get('strike', type=float)
         option_type = request.args.get('type', 'call').lower()
         target_expiration = request.args.get('expiration', '')  # YYYY-MM-DD format (optional)
         
+        logger.info(f"   Strike: {target_strike}, Type: {option_type}, Expiration: {target_expiration}")
+        
         alpaca = AlpacaClient()
         
         # Get full options chain
+        logger.info(f"   Fetching options chain from Alpaca...")
         chain_data = alpaca.get_options_chain(symbol.upper())
         
         if 'error' in chain_data:
+            logger.error(f"   ❌ Alpaca returned error: {chain_data['error']}")
             return jsonify(chain_data), 403
         
         options = chain_data.get('snapshots', {})
+        logger.info(f"   Found {len(options)} total options contracts")
         
         if not options:
-            return jsonify({'error': 'No options available for this symbol'}), 404
+            logger.warning(f"   No options available for {symbol}")
+            return jsonify({'error': 'No options available for this symbol', 'details': 'Alpaca returned empty snapshots'}), 404
         
         # Parse all available options
         available_options = []
@@ -619,6 +627,26 @@ def api_options_nearest(symbol):
     except Exception as e:
         logger.error(f"Error finding nearest option for {symbol}: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/options/debug/<symbol>')
+def api_options_debug(symbol):
+    """Debug endpoint - show raw Alpaca options chain response"""
+    try:
+        alpaca = AlpacaClient()
+        chain_data = alpaca.get_options_chain(symbol.upper())
+        
+        # Return raw response with summary
+        summary = {
+            'raw_response_keys': list(chain_data.keys()),
+            'snapshots_count': len(chain_data.get('snapshots', {})),
+            'first_5_symbols': list(chain_data.get('snapshots', {}).keys())[:5],
+            'full_response': chain_data
+        }
+        
+        return jsonify(summary)
+    except Exception as e:
+        logger.error(f"Debug endpoint error: {e}", exc_info=True)
+        return jsonify({'error': str(e), 'traceback': str(e)}), 500
 
 @app.route('/health')
 def health():
