@@ -647,18 +647,18 @@ function createStockCardContent(ticker, quote) {
             <div class="trade-details">
                 <strong>Strike:</strong> $${result.strike}<br>
                 <strong>Expiry:</strong> ${result.expirationDate} (${result.dte}DTE)<br>
-                <strong>Entry:</strong> $${result.entryPrice} <span style="color: #6c757d; font-size: 11px;">● Est</span><br>
+                <strong style="color: #dc3545;">⚠️ Click for pricing</strong><br>
                 <strong>Score:</strong> ${result.score}/55
                 <div class="timestamp">Graded: ${gradeTime}</div>
             </div>
             <div class="risk-reward">
                 <div class="risk-box">
-                    <div class="label">STOP -30%</div>
-                    <div class="value">$${result.stopPrice}</div>
+                    <div class="label">STOP</div>
+                    <div class="value" style="font-size: 12px; color: #6c757d;">Click card</div>
                 </div>
                 <div class="reward-box">
-                    <div class="label">TARGET +50%</div>
-                    <div class="value">$${result.targetPrice}</div>
+                    <div class="label">TARGET</div>
+                    <div class="value" style="font-size: 12px; color: #6c757d;">for prices</div>
                 </div>
             </div>
         </div>
@@ -776,7 +776,15 @@ async function showDetails(ticker, quote) {
             </tr>
             <tr>
                 <td style="padding: 10px; border: 1px solid #dee2e6;">Mid Price (Entry)</td>
-                <td style="padding: 10px; border: 1px solid #dee2e6;"><strong>$${optionsData.mid.toFixed(2)}/contract</strong> <span style="color: #28a745;">● LIVE</span></td>
+                <td style="padding: 10px; border: 1px solid #dee2e6;"><strong>$${optionsData.mid.toFixed(2)}/contract</strong> <span style="color: #28a745;">● LIVE MARKET DATA</span></td>
+            </tr>
+            <tr>
+                <td style="padding: 10px; border: 1px solid #dee2e6;">Stop Loss (-30%)</td>
+                <td style="padding: 10px; border: 1px solid #dee2e6; color: #dc3545;"><strong>$${(optionsData.mid * 0.70).toFixed(2)}</strong></td>
+            </tr>
+            <tr>
+                <td style="padding: 10px; border: 1px solid #dee2e6;">Target (+50%)</td>
+                <td style="padding: 10px; border: 1px solid #dee2e6; color: #28a745;"><strong>$${(optionsData.mid * 1.50).toFixed(2)}</strong></td>
             </tr>
             <tr>
                 <td style="padding: 10px; border: 1px solid #dee2e6;">Implied Volatility</td>
@@ -791,42 +799,50 @@ async function showDetails(ticker, quote) {
                 <td style="padding: 10px; border: 1px solid #dee2e6;"><strong>${optionsData.open_interest.toLocaleString()}</strong> contracts</td>
             </tr>
             <tr>
-                <td style="padding: 10px; border: 1px solid #dee2e6;">Volume</td>
+                <td style="padding: 10px; border: 1px solid #dee2e6;">Volume Today</td>
                 <td style="padding: 10px; border: 1px solid #dee2e6;"><strong>${optionsData.volume.toLocaleString()}</strong></td>
-            </tr>
-            ` : `
-            <tr>
-                <td style="padding: 10px; border: 1px solid #dee2e6;">Entry Price</td>
-                <td style="padding: 10px; border: 1px solid #dee2e6;"><strong>$${result.entryPrice}/contract</strong> <span style="color: #6c757d;">● Estimated</span></td>
-            </tr>
-            `}
-            <tr>
-                <td style="padding: 10px; border: 1px solid #dee2e6;">Stop Loss (-30%)</td>
-                <td style="padding: 10px; border: 1px solid #dee2e6; color: #dc3545;"><strong>$${optionsData ? (optionsData.mid * 0.70).toFixed(2) : result.stopPrice}</strong></td>
-            </tr>
-            <tr>
-                <td style="padding: 10px; border: 1px solid #dee2e6;">Target (+50%)</td>
-                <td style="padding: 10px; border: 1px solid #dee2e6; color: #28a745;"><strong>$${optionsData ? (optionsData.mid * 1.50).toFixed(2) : result.targetPrice}</strong></td>
             </tr>
             <tr>
                 <td style="padding: 10px; border: 1px solid #dee2e6;">Expiration</td>
                 <td style="padding: 10px; border: 1px solid #dee2e6;"><strong>${result.expirationDate}</strong> (${result.dte}DTE)</td>
             </tr>
+            ` : `
+            <tr>
+                <td colspan="2" style="padding: 20px; border: 1px solid #dee2e6; text-align: center; background: #dc3545; color: white;">
+                    <strong style="font-size: 16px;">⚠️ REAL OPTIONS DATA REQUIRED</strong><br>
+                    <span style="font-size: 14px; margin-top: 10px; display: block;">
+                        Cannot display trade pricing without live market data.<br>
+                        Check console (F12) for API response details.
+                    </span>
+                </td>
+            </tr>
+            `}
         </table>
         
         ${optionsData ? `
         <div style="background: #e5f7e5; padding: 15px; border-radius: 8px; margin-top: 15px;">
-            <strong>📊 Greeks (Advanced)</strong><br>
+            <strong>✅ LIVE MARKET DATA</strong><br>
             <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 10px; font-size: 14px;">
                 <div><strong>Delta:</strong> ${optionsData.delta.toFixed(3)}</div>
                 <div><strong>Gamma:</strong> ${optionsData.gamma.toFixed(4)}</div>
                 <div><strong>Theta:</strong> ${optionsData.theta.toFixed(3)}/day</div>
                 <div><strong>Vega:</strong> ${optionsData.vega.toFixed(3)}</div>
             </div>
+            <p style="margin: 10px 0 0 0; font-size: 12px; color: #28a745;"><strong>● All pricing from Alpaca real-time feed</strong></p>
         </div>
         ` : `
-        <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin-top: 15px; color: #856404;">
-            <strong>⚠️ Options pricing estimated.</strong> Real market data unavailable or outside market hours.
+        <div style="background: #dc3545; padding: 20px; border-radius: 8px; margin-top: 15px; color: white;">
+            <strong style="font-size: 16px;">❌ DO NOT TRADE</strong><br>
+            <p style="margin: 10px 0 0 0; font-size: 14px;">
+                Real options market data is unavailable. Possible reasons:<br>
+                • Market is closed (9:30am-4pm EST, Mon-Fri)<br>
+                • Alpaca Premium not enabled<br>
+                • Option contract doesn't exist<br>
+                • API error (check console logs)
+            </p>
+            <p style="margin: 10px 0 0 0; font-size: 13px; font-weight: bold;">
+                This signal cannot be traded without verified market pricing.
+            </p>
         </div>
         `}
         
