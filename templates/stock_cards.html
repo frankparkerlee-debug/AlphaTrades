@@ -678,13 +678,13 @@ async function showDetails(ticker, quote) {
     const directionIcon = result.direction === 'CALL' ? '📈' : '📉';
     const gradeTime = new Date(result.timestamp * 1000).toLocaleString();
     
-    // Fetch real options pricing - use "nearest" endpoint to find actual available contracts
+    // Fetch real options pricing - use "optimal" endpoint for asymmetric 1-2 day strategy
     let optionsData = null;
     try {
         const optionType = result.direction.toLowerCase();
-        // Use "nearest" endpoint to find closest matching contract that exists
-        const apiUrl = `/api/options/nearest/${ticker}?strike=${result.strike}&type=${optionType}&expiration=${result.expirationDate}`;
-        console.log(`🔍 Fetching nearest available option: ${apiUrl}`);
+        // Use "optimal" endpoint to find best contract for asymmetric returns
+        const apiUrl = `/api/options/optimal/${ticker}?type=${optionType}`;
+        console.log(`🎯 Fetching OPTIMAL contract for asymmetric returns: ${apiUrl}`);
         
         const response = await fetch(apiUrl);
         console.log(`📡 Options API response status: ${response.status}`);

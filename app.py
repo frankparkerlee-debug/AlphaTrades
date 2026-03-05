@@ -8,6 +8,7 @@ Three-page architecture:
 from flask import Flask, jsonify, request, render_template, Response, stream_with_context
 from models import Alert, Trade, DailyPerformance, ModelConfig, AccountState, get_session
 from alpaca_client import AlpacaClient
+from options_selector import get_selector
 # DISABLED: Stream causing worker timeouts even without monkey patching
 # from alpaca_stream_gevent import get_stream
 from datetime import datetime, timedelta
@@ -500,23 +501,27 @@ def api_options(symbol):
         logger.error(f"Error fetching options for {symbol}: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/options/nearest/<symbol>')
-def api_options_nearest(symbol):
-    """Find nearest available option contract that matches criteria"""
+@app.route('/api/options/optimal/<symbol>')
+def api_options_optimal(symbol):
+    """Find OPTIMAL option contract for asymmetric 1-2 day returns"""
     try:
-        logger.info(f"🔍 Finding nearest option for {symbol}")
+        logger.info(f"🎯 Finding optimal option for {symbol} (asymmetric strategy)")
         
-        # Get query parameters
-        target_strike = request.args.get('strike', type=float)
+        # Get parameters
         option_type = request.args.get('type', 'call').lower()
-        target_expiration = request.args.get('expiration', '')  # YYYY-MM-DD format (optional)
-        
-        logger.info(f"   Strike: {target_strike}, Type: {option_type}, Expiration: {target_expiration}")
         
         alpaca = AlpacaClient()
         
+        # Get current stock price
+        quote = alpaca.get_snapshot(symbol.upper())
+        stock_price = quote.get('c', quote.get('latestTrade', {}).get('p', 0))
+        
+        if not stock_price:
+            return jsonify({'error': 'Could not get current stock price'}), 500
+        
+        logger.info(f"   Current stock price: ${stock_price:.2f}")
+        
         # Get full options chain
-        logger.info(f"   Fetching options chain from Alpaca...")
         chain_data = alpaca.get_options_chain(symbol.upper())
         
         if 'error' in chain_data:
@@ -528,104 +533,51 @@ def api_options_nearest(symbol):
         
         if not options:
             logger.warning(f"   No options available for {symbol}")
-            return jsonify({'error': 'No options available for this symbol', 'details': 'Alpaca returned empty snapshots'}), 404
+            return jsonify({'error': 'No options available for this symbol'}), 404
         
-        # Parse all available options
-        available_options = []
-        for opt_symbol, opt_data in options.items():
-            # Parse option symbol: SYMBOL_YYYYMMDD_SSSSSSSS[C/P]
-            parts = opt_symbol.split('_')
-            if len(parts) != 3:
-                continue
-            
-            exp_str = parts[1]  # YYYYMMDD
-            strike_and_type = parts[2]  # SSSSSSSS[C/P]
-            
-            opt_type = 'call' if strike_and_type[-1] == 'C' else 'put'
-            strike_int = int(strike_and_type[:-1])
-            strike = strike_int / 1000.0
-            
-            # Parse expiration date
-            from datetime import datetime
-            exp_date = datetime.strptime(exp_str, '%Y%m%d').date()
-            
-            available_options.append({
-                'symbol': opt_symbol,
-                'strike': strike,
-                'type': opt_type,
-                'expiration': exp_date,
-                'data': opt_data
-            })
+        # Use smart selector to find optimal contract
+        selector = get_selector()
+        best_contract = selector.select_best_contract(options, stock_price, option_type)
         
-        # Filter by type
-        filtered = [opt for opt in available_options if opt['type'] == option_type]
+        if not best_contract:
+            return jsonify({
+                'error': 'No suitable contracts found for strategy',
+                'details': 'Strategy requires: 1-3 DTE, Delta 0.30-0.60, OI>100, Volume>10',
+                'total_contracts_available': len(options)
+            }), 404
         
-        if not filtered:
-            return jsonify({'error': f'No {option_type} options available'}), 404
-        
-        # Find nearest strike
-        from datetime import date
-        today = date.today()
-        
-        # Filter out expired options
-        filtered = [opt for opt in filtered if opt['expiration'] > today]
-        
-        if target_strike:
-            # Find closest strike
-            filtered.sort(key=lambda x: abs(x['strike'] - target_strike))
-        
-        if target_expiration:
-            # Find closest expiration to target
-            from datetime import datetime
-            target_date = datetime.strptime(target_expiration, '%Y-%m-%d').date()
-            filtered.sort(key=lambda x: abs((x['expiration'] - target_date).days))
-        else:
-            # Find nearest expiration (but not today)
-            filtered.sort(key=lambda x: (x['expiration'] - today).days)
-        
-        if not filtered:
-            return jsonify({'error': 'No matching options found'}), 404
-        
-        # Return the best match
-        best_match = filtered[0]
-        opt_data = best_match['data']
-        
-        latest_quote = opt_data.get('latestQuote', {})
-        latest_trade = opt_data.get('latestTrade', {})
-        greeks = opt_data.get('greeks', {})
-        
+        # Return the optimal contract
         result = {
-            'symbol': best_match['symbol'],
+            'symbol': best_contract['symbol'],
             'underlying': symbol.upper(),
-            'strike': best_match['strike'],
-            'type': best_match['type'],
-            'expiration': best_match['expiration'].strftime('%Y-%m-%d'),
-            'dte': (best_match['expiration'] - today).days,
-            'bid': latest_quote.get('bp', 0),
-            'ask': latest_quote.get('ap', 0),
-            'mid': (latest_quote.get('bp', 0) + latest_quote.get('ap', 0)) / 2 if latest_quote.get('bp') and latest_quote.get('ap') else 0,
-            'last': latest_trade.get('p', 0),
-            'volume': latest_trade.get('s', 0),
-            'bid_size': latest_quote.get('bs', 0),
-            'ask_size': latest_quote.get('as', 0),
-            'implied_volatility': greeks.get('impliedVolatility', 0),
-            'delta': greeks.get('delta', 0),
-            'gamma': greeks.get('gamma', 0),
-            'theta': greeks.get('theta', 0),
-            'vega': greeks.get('vega', 0),
-            'open_interest': opt_data.get('openInterest', 0),
-            'matched_criteria': {
-                'requested_strike': target_strike,
-                'requested_expiration': target_expiration,
-                'found_strike': best_match['strike'],
-                'found_expiration': best_match['expiration'].strftime('%Y-%m-%d')
-            }
+            'strike': best_contract['strike'],
+            'type': option_type,
+            'expiration': best_contract['expiration'].strftime('%Y-%m-%d'),
+            'dte': best_contract['dte'],
+            'bid': best_contract['bid'],
+            'ask': best_contract['ask'],
+            'mid': best_contract['mid'],
+            'last': best_contract['last'],
+            'volume': best_contract['volume'],
+            'bid_size': best_contract.get('bid_size', 0),
+            'ask_size': best_contract.get('ask_size', 0),
+            'implied_volatility': best_contract['iv'],
+            'delta': best_contract['delta'],
+            'gamma': best_contract['gamma'],
+            'theta': best_contract['theta'],
+            'vega': best_contract['vega'],
+            'open_interest': best_contract['open_interest'],
+            'pct_otm': best_contract['pct_otm'],
+            'spread_pct': best_contract['spread_pct'],
+            'score': best_contract['score'],
+            'strategy': 'asymmetric_1_2_day',
+            'why_selected': f"Optimal for 50-100% returns: {best_contract['dte']}DTE, Δ={best_contract['delta']:.3f}, {best_contract['pct_otm']:.1f}% OTM"
         }
         
         return jsonify(result)
             
     except Exception as e:
-        logger.error(f"Error finding nearest option for {symbol}: {e}", exc_info=True)
+        logger.error(f"Error finding optimal option for {symbol}: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/options/debug/<symbol>')
