@@ -12,7 +12,8 @@ from decimal import Decimal
 from models import Alert, Trade, ModelConfig, DailyPerformance, get_session
 from scorer import Scorer
 from trader import Trader
-from alpaca_stream_gevent import get_stream
+# DISABLED: Stream causing worker timeouts
+# from alpaca_stream_gevent import get_stream
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,21 +50,11 @@ class MarketMonitor:
         return config
     
     def run(self):
-        """Main monitoring loop - WebSocket-based real-time scoring"""
-        logger.info("🎬 Starting real-time market monitoring...")
+        """Main monitoring loop - DISABLED (stream causing worker timeouts)"""
+        logger.info("⚠️ Worker monitoring DISABLED - stream causing timeouts")
+        logger.info("💤 Worker will only check for exits periodically")
         
-        # Initialize WebSocket stream
-        try:
-            self.stream = get_stream()
-            logger.info("✅ WebSocket stream initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize stream: {e}")
-            return
-        
-        # Periodically check exits every 30 seconds
-        last_exit_check = time.time()
-        exit_check_interval = 30
-        
+        # Just check exits every 30 seconds, no real-time monitoring
         while True:
             try:
                 if not self._is_market_hours():
@@ -71,24 +62,16 @@ class MarketMonitor:
                     time.sleep(300)  # Sleep 5 minutes when market closed
                     continue
                 
-                # Get next update from scoring queue (blocks for 1 second)
-                update = self.stream.get_scoring_update(timeout=1)
-                
-                if update:
-                    # Process price update for scoring
-                    self._process_update(update)
-                
-                # Periodically check for exits
-                if time.time() - last_exit_check >= exit_check_interval:
-                    self._check_exits()
-                    last_exit_check = time.time()
+                # Check for exits every 30 seconds
+                self._check_exits()
+                time.sleep(30)
                 
             except KeyboardInterrupt:
                 logger.info("🛑 Shutting down...")
                 break
             except Exception as e:
                 logger.error(f"❌ Error in main loop: {e}", exc_info=True)
-                time.sleep(10)  # Brief pause on error
+                time.sleep(60)  # Sleep 1 minute on error
     
     def _process_update(self, update):
         """Process price update from WebSocket stream"""
