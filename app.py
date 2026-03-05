@@ -259,6 +259,41 @@ def api_performance():
     finally:
         session.close()
 
+@app.route('/api/trader_snapshot')
+def api_trader_snapshot():
+    """Get current trader snapshot for real-time updates"""
+    session = get_session()
+    try:
+        # Get account state
+        account = session.query(AccountState).order_by(AccountState.id.desc()).first()
+        if not account:
+            return jsonify({'error': 'No account data'}), 404
+        
+        # Calculate win rate
+        if account.total_trades > 0:
+            win_rate = (account.winning_trades / account.total_trades) * 100
+        else:
+            win_rate = 0
+        
+        # Get open positions count
+        open_positions = session.query(Trade).filter_by(status='OPEN').count()
+        
+        return jsonify({
+            'account': {
+                'total_value': float(account.total_value),
+                'current_capital': float(account.current_capital),
+                'cumulative_pl': float(account.cumulative_pl),
+                'total_trades': account.total_trades,
+                'winning_trades': account.winning_trades,
+                'losing_trades': account.losing_trades
+            },
+            'win_rate': win_rate,
+            'open_positions': open_positions,
+            'timestamp': datetime.now().isoformat()
+        })
+    finally:
+        session.close()
+
 @app.route('/api/config')
 def api_config():
     """Get current configuration"""

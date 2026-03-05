@@ -6,7 +6,7 @@
 <style>
     .stock-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
         gap: 20px;
         margin-top: 20px;
     }
@@ -18,6 +18,7 @@
         cursor: pointer;
         transition: all 0.3s;
         border: 2px solid transparent;
+        position: relative;
     }
     
     .stock-card:hover {
@@ -26,60 +27,99 @@
         border-color: #667eea;
     }
     
+    .stock-card.updating {
+        opacity: 0.8;
+    }
+    
     .stock-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
         margin-bottom: 15px;
+        padding-bottom: 10px;
+        border-bottom: 2px solid #dee2e6;
     }
     
     .stock-ticker {
-        font-size: 24px;
+        font-size: 28px;
         font-weight: bold;
         color: #2a5298;
     }
     
     .stock-price {
-        font-size: 20px;
+        font-size: 24px;
         font-weight: 600;
         color: #333;
+        transition: all 0.3s;
+    }
+    
+    .stock-price.flash {
+        animation: priceFlash 0.5s;
+    }
+    
+    @keyframes priceFlash {
+        0%, 100% { background: transparent; }
+        50% { background: #ffc107; border-radius: 4px; padding: 2px 6px; }
     }
     
     .stock-change {
         font-size: 14px;
         margin-top: 5px;
+        font-weight: 600;
     }
     
-    .options-row {
-        display: flex;
-        justify-content: space-between;
-        margin: 10px 0;
-        padding: 10px;
+    .options-section {
+        margin-top: 15px;
+    }
+    
+    .option-card {
         background: white;
         border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 10px;
+        border-left: 4px solid transparent;
+    }
+    
+    .option-card.call {
+        border-left-color: #28a745;
+    }
+    
+    .option-card.put {
+        border-left-color: #dc3545;
+    }
+    
+    .option-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
     }
     
     .option-type {
         font-size: 12px;
         color: #6c757d;
         font-weight: 600;
-        margin-bottom: 5px;
     }
     
     .option-grade {
-        font-size: 18px;
+        font-size: 20px;
         font-weight: bold;
     }
     
     .option-details {
         font-size: 11px;
-        color: #6c757d;
-        margin-top: 5px;
+        color: #495057;
+        line-height: 1.6;
+    }
+    
+    .option-details strong {
+        color: #2a5298;
     }
     
     .strike-price {
         font-weight: 600;
         color: #333;
+        font-size: 13px;
     }
     
     .dte {
@@ -91,11 +131,69 @@
         margin-left: 5px;
     }
     
+    .risk-reward {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid #e9ecef;
+    }
+    
+    .risk-box, .reward-box {
+        padding: 6px;
+        border-radius: 6px;
+        text-align: center;
+        font-size: 11px;
+    }
+    
+    .risk-box {
+        background: #ffe5e5;
+        color: #dc3545;
+    }
+    
+    .reward-box {
+        background: #e5f7e5;
+        color: #28a745;
+    }
+    
+    .risk-box .label, .reward-box .label {
+        font-weight: 600;
+        font-size: 10px;
+    }
+    
+    .risk-box .value, .reward-box .value {
+        font-weight: bold;
+        font-size: 13px;
+    }
+    
     .loading {
         text-align: center;
         padding: 40px;
         color: #6c757d;
         font-size: 18px;
+    }
+    
+    .last-update {
+        text-align: center;
+        color: #6c757d;
+        font-size: 12px;
+        margin-top: 20px;
+    }
+    
+    .update-indicator {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #28a745;
+        margin-right: 5px;
+        animation: pulse 2s infinite;
+    }
+    
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.3; }
     }
     
     .modal {
@@ -117,7 +215,7 @@
         background: white;
         border-radius: 12px;
         padding: 30px;
-        max-width: 800px;
+        max-width: 900px;
         width: 90%;
         max-height: 90vh;
         overflow-y: auto;
@@ -157,16 +255,46 @@
         padding: 10px;
         border-bottom: 1px solid #e9ecef;
     }
+    
+    .score-breakdown {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 15px;
+        margin-top: 20px;
+    }
+    
+    .score-component {
+        background: #f8f9fa;
+        padding: 15px;
+        border-radius: 8px;
+    }
+    
+    .score-component-label {
+        font-size: 12px;
+        color: #6c757d;
+        margin-bottom: 5px;
+    }
+    
+    .score-component-value {
+        font-size: 24px;
+        font-weight: bold;
+        color: #2a5298;
+    }
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="container">
     <h1>📊 Live Stock Monitoring</h1>
-    <p style="color: #6c757d; margin-bottom: 20px;">Real-time options grading for 12 tech stocks</p>
+    <p style="color: #6c757d; margin-bottom: 20px;">Real-time options grading for Strategy 1 momentum trades</p>
     
     <div class="stock-grid" id="stockGrid">
         <div class="loading">⏳ Loading stock data...</div>
+    </div>
+    
+    <div class="last-update">
+        <span class="update-indicator"></span>
+        <span id="updateTime">Connecting...</span>
     </div>
 </div>
 
@@ -189,197 +317,373 @@
 const FINNHUB_API_KEY = '{{ finnhub_key }}';
 const TICKERS = ['NVDA', 'TSLA', 'AMD', 'AAPL', 'AMZN', 'META', 'MSFT', 'GOOGL', 'NFLX', 'AVGO', 'ORCL', 'ADBE'];
 
+let lastPrices = {};
+let spyTrend = { is_up: true, change_pct: 0 };
+
+// Accurate Strategy 1 scoring (matches scorer.py)
+class Strategy1Scorer {
+    constructor() {
+        this.thresholds = {
+            'A+': 50, 'A': 47, 'A-': 45,
+            'B+': 41, 'B': 38, 'B-': 35
+        };
+        this.weights = {
+            momentum: 25,
+            range: 15,
+            volume: 5,
+            market: 10
+        };
+    }
+    
+    scoreMomentum(movePct) {
+        // Absolute move from open
+        const move = Math.abs(movePct);
+        if (move >= 3.0) return this.weights.momentum;  // 25
+        if (move >= 2.0) return Math.floor(this.weights.momentum * 0.8);  // 20
+        if (move >= 1.5) return Math.floor(this.weights.momentum * 0.6);  // 15
+        if (move >= 1.0) return Math.floor(this.weights.momentum * 0.4);  // 10
+        return 0;
+    }
+    
+    scoreRange(rangePct) {
+        if (rangePct >= 3.0) return this.weights.range;  // 15
+        if (rangePct >= 2.0) return Math.floor(this.weights.range * 0.67);  // 10
+        if (rangePct >= 1.5) return Math.floor(this.weights.range * 0.33);  // 5
+        return 0;
+    }
+    
+    scoreToGrade(score) {
+        if (score >= this.thresholds['A+']) return 'A+';
+        if (score >= this.thresholds['A']) return 'A';
+        if (score >= this.thresholds['A-']) return 'A-';
+        if (score >= this.thresholds['B+']) return 'B+';
+        if (score >= this.thresholds['B']) return 'B';
+        if (score >= this.thresholds['B-']) return 'B-';
+        if (score >= 30) return 'C+';
+        if (score >= 25) return 'C';
+        if (score >= 20) return 'C-';
+        return 'D';
+    }
+    
+    calculate(quote, marketTrend) {
+        const open = quote.o || quote.pc;  // Use open or fallback to previous close
+        const current = quote.c;
+        const high = quote.h;
+        const low = quote.l;
+        
+        if (!open || !current) {
+            return { score: 0, grade: 'D', components: {} };
+        }
+        
+        // Calculate metrics
+        const movePct = ((current - open) / open) * 100;
+        const rangePct = ((high - low) / open) * 100;
+        
+        // Calculate component scores
+        const momentum = this.scoreMomentum(movePct);
+        const range = this.scoreRange(rangePct);
+        const volume = this.weights.volume;  // Fixed
+        const market = marketTrend.is_up ? this.weights.market : 0;
+        
+        const totalScore = momentum + range + volume + market;
+        const grade = this.scoreToGrade(totalScore);
+        
+        // Determine direction
+        const direction = movePct >= 0 ? 'CALL' : 'PUT';
+        
+        // Calculate ATM strike
+        const strike = this.calculateStrike(current);
+        
+        // Calculate option entry price estimate (simplified)
+        const optionPrice = this.estimateOptionPrice(current, strike, direction);
+        
+        // Calculate stop and target
+        const stopPrice = optionPrice * 0.70;  // -30% stop
+        const targetPrice = optionPrice * 1.50;  // +50% target
+        
+        return {
+            score: totalScore,
+            grade: grade,
+            components: { momentum, range, volume, market },
+            metrics: {
+                movePct: movePct.toFixed(2),
+                rangePct: rangePct.toFixed(2),
+                open: open.toFixed(2),
+                current: current.toFixed(2),
+                high: high.toFixed(2),
+                low: low.toFixed(2)
+            },
+            direction: direction,
+            strike: strike,
+            entryPrice: optionPrice.toFixed(2),
+            stopPrice: stopPrice.toFixed(2),
+            targetPrice: targetPrice.toFixed(2),
+            dte: this.calculateDTE()
+        };
+    }
+    
+    calculateStrike(currentPrice) {
+        let interval;
+        if (currentPrice >= 500) interval = 10;
+        else if (currentPrice >= 200) interval = 5;
+        else if (currentPrice >= 100) interval = 2.5;
+        else if (currentPrice >= 50) interval = 1;
+        else interval = 0.5;
+        
+        return Math.round(currentPrice / interval) * interval;
+    }
+    
+    estimateOptionPrice(stockPrice, strike, direction) {
+        // Simplified: ~2-4% of stock price for ATM weekly
+        const basePrice = stockPrice * 0.03;
+        return Math.max(0.50, basePrice);
+    }
+    
+    calculateDTE() {
+        const today = new Date();
+        const dayOfWeek = today.getDay();
+        const hour = today.getHours();
+        
+        // If Friday after 3pm, target next week
+        let daysUntilFriday = (5 - dayOfWeek + 7) % 7;
+        if (dayOfWeek === 5 && hour >= 15) {
+            daysUntilFriday = 7;
+        }
+        if (daysUntilFriday === 0) daysUntilFriday = 7;
+        
+        return daysUntilFriday;
+    }
+}
+
+const scorer = new Strategy1Scorer();
+
 async function fetchQuote(ticker) {
     const response = await fetch(`https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${FINNHUB_API_KEY}`);
     return response.json();
 }
 
-async function fetchRecentAlerts() {
-    const response = await fetch('/api/alerts?limit=100');
-    return response.json();
-}
-
-function gradeStock(quote) {
-    // Simple scoring based on move% and range%
-    const move = Math.abs(((quote.c - quote.pc) / quote.pc) * 100);
-    const range = ((quote.h - quote.l) / quote.l) * 100;
-    
-    let score = 0;
-    
-    // Move scoring (0-25 points)
-    if (move >= 5) score += 25;
-    else if (move >= 4) score += 20;
-    else if (move >= 3) score += 15;
-    else if (move >= 2) score += 10;
-    else score += Math.floor(move * 5);
-    
-    // Range scoring (0-25 points)
-    if (range >= 6) score += 25;
-    else if (range >= 5) score += 20;
-    else if (range >= 4) score += 15;
-    else if (range >= 3) score += 10;
-    else score += Math.floor(range * 3);
-    
-    // Assign grade
-    if (score >= 50) return 'A+';
-    if (score >= 47) return 'A';
-    if (score >= 45) return 'A-';
-    if (score >= 41) return 'B+';
-    if (score >= 38) return 'B';
-    if (score >= 35) return 'B-';
-    if (score >= 30) return 'C+';
-    if (score >= 25) return 'C';
-    if (score >= 20) return 'C-';
-    return 'D';
-}
-
-function calculateStrike(currentPrice, direction) {
-    // Simple ATM strike calculation
-    const roundTo = currentPrice < 50 ? 1 : (currentPrice < 200 ? 5 : 10);
-    return Math.round(currentPrice / roundTo) * roundTo;
-}
-
-function calculateDTE() {
-    // Options expiring this Friday
-    const today = new Date();
-    const dayOfWeek = today.getDay();
-    const daysUntilFriday = (5 - dayOfWeek + 7) % 7 || 7;
-    return daysUntilFriday;
-}
-
-async function renderStockCards() {
-    const grid = document.getElementById('stockGrid');
-    grid.innerHTML = '<div class="loading">⏳ Loading stock data...</div>';
-    
+async function fetchSPYTrend() {
     try {
-        const quotes = await Promise.all(TICKERS.map(ticker => fetchQuote(ticker)));
-        const alerts = await fetchRecentAlerts();
-        
-        // Build alert lookup
-        const alertsByTicker = {};
-        alerts.forEach(alert => {
-            if (!alertsByTicker[alert.ticker]) {
-                alertsByTicker[alert.ticker] = { calls: [], puts: [] };
-            }
-            if (alert.direction === 'CALL') {
-                alertsByTicker[alert.ticker].calls.push(alert);
-            } else {
-                alertsByTicker[alert.ticker].puts.push(alert);
-            }
-        });
-        
-        const cards = quotes.map((quote, idx) => {
-            const ticker = TICKERS[idx];
-            const changePercent = ((quote.c - quote.pc) / quote.pc) * 100;
-            const isPositive = changePercent >= 0;
-            
-            // Calculate grades for calls and puts
-            const callGrade = gradeStock(quote);
-            const putGrade = gradeStock(quote);
-            const callStrike = calculateStrike(quote.c, 'CALL');
-            const putStrike = calculateStrike(quote.c, 'PUT');
-            const dte = calculateDTE();
-            
-            // Get most recent alerts
-            const recentCalls = alertsByTicker[ticker]?.calls.slice(0, 1) || [];
-            const recentPuts = alertsByTicker[ticker]?.puts.slice(0, 1) || [];
-            
-            const actualCallGrade = recentCalls[0]?.grade || callGrade;
-            const actualPutGrade = recentPuts[0]?.grade || putGrade;
-            
-            return `
-                <div class="stock-card" onclick="showDetails('${ticker}', ${JSON.stringify(quote).replace(/"/g, '&quot;')}, ${JSON.stringify(alertsByTicker[ticker] || {})})">
-                    <div class="stock-header">
-                        <div class="stock-ticker">${ticker}</div>
-                        <div>
-                            <div class="stock-price">$${quote.c.toFixed(2)}</div>
-                            <div class="stock-change ${isPositive ? 'positive' : 'negative'}">
-                                ${isPositive ? '▲' : '▼'} ${Math.abs(changePercent).toFixed(2)}%
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="options-row">
-                        <div>
-                            <div class="option-type">📈 CALL</div>
-                            <div class="option-grade">
-                                <span class="grade-${actualCallGrade[0]}">${actualCallGrade}</span>
-                            </div>
-                            <div class="option-details">
-                                <span class="strike-price">$${callStrike}</span>
-                                <span class="dte">${dte}D</span>
-                            </div>
-                        </div>
-                        <div>
-                            <div class="option-type">📉 PUT</div>
-                            <div class="option-grade">
-                                <span class="grade-${actualPutGrade[0]}">${actualPutGrade}</span>
-                            </div>
-                            <div class="option-details">
-                                <span class="strike-price">$${putStrike}</span>
-                                <span class="dte">${dte}D</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-        }).join('');
-        
-        grid.innerHTML = cards;
+        const spy = await fetchQuote('SPY');
+        spyTrend = {
+            is_up: spy.c >= spy.pc,
+            change_pct: ((spy.c - spy.pc) / spy.pc * 100).toFixed(2)
+        };
     } catch (error) {
-        console.error('Error loading stocks:', error);
-        grid.innerHTML = '<div class="loading">❌ Error loading data. Retrying...</div>';
-        setTimeout(renderStockCards, 5000);
+        console.error('Error fetching SPY:', error);
     }
 }
 
-function showDetails(ticker, quote, alerts) {
+async function updateStockCards() {
+    const grid = document.getElementById('stockGrid');
+    
+    try {
+        // Fetch SPY first for market trend
+        await fetchSPYTrend();
+        
+        // Fetch all quotes
+        const quotes = await Promise.all(TICKERS.map(ticker => fetchQuote(ticker)));
+        
+        // If first load, create cards
+        if (!document.querySelector('.stock-card')) {
+            renderInitialCards(quotes);
+        } else {
+            // Update existing cards
+            updateExistingCards(quotes);
+        }
+        
+        // Update timestamp
+        document.getElementById('updateTime').textContent = `Last update: ${new Date().toLocaleTimeString()}`;
+    } catch (error) {
+        console.error('Error updating stocks:', error);
+        grid.innerHTML = '<div class="loading">❌ Error loading data. Retrying in 5s...</div>';
+    }
+}
+
+function renderInitialCards(quotes) {
+    const grid = document.getElementById('stockGrid');
+    const cardsHTML = quotes.map((quote, idx) => {
+        const ticker = TICKERS[idx];
+        return createStockCardHTML(ticker, quote);
+    }).join('');
+    
+    grid.innerHTML = cardsHTML;
+    
+    // Store initial prices
+    quotes.forEach((quote, idx) => {
+        lastPrices[TICKERS[idx]] = quote.c;
+    });
+}
+
+function updateExistingCards(quotes) {
+    quotes.forEach((quote, idx) => {
+        const ticker = TICKERS[idx];
+        const card = document.querySelector(`[data-ticker="${ticker}"]`);
+        
+        if (card) {
+            // Check if price changed
+            const priceChanged = lastPrices[ticker] !== quote.c;
+            lastPrices[ticker] = quote.c;
+            
+            // Update card content
+            card.innerHTML = createStockCardContent(ticker, quote);
+            
+            // Flash animation if price changed
+            if (priceChanged) {
+                const priceEl = card.querySelector('.stock-price');
+                priceEl.classList.add('flash');
+                setTimeout(() => priceEl.classList.remove('flash'), 500);
+            }
+        }
+    });
+}
+
+function createStockCardHTML(ticker, quote) {
+    return `
+        <div class="stock-card" data-ticker="${ticker}" onclick="showDetails('${ticker}', ${JSON.stringify(quote).replace(/"/g, '&quot;')})">
+            ${createStockCardContent(ticker, quote)}
+        </div>
+    `;
+}
+
+function createStockCardContent(ticker, quote) {
+    const changePercent = ((quote.c - quote.pc) / quote.pc) * 100;
+    const isPositive = changePercent >= 0;
+    
+    // Score both directions
+    const callResult = scorer.calculate(quote, spyTrend);
+    const putResult = scorer.calculate(quote, spyTrend);
+    
+    return `
+        <div class="stock-header">
+            <div class="stock-ticker">${ticker}</div>
+            <div>
+                <div class="stock-price">$${quote.c.toFixed(2)}</div>
+                <div class="stock-change ${isPositive ? 'positive' : 'negative'}">
+                    ${isPositive ? '▲' : '▼'} ${Math.abs(changePercent).toFixed(2)}%
+                </div>
+            </div>
+        </div>
+        
+        <div class="options-section">
+            ${createOptionCardHTML('CALL', callResult)}
+            ${createOptionCardHTML('PUT', putResult)}
+        </div>
+    `;
+}
+
+function createOptionCardHTML(type, result) {
+    return `
+        <div class="option-card ${type.toLowerCase()}">
+            <div class="option-header">
+                <span class="option-type">${type === 'CALL' ? '📈' : '📉'} ${type}</span>
+                <span class="option-grade">
+                    <span class="grade-${result.grade[0]}">${result.grade}</span>
+                </span>
+            </div>
+            <div class="option-details">
+                <strong>Strike:</strong> $${result.strike} <span class="dte">${result.dte}D</span><br>
+                <strong>Entry:</strong> $${result.entryPrice}/contract<br>
+                <strong>Score:</strong> ${result.score}/55
+            </div>
+            <div class="risk-reward">
+                <div class="risk-box">
+                    <div class="label">STOP -30%</div>
+                    <div class="value">$${result.stopPrice}</div>
+                </div>
+                <div class="reward-box">
+                    <div class="label">TARGET +50%</div>
+                    <div class="value">$${result.targetPrice}</div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function showDetails(ticker, quote) {
     const modal = document.getElementById('detailModal');
     const title = document.getElementById('modalTitle');
     const body = document.getElementById('modalBody');
     
-    title.textContent = `${ticker} - Detailed Analysis`;
+    const callResult = scorer.calculate(quote, spyTrend);
+    const putResult = scorer.calculate(quote, spyTrend);
     
-    const changePercent = ((quote.c - quote.pc) / quote.pc) * 100;
-    const rangePercent = ((quote.h - quote.l) / quote.l) * 100;
+    title.textContent = `${ticker} - Detailed Analysis`;
     
     body.innerHTML = `
         <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; margin-bottom: 20px;">
             <div>
                 <strong>Current Price:</strong> $${quote.c.toFixed(2)}<br>
-                <strong>Previous Close:</strong> $${quote.pc.toFixed(2)}<br>
-                <strong>Change:</strong> <span class="${changePercent >= 0 ? 'positive' : 'negative'}">${changePercent.toFixed(2)}%</span>
+                <strong>Open:</strong> $${(quote.o || quote.pc).toFixed(2)}<br>
+                <strong>High:</strong> $${quote.h.toFixed(2)}<br>
+                <strong>Low:</strong> $${quote.l.toFixed(2)}
             </div>
             <div>
-                <strong>High:</strong> $${quote.h.toFixed(2)}<br>
-                <strong>Low:</strong> $${quote.l.toFixed(2)}<br>
-                <strong>Range:</strong> ${rangePercent.toFixed(2)}%
+                <strong>Market Trend (SPY):</strong> ${spyTrend.is_up ? '📈 UP' : '📉 DOWN'} (${spyTrend.change_pct}%)<br>
+                <strong>Move from Open:</strong> ${callResult.metrics.movePct}%<br>
+                <strong>Daily Range:</strong> ${callResult.metrics.rangePct}%<br>
             </div>
         </div>
         
-        <h3 style="margin-top: 20px;">Recent Alerts</h3>
+        <h3>📈 CALL Option (Grade: ${callResult.grade})</h3>
+        <div class="score-breakdown">
+            <div class="score-component">
+                <div class="score-component-label">Momentum</div>
+                <div class="score-component-value">${callResult.components.momentum}/25</div>
+            </div>
+            <div class="score-component">
+                <div class="score-component-label">Range</div>
+                <div class="score-component-value">${callResult.components.range}/15</div>
+            </div>
+            <div class="score-component">
+                <div class="score-component-label">Volume</div>
+                <div class="score-component-value">${callResult.components.volume}/5</div>
+            </div>
+            <div class="score-component">
+                <div class="score-component-label">Market</div>
+                <div class="score-component-value">${callResult.components.market}/10</div>
+            </div>
+        </div>
+        <p style="margin-top: 15px;"><strong>Total Score:</strong> ${callResult.score}/55</p>
+        
+        <h3 style="margin-top: 30px;">📉 PUT Option (Grade: ${putResult.grade})</h3>
+        <p><strong>Total Score:</strong> ${putResult.score}/55 (same components)</p>
+        
+        <h3 style="margin-top: 30px;">Trade Execution Details</h3>
         <table class="scoring-table">
             <tr>
-                <th>Time</th>
-                <th>Direction</th>
-                <th>Grade</th>
-                <th>Score</th>
+                <th>Type</th>
                 <th>Strike</th>
-                <th>Move %</th>
-                <th>Range %</th>
+                <th>Entry Price</th>
+                <th>Stop Loss (-30%)</th>
+                <th>Target (+50%)</th>
+                <th>DTE</th>
             </tr>
-            ${(alerts.calls || []).concat(alerts.puts || []).slice(0, 10).map(alert => `
-                <tr>
-                    <td>${new Date(alert.timestamp).toLocaleTimeString()}</td>
-                    <td>${alert.direction}</td>
-                    <td><span class="grade-${alert.grade[0]}">${alert.grade}</span></td>
-                    <td>${alert.score}/55</td>
-                    <td>$${alert.strike.toFixed(2)}</td>
-                    <td>${alert.move_pct.toFixed(2)}%</td>
-                    <td>${alert.range_pct.toFixed(2)}%</td>
-                </tr>
-            `).join('') || '<tr><td colspan="7">No recent alerts</td></tr>'}
+            <tr>
+                <td>📈 CALL</td>
+                <td>$${callResult.strike}</td>
+                <td>$${callResult.entryPrice}</td>
+                <td class="negative">$${callResult.stopPrice}</td>
+                <td class="positive">$${callResult.targetPrice}</td>
+                <td>${callResult.dte} days</td>
+            </tr>
+            <tr>
+                <td>📉 PUT</td>
+                <td>$${putResult.strike}</td>
+                <td>$${putResult.entryPrice}</td>
+                <td class="negative">$${putResult.stopPrice}</td>
+                <td class="positive">$${putResult.targetPrice}</td>
+                <td>${putResult.dte} days</td>
+            </tr>
         </table>
+        
+        <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-top: 20px;">
+            <strong>📊 Strategy 1 Rules:</strong><br>
+            • Hold: 2-5 days max<br>
+            • Exit: Friday 3PM OR 5 days OR -30% stop OR +50% target<br>
+            • Risk/Reward: 1.67:1 asymmetric advantage<br>
+            • Auto-trade: A+, A, A- grades only
+        </div>
     `;
     
     modal.classList.add('active');
@@ -390,9 +694,9 @@ function closeModal() {
 }
 
 // Initial load
-renderStockCards();
+updateStockCards();
 
-// Auto-refresh every 30 seconds
-setInterval(renderStockCards, 30000);
+// Update every 5 seconds (real-time without page refresh)
+setInterval(updateStockCards, 5000);
 </script>
 {% endblock %}

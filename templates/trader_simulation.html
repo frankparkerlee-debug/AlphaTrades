@@ -78,22 +78,22 @@
     <div class="stats">
         <div class="stat-card">
             <div class="stat-label">Account Value</div>
-            <div class="stat-value">${{ account.total_value|round(2) }}</div>
-            <div class="stat-label">Capital: ${{ account.current_capital|round(2) }}</div>
+            <div class="stat-value" id="account-value">${{ account.total_value|round(2) }}</div>
+            <div class="stat-label" id="account-capital">Capital: ${{ account.current_capital|round(2) }}</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">Total P/L</div>
-            <div class="stat-value" style="color: {{ 'lime' if account.cumulative_pl >= 0 else 'red' }}">${{ account.cumulative_pl|round(2) }}</div>
-            <div class="stat-label">{{ account.total_trades }} trades</div>
+            <div class="stat-value" id="total-pl" style="color: {{ 'lime' if account.cumulative_pl >= 0 else 'red' }}">${{ account.cumulative_pl|round(2) }}</div>
+            <div class="stat-label" id="total-trades">{{ account.total_trades }} trades</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">Win Rate</div>
-            <div class="stat-value">{{ win_rate|round(1) }}%</div>
-            <div class="stat-label">{{ account.winning_trades }}W / {{ account.losing_trades }}L</div>
+            <div class="stat-value" id="win-rate">{{ win_rate|round(1) }}%</div>
+            <div class="stat-label" id="win-loss">{{ account.winning_trades }}W / {{ account.losing_trades }}L</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">Open Positions</div>
-            <div class="stat-value">{{ open_positions }}</div>
+            <div class="stat-value" id="open-positions">{{ open_positions }}</div>
             <div class="stat-label">Active trades</div>
         </div>
     </div>
@@ -266,7 +266,41 @@ function switchTab(tabName) {
     document.getElementById(`tab-${tabName}`).classList.add('active');
 }
 
-// Auto-refresh every 30 seconds
-setTimeout(() => location.reload(), 30000);
+// Real-time updates without page refresh
+async function updateTraderData() {
+    try {
+        const response = await fetch('/api/trader_snapshot');
+        if (!response.ok) return;
+        
+        const data = await response.json();
+        
+        // Update stats cards (without DOM churn)
+        updateIfChanged('account-value', `$${data.account.total_value.toFixed(2)}`);
+        updateIfChanged('account-capital', `Capital: $${data.account.current_capital.toFixed(2)}`);
+        updateIfChanged('total-pl', `$${data.account.cumulative_pl.toFixed(2)}`);
+        updateIfChanged('total-trades', `${data.account.total_trades} trades`);
+        updateIfChanged('win-rate', `${data.win_rate.toFixed(1)}%`);
+        updateIfChanged('win-loss', `${data.account.winning_trades}W / ${data.account.losing_trades}L`);
+        updateIfChanged('open-positions', data.open_positions);
+        
+        // Update tables if needed (checking data freshness)
+        // Only update if there are changes to avoid flickering
+        
+    } catch (error) {
+        console.error('Error updating trader data:', error);
+    }
+}
+
+function updateIfChanged(id, newValue) {
+    const el = document.getElementById(id);
+    if (el && el.textContent !== newValue) {
+        el.textContent = newValue;
+        el.style.animation = 'flash 0.5s';
+        setTimeout(() => el.style.animation = '', 500);
+    }
+}
+
+// Update every 10 seconds (real-time without page refresh)
+setInterval(updateTraderData, 10000);
 </script>
 {% endblock %}
