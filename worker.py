@@ -1,5 +1,6 @@
 """
 Background Worker - Continuous Market Monitoring
+Real-time WebSocket-based monitoring with instant scoring
 Runs during market hours, generates alerts, executes trades
 """
 import os
@@ -11,6 +12,7 @@ from decimal import Decimal
 from models import Alert, Trade, ModelConfig, DailyPerformance, get_session
 from scorer import Scorer
 from trader import Trader
+from alpaca_stream import get_stream
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,6 +33,8 @@ class MarketMonitor:
         self.scorer = Scorer(self.config)
         self.trader = Trader(self.config, mode=TRADING_MODE)
         self.last_alert_cache = {}  # Prevent duplicate alerts
+        self.stream = None  # WebSocket stream
+        self.price_cache = {}  # Latest prices from stream
         
         logger.info(f"🚀 Market Monitor initialized")
         logger.info(f"   Mode: {TRADING_MODE}")
@@ -45,27 +49,120 @@ class MarketMonitor:
         return config
     
     def run(self):
-        """Main monitoring loop"""
-        logger.info("🎬 Starting market monitoring...")
+        """Main monitoring loop - WebSocket-based real-time scoring"""
+        logger.info("🎬 Starting real-time market monitoring...")
+        
+        # Initialize WebSocket stream
+        try:
+            self.stream = get_stream()
+            logger.info("✅ WebSocket stream initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize stream: {e}")
+            return
+        
+        # Periodically check exits every 30 seconds
+        last_exit_check = time.time()
+        exit_check_interval = 30
         
         while True:
             try:
-                if self._is_market_hours():
-                    self._scan_market()
-                    self._check_exits()
-                else:
+                if not self._is_market_hours():
                     logger.info("💤 Outside market hours, sleeping...")
                     time.sleep(300)  # Sleep 5 minutes when market closed
                     continue
                 
-                time.sleep(SCAN_INTERVAL)
+                # Get next update from scoring queue (blocks for 1 second)
+                update = self.stream.get_scoring_update(timeout=1)
+                
+                if update:
+                    # Process price update for scoring
+                    self._process_update(update)
+                
+                # Periodically check for exits
+                if time.time() - last_exit_check >= exit_check_interval:
+                    self._check_exits()
+                    last_exit_check = time.time()
                 
             except KeyboardInterrupt:
                 logger.info("🛑 Shutting down...")
                 break
             except Exception as e:
                 logger.error(f"❌ Error in main loop: {e}", exc_info=True)
-                time.sleep(60)  # Sleep 1 minute on error
+                time.sleep(10)  # Brief pause on error
+    
+    def _process_update(self, update):
+        """Process price update from WebSocket stream"""
+        symbol = update.get('symbol')
+        
+        # Skip if not in our watchlist
+        if symbol not in TICKERS and symbol != 'SPY':
+            return
+        
+        # Update price cache
+        if symbol not in self.price_cache:
+            self.price_cache[symbol] = {}
+        
+        # Handle different update types
+        if update['type'] == 'trade':
+            self.price_cache[symbol]['c'] = update['price']
+            self.price_cache[symbol]['timestamp'] = update['timestamp']
+        
+        elif update['type'] == 'bar':
+            self.price_cache[symbol].update({
+                'o': update['open'],
+                'h': update['high'],
+                'l': update['low'],
+                'c': update['close'],
+                'pc': self.price_cache[symbol].get('c', update['open'])  # Previous close
+            })
+            
+            # Only score on complete bar updates (has OHLC data)
+            if symbol in TICKERS:
+                self._score_symbol(symbol)
+    
+    def _score_symbol(self, symbol):
+        """Score a symbol using cached price data"""
+        quote = self.price_cache.get(symbol)
+        if not quote or 'c' not in quote or 'o' not in quote:
+            return
+        
+        # Get market trend from SPY
+        market_trend = self._get_market_trend_from_cache()
+        
+        try:
+            # Calculate score
+            result = self.scorer.calculate_score(quote, market_trend)
+            
+            # Log alert if grade is B- or better
+            if result['grade'] != 'D':
+                alert = self._log_alert(result, market_trend)
+                
+                # Auto-trade if grade qualifies
+                if alert and self.trader.should_enter_trade(result['grade']):
+                    self._execute_trade(alert)
+        
+        except Exception as e:
+            logger.error(f"Error scoring {symbol}: {e}")
+    
+    def _get_market_trend_from_cache(self):
+        """Get SPY market trend from cached prices"""
+        spy = self.price_cache.get('SPY', {})
+        
+        current = spy.get('c')
+        prev_close = spy.get('pc')
+        
+        if current and prev_close:
+            is_up = current >= prev_close
+            change_pct = ((current - prev_close) / prev_close) * 100
+        else:
+            # Default to neutral
+            is_up = True
+            change_pct = 0.0
+        
+        return {
+            'is_up': is_up,
+            'change_pct': change_pct
+        }
     
     def _is_market_hours(self):
         """Check if market is currently open"""
@@ -83,69 +180,10 @@ class MarketMonitor:
         
         return market_open <= current_time <= market_close
     
-    def _scan_market(self):
-        """Scan all tickers and generate alerts"""
-        logger.info("📊 Scanning market...")
-        
-        # Get SPY for market trend
-        market_trend = self._get_market_trend()
-        
-        # Scan each ticker
-        for ticker in TICKERS:
-            try:
-                quote = self._fetch_quote(ticker)
-                if not quote:
-                    continue
-                
-                # Calculate score
-                result = self.scorer.calculate_score(quote, market_trend)
-                
-                # Log alert if grade is B- or better
-                if result['grade'] != 'D':
-                    alert = self._log_alert(result, market_trend)
-                    
-                    # Auto-trade if grade qualifies
-                    if self.trader.should_enter_trade(result['grade']):
-                        self._execute_trade(alert)
-                
-            except Exception as e:
-                logger.error(f"Error scanning {ticker}: {e}")
+    # Removed: Old polling-based _scan_market() - now using WebSocket real-time updates
     
-    def _fetch_quote(self, ticker):
-        """Fetch current quote from Finnhub"""
-        if not FINNHUB_API_KEY:
-            logger.error("FINNHUB_API_KEY not set!")
-            return None
-        
-        try:
-            url = f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_API_KEY}"
-            response = requests.get(url, timeout=5)
-            response.raise_for_status()
-            data = response.json()
-            
-            return {
-                'ticker': ticker,
-                'current': data.get('c', 0),
-                'open': data.get('o', 0),
-                'high': data.get('h', 0),
-                'low': data.get('l', 0),
-                'previousClose': data.get('pc', 0)
-            }
-        except Exception as e:
-            logger.error(f"Error fetching {ticker}: {e}")
-            return None
-    
-    def _get_market_trend(self):
-        """Get SPY trend (market direction)"""
-        spy = self._fetch_quote('SPY')
-        if not spy:
-            return {'is_up': False, 'change_pct': 0}
-        
-        change_pct = ((spy['current'] - spy['previousClose']) / spy['previousClose']) * 100
-        return {
-            'is_up': spy['current'] > spy['previousClose'],
-            'change_pct': change_pct
-        }
+    # Removed: Old Finnhub polling methods (_fetch_quote, _get_market_trend)
+    # Now using WebSocket stream cache via _get_market_trend_from_cache()
     
     def _log_alert(self, result, market_trend):
         """Save alert to database"""

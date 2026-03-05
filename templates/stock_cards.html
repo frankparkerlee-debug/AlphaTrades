@@ -757,9 +757,241 @@ updateStockCards();
 
 // Update every 15 seconds (52 calls/min - safely under 60/min limit)
 // 13 calls per update × 4 updates/min = 52 calls/min
+// Real-Time Streaming with Server-Sent Events
+let eventSource = null;
+let priceCache = {}; // Cache latest prices from stream
+
+function initRealTimeStream() {
+    // Close existing connection if any
+    if (eventSource) {
+        eventSource.close();
+    }
+    
+    console.log('🔌 Connecting to real-time price stream...');
+    eventSource = new EventSource('/api/stream/prices');
+    
+    eventSource.onopen = function() {
+        console.log('✅ Connected to real-time stream');
+        document.getElementById('updateTime').textContent = 'Live • Real-Time';
+        document.getElementById('updateIndicator').classList.add('pulse');
+    };
+    
+    eventSource.onmessage = function(event) {
+        try {
+            const update = JSON.parse(event.data);
+            
+            if (update.type === 'connected') {
+                console.log('📡 Stream connected:', update.timestamp);
+                return;
+            }
+            
+            if (update.error) {
+                console.error('Stream error:', update.error);
+                return;
+            }
+            
+            // Handle price update
+            if (update.type === 'trade') {
+                handleTradeUpdate(update);
+            } else if (update.type === 'quote') {
+                handleQuoteUpdate(update);
+            } else if (update.type === 'bar') {
+                handleBarUpdate(update);
+            }
+            
+        } catch (error) {
+            console.error('Error parsing stream event:', error);
+        }
+    };
+    
+    eventSource.onerror = function(error) {
+        console.error('❌ Stream error, reconnecting...', error);
+        document.getElementById('updateTime').textContent = 'Reconnecting...';
+        document.getElementById('updateIndicator').classList.remove('pulse');
+        
+        // Reconnect after 2 seconds
+        setTimeout(() => {
+            initRealTimeStream();
+        }, 2000);
+    };
+}
+
+function handleTradeUpdate(update) {
+    const { symbol, price, timestamp } = update;
+    
+    // Update cache
+    if (!priceCache[symbol]) priceCache[symbol] = {};
+    priceCache[symbol].c = price;
+    priceCache[symbol].lastUpdate = timestamp;
+    
+    console.log(`📈 ${symbol}: $${price.toFixed(2)}`);
+    
+    // Update UI if card exists
+    updateCardPrice(symbol, price);
+    
+    // Trigger re-scoring for this symbol
+    if (TICKERS.includes(symbol)) {
+        rescoreSymbol(symbol);
+    }
+    
+    // Update SPY trend
+    if (symbol === 'SPY') {
+        updateSPYTrend();
+    }
+}
+
+function handleQuoteUpdate(update) {
+    const { symbol, bid, ask } = update;
+    
+    // Update cache with bid/ask
+    if (!priceCache[symbol]) priceCache[symbol] = {};
+    priceCache[symbol].bid = bid;
+    priceCache[symbol].ask = ask;
+    
+    // Update UI to show bid/ask spread
+    updateCardSpread(symbol, bid, ask);
+}
+
+function handleBarUpdate(update) {
+    const { symbol, open, high, low, close } = update;
+    
+    // Update cache with bar data
+    if (!priceCache[symbol]) priceCache[symbol] = {};
+    priceCache[symbol].o = open;
+    priceCache[symbol].h = high;
+    priceCache[symbol].l = low;
+    priceCache[symbol].c = close;
+    
+    // Full re-score with complete bar data
+    if (TICKERS.includes(symbol)) {
+        rescoreSymbol(symbol);
+    }
+}
+
+function updateCardPrice(symbol, price) {
+    const card = document.querySelector(`[data-ticker="${symbol}"]`);
+    if (!card) return;
+    
+    const priceEl = card.querySelector('.stock-price');
+    if (priceEl) {
+        priceEl.textContent = `$${price.toFixed(2)}`;
+        
+        // Flash animation on price change
+        priceEl.classList.add('price-flash');
+        setTimeout(() => priceEl.classList.remove('price-flash'), 300);
+    }
+}
+
+function updateCardSpread(symbol, bid, ask) {
+    const card = document.querySelector(`[data-ticker="${symbol}"]`);
+    if (!card) return;
+    
+    const spreadEl = card.querySelector('.spread-info');
+    if (spreadEl) {
+        const spread = ((ask - bid) / bid * 100).toFixed(2);
+        spreadEl.textContent = `Spread: ${spread}%`;
+    }
+}
+
+async function rescoreSymbol(symbol) {
+    // Get latest quote data
+    const cached = priceCache[symbol];
+    if (!cached || !cached.c || !cached.o) {
+        // Need full quote data
+        try {
+            const quote = await fetchQuote(symbol);
+            priceCache[symbol] = quote;
+        } catch (error) {
+            console.error(`Error fetching quote for ${symbol}:`, error);
+            return;
+        }
+    }
+    
+    const quote = priceCache[symbol];
+    const scorer = new Strategy1Scorer();
+    
+    // Score both directions
+    const callResult = scorer.calculate(quote, spyTrend, 'CALL');
+    const putResult = scorer.calculate(quote, spyTrend, 'PUT');
+    
+    // Update card with new scores
+    const card = document.querySelector(`[data-ticker="${symbol}"]`);
+    if (card) {
+        // Update CALL side
+        const callGrade = card.querySelector('.call-grade');
+        const callScore = card.querySelector('.call-score');
+        if (callGrade) {
+            callGrade.textContent = callResult.grade;
+            callGrade.className = `grade grade-${callResult.grade[0]}`;
+        }
+        if (callScore) {
+            callScore.textContent = `${callResult.score}/55`;
+        }
+        
+        // Update PUT side
+        const putGrade = card.querySelector('.put-grade');
+        const putScore = card.querySelector('.put-score');
+        if (putGrade) {
+            putGrade.textContent = putResult.grade;
+            putGrade.className = `grade grade-${putResult.grade[0]}`;
+        }
+        if (putScore) {
+            putScore.textContent = `${putResult.score}/55`;
+        }
+        
+        // Update timestamp
+        const timestamp = card.querySelector('.score-timestamp');
+        if (timestamp) {
+            timestamp.textContent = new Date().toLocaleTimeString();
+        }
+    }
+}
+
+function updateSPYTrend() {
+    const spy = priceCache['SPY'];
+    if (!spy || !spy.c || !spy.pc) return;
+    
+    spyTrend = {
+        is_up: spy.c >= spy.pc,
+        change_pct: ((spy.c - spy.pc) / spy.pc * 100).toFixed(2)
+    };
+    
+    console.log(`📊 SPY Trend: ${spyTrend.is_up ? '↗️ UP' : '↘️ DOWN'} ${spyTrend.change_pct}%`);
+}
+
+// Load initial data on page load
+updateStockCards();
+
+// Start real-time stream
+initRealTimeStream();
+
+// Fallback: Refresh every 60 seconds in case stream dies
 setInterval(() => {
-    console.log('Triggering scheduled update...');
-    updateStockCards();
-}, 15000);
+    const lastUpdate = document.getElementById('updateTime').textContent;
+    if (lastUpdate.includes('Reconnecting') || lastUpdate.includes('Connecting')) {
+        console.log('Stream appears dead, forcing refresh...');
+        updateStockCards();
+    }
+}, 60000);
+
+// Add CSS for price flash animation
+const style = document.createElement('style');
+style.textContent = `
+    .price-flash {
+        animation: flash 0.3s ease-in-out;
+    }
+    @keyframes flash {
+        0%, 100% { background: transparent; }
+        50% { background: rgba(102, 126, 234, 0.2); }
+    }
+    .update-indicator.pulse {
+        animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+    }
+`;
+document.head.appendChild(style);
 </script>
 {% endblock %}

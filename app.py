@@ -5,17 +5,28 @@ Three-page architecture:
 2. Trader Simulation - Paper trading performance
 3. Options Feed - Historical alerts with filters
 """
-from flask import Flask, jsonify, request, render_template
+from flask import Flask, jsonify, request, render_template, Response, stream_with_context
 from models import Alert, Trade, DailyPerformance, ModelConfig, AccountState, get_session
 from alpaca_client import AlpacaClient
+from alpaca_stream import get_stream
 from datetime import datetime, timedelta
 import logging
 import os
+import json
+import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+
+# Initialize WebSocket stream on startup
+try:
+    alpaca_stream = get_stream()
+    logger.info("✅ Alpaca WebSocket stream initialized")
+except Exception as e:
+    logger.error(f"Failed to initialize stream: {e}")
+    alpaca_stream = None
 
 # Alpaca API credentials
 ALPACA_API_KEY = os.getenv('ALPACA_API_KEY', '')
@@ -189,6 +200,65 @@ def options_feed():
         return f"Error: {e}", 500
     finally:
         session.close()
+
+# Real-Time Streaming Endpoint (Server-Sent Events)
+@app.route('/api/stream/prices')
+def stream_prices():
+    """Server-Sent Events endpoint for real-time price updates"""
+    def generate():
+        """Generator function for SSE"""
+        if not alpaca_stream:
+            yield f"data: {json.dumps({'error': 'Stream not initialized'})}\n\n"
+            return
+        
+        # Send initial connection confirmation
+        yield f"data: {json.dumps({'type': 'connected', 'timestamp': datetime.now().isoformat()})}\n\n"
+        
+        # Stream price updates
+        while True:
+            try:
+                # Get next update from stream (blocks for max 1 second)
+                update = alpaca_stream.get_price_update(timeout=1)
+                
+                if update:
+                    # Send update as SSE event
+                    yield f"data: {json.dumps(update)}\n\n"
+                else:
+                    # Send heartbeat to keep connection alive
+                    yield f": heartbeat\n\n"
+                
+            except GeneratorExit:
+                # Client disconnected
+                logger.info("Client disconnected from price stream")
+                break
+            except Exception as e:
+                logger.error(f"Error in price stream: {e}")
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                break
+    
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',  # Disable nginx buffering
+            'Connection': 'keep-alive'
+        }
+    )
+
+@app.route('/api/stream/latest')
+def latest_prices():
+    """Get latest cached prices for all symbols"""
+    if not alpaca_stream:
+        return jsonify({'error': 'Stream not initialized'}), 503
+    
+    prices = {}
+    for symbol in alpaca_stream.stock_symbols:
+        price_data = alpaca_stream.get_latest_price(symbol)
+        if price_data:
+            prices[symbol] = price_data
+    
+    return jsonify(prices)
 
 # API Endpoints (for stock cards live data)
 @app.route('/api/alerts')
