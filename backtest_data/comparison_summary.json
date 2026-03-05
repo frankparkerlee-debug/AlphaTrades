@@ -1,0 +1,21 @@
+{
+  "generated_at": "2026-03-05T09:00:00",
+  "recommendation": {
+    "recommendation": "KEEP STRATEGY 1",
+    "confidence": "HIGH",
+    "reasoning": "Strategy 2 does not show improvement over Strategy 1. Additional sentiment data may not be worth the complexity.",
+    "s2_better_periods": 2,
+    "total_periods": 7,
+    "avg_return_improvement": -5.06,
+    "avg_winrate_improvement": -3.53
+  },
+  "period_comparisons": [
+    {"period": "30d", "s1_return": 52.89, "s2_return": 48.24, "s1_win_rate": 60.0, "s2_win_rate": 40.0},
+    {"period": "45d", "s1_return": 44.42, "s2_return": 40.57, "s1_win_rate": 47.62, "s2_win_rate": 44.44},
+    {"period": "60d", "s1_return": 42.04, "s2_return": 41.78, "s1_win_rate": 48.15, "s2_win_rate": 50.0},
+    {"period": "75d", "s1_return": 45.20, "s2_return": 50.55, "s1_win_rate": 51.61, "s2_win_rate": 56.52},
+    {"period": "90d", "s1_return": 45.01, "s2_return": 45.60, "s1_win_rate": 51.35, "s2_win_rate": 50.0},
+    {"period": "120d", "s1_return": 38.74, "s2_return": 37.48, "s1_win_rate": 46.15, "s2_win_rate": 45.45},
+    {"period": "365d", "s1_return": 61.61, "s2_return": 30.24, "s1_win_rate": 53.21, "s2_win_rate": 47.0}
+  ]
+}

@@ -294,7 +294,7 @@
     <h1>📊 Strategy 1: Momentum Trades</h1>
     <p style="color: #6c757d; margin-bottom: 10px;">Real-time opportunities - Ride the momentum in ONE direction</p>
     <p style="color: #856404; background: #fff3cd; padding: 8px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 0;">
-        ⚠️ <strong>Market Hours:</strong> Prices update every 10 seconds during regular trading (9:30 AM - 4:00 PM EST). Pre-market and after-hours prices may not be reflected. <strong>Note:</strong> Social sentiment, news, and earnings are NOT yet factored into scoring.
+        ⚠️ <strong>Market Hours:</strong> Prices update every 15 seconds during regular trading (9:30 AM - 4:00 PM EST). Pre-market and after-hours prices may not be reflected. <strong>Note:</strong> Social sentiment, news, and earnings are NOT yet factored into scoring. <strong>If prices freeze, we've hit the free API rate limit.</strong>
     </p>
 </div>
 
@@ -460,6 +460,12 @@ async function fetchQuote(ticker) {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     
+    // Check for rate limit error
+    if (data.error && data.error.includes('API limit reached')) {
+        console.error(`[${new Date().toLocaleTimeString()}] ⚠️ RATE LIMIT HIT - Remaining: 0`);
+        throw new Error('RATE_LIMIT');
+    }
+    
     console.log(`[${new Date().toLocaleTimeString()}] ${ticker}: Current=$${data.c}, Open=$${data.o}, PC=$${data.pc}`);
     
     return data;
@@ -516,8 +522,16 @@ async function updateStockCards() {
     } catch (error) {
         console.error('Error updating stocks:', error);
         indicator.classList.add('error');
-        if (!document.querySelector('.stock-card')) {
-            grid.innerHTML = '<div class="loading">❌ Connection error. Retrying in 10s...</div>';
+        
+        if (error.message === 'RATE_LIMIT') {
+            document.getElementById('updateTime').textContent = '⚠️ API rate limit exceeded - Updates paused (resets in ~1 minute)';
+            if (!document.querySelector('.stock-card')) {
+                grid.innerHTML = '<div class="loading">⚠️ Finnhub API rate limit exceeded. Free tier: 60 calls/min. We need WebSocket or paid plan.</div>';
+            }
+        } else {
+            if (!document.querySelector('.stock-card')) {
+                grid.innerHTML = '<div class="loading">❌ Connection error. Retrying in 15s...</div>';
+            }
         }
     } finally {
         updateInProgress = false;
@@ -746,10 +760,11 @@ function closeModal() {
 console.log('Initializing stock cards...');
 updateStockCards();
 
-// Update every 10 seconds
+// Update every 15 seconds (52 calls/min - safely under 60/min limit)
+// 13 calls per update × 4 updates/min = 52 calls/min
 setInterval(() => {
     console.log('Triggering scheduled update...');
     updateStockCards();
-}, 10000);
+}, 15000);
 </script>
 {% endblock %}
