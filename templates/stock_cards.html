@@ -334,6 +334,7 @@ let signalCacheTimeout = {};
 let spyTrend = { is_up: true, change_pct: 0 };
 let updateInProgress = false;
 let updateCount = 0;
+let usePolling = true; // Use 2-second polling instead of WebSocket
 
 // Strategy 1 Scorer - Matches scorer.py EXACTLY
 class Strategy1Scorer {
@@ -593,21 +594,22 @@ async function updateExistingCards(quotes) {
             const priceChanged = lastPrices[ticker] !== quote.c;
             lastPrices[ticker] = quote.c;
             
-            // Check if we need to fetch full signal data
+            // ALWAYS update card content with current data
+            // Use cached signal data if available, otherwise show basic card
+            const cachedSignal = cardDataCache[ticker];
+            card.innerHTML = createStockCardContent(ticker, quote, cachedSignal);
+            
+            // Check if we should fetch new signal data (every 2 seconds)
             const cacheExpired = !signalCacheTimeout[ticker] || Date.now() > signalCacheTimeout[ticker];
             
             if (cacheExpired) {
-                // Fetch in background, don't wait
+                // Fetch in background, will update on next cycle
                 fetchSignalDataIfNeeded(ticker, quote).then(signalData => {
                     if (signalData) {
                         cardDataCache[ticker] = signalData;
-                        signalCacheTimeout[ticker] = Date.now() + 15000; // Cache for 15 seconds
-                        card.innerHTML = createStockCardContent(ticker, quote, signalData);
+                        signalCacheTimeout[ticker] = Date.now() + 2000; // Cache for 2 seconds
                     }
                 });
-            } else {
-                // Use cached data
-                card.innerHTML = createStockCardContent(ticker, quote, cardDataCache[ticker]);
             }
             
             if (priceChanged) {
@@ -629,24 +631,14 @@ async function updateExistingCards(quotes) {
 
 async function fetchSignalDataIfNeeded(ticker, quote) {
     try {
-        // Quick check: does this stock have momentum?
-        const move = Math.abs((quote.c - quote.o) / quote.o * 100);
-        if (move < 1.0) {
-            // Skip API call for low-movement stocks
-            return null;
-        }
-        
+        // Fetch convergence signal for all stocks
         const response = await fetch(`/api/signal/${ticker}`);
         if (!response.ok) return null;
         
         const data = await response.json();
         
-        // Only cache if it's a meaningful signal (C+ or better)
-        if (data.convergence.total_score >= 60) {
-            return data;
-        }
-        
-        return null;
+        // Cache all data (will show on cards regardless of score)
+        return data;
     } catch (error) {
         console.error(`Error fetching signal for ${ticker}:`, error);
         return null;
@@ -996,10 +988,11 @@ function updateSPYTrend() {
 }
 
 // Load initial data on page load
+console.log('🚀 Initializing AlphaTrades dashboard...');
 updateStockCards();
 
-// Try real-time stream first
-initRealTimeStream();
+// WebSocket streaming disabled - using 2-second polling
+// initRealTimeStream();
 
 // Polling fallback (runs every 2 seconds if stream unavailable)
 setInterval(() => {
