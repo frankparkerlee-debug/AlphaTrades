@@ -696,6 +696,11 @@ def _generate_recommendation(convergence, option):
         'risk_reward': '1:1.67'
     }
 
+@app.route('/favicon.ico')
+def favicon():
+    """Return simple favicon to prevent 404"""
+    return '', 204  # No Content
+
 @app.route('/health')
 def health():
     """Health check endpoint"""

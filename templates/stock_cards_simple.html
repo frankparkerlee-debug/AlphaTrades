@@ -57,7 +57,7 @@
     <div class="modal-content">
         <div class="modal-header">
             <h2 id="modalTitle">Stock Details</h2>
-            <button class="close-btn" id="closeModalBtn">✕ Close</button>
+            <button class="close-btn" onclick="closeModal()">✕ Close</button>
         </div>
         <div id="modalBody">Loading...</div>
     </div>
@@ -75,13 +75,13 @@ async function init() {
     // Step 1: Fetch and render basic cards with prices (fast)
     await loadInitialPrices();
     
-    // Step 2: Start background preload (non-blocking)
-    preloadAllSignals();  // Don't await - let it run in background
+    // Step 2: Background load all signal data (parallel)
+    await preloadAllSignals();
     
     // Step 3: Start price updates (every 5 seconds)
     setInterval(updatePrices, 5000);
     
-    console.log('✅ AlphaTrades ready (signals loading in background)');
+    console.log('✅ AlphaTrades ready');
 }
 
 async function loadInitialPrices() {
@@ -182,15 +182,11 @@ function updateCardWithSignal(ticker) {
     const changePercent = ((quote.c - quote.pc) / quote.pc) * 100;
     const isPositive = changePercent >= 0;
     
-    // Check market hours (CST browser time: 8:30am-3pm CST = 9:30am-4pm EST)
+    // Check market hours (CST browser time)
     const now = new Date();
     const hour = now.getHours();
-    const minute = now.getMinutes();
     const day = now.getDay();
-    const timeInMinutes = hour * 60 + minute;
-    const marketOpen = 8 * 60 + 30;  // 8:30am CST
-    const marketClose = 15 * 60;     // 3:00pm CST
-    const isMarketHours = (day >= 1 && day <= 5) && (timeInMinutes >= marketOpen && timeInMinutes < marketClose);
+    const isMarketHours = (day >= 1 && day <= 5) && (hour >= 8 && hour < 15); // 9:30am-4pm EST = 8:30am-3pm CST
     
     // Build options display
     let optionsHTML = '';
@@ -248,35 +244,13 @@ function updateCardPrice(ticker, quote) {
 }
 
 function openModal(ticker) {
-    const modal = document.getElementById('detailModal');
-    const title = document.getElementById('modalTitle');
-    const body = document.getElementById('modalBody');
-    
-    // Show modal immediately with loading state
-    title.textContent = `${ticker}`;
-    body.innerHTML = '<div style="text-align: center; padding: 40px;"><h2>⏳ Loading signal data...</h2><p>Analyzing convergence, options, and market conditions...</p></div>';
-    modal.classList.add('active');
-    
-    // Check if data is already cached
     const signal = signalCache[ticker];
-    if (signal) {
-        renderModalContent(ticker, signal);
+    if (!signal) {
+        alert('Signal data not yet loaded. Please wait a moment and try again.');
         return;
     }
     
-    // Fetch signal data if not cached
-    fetch(`/api/signal/${ticker}`)
-        .then(r => r.json())
-        .then(data => {
-            signalCache[ticker] = data;  // Cache it
-            renderModalContent(ticker, data);
-        })
-        .catch(err => {
-            body.innerHTML = `<div style="text-align: center; padding: 40px; color: #f56565;"><h2>❌ Error Loading Data</h2><p>${err.message}</p></div>`;
-        });
-}
-
-function renderModalContent(ticker, signal) {
+    const modal = document.getElementById('detailModal');
     const title = document.getElementById('modalTitle');
     const body = document.getElementById('modalBody');
     
@@ -344,29 +318,22 @@ function renderModalContent(ticker, signal) {
         ${newsHTML}
         ${optionsHTML}
     `;
+    
+    modal.classList.add('active');
 }
 
 function closeModal() {
     document.getElementById('detailModal').classList.remove('active');
 }
 
-// Close button event listener
-document.getElementById('closeModalBtn').addEventListener('click', () => {
-    closeModal();
-});
-
 // Click outside to close
 document.getElementById('detailModal').addEventListener('click', (e) => {
-    if (e.target.id === 'detailModal') {
-        closeModal();
-    }
+    if (e.target.id === 'detailModal') closeModal();
 });
 
 // ESC to close
 document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-        closeModal();
-    }
+    if (e.key === 'Escape') closeModal();
 });
 
 // Start
