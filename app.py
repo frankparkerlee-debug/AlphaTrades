@@ -604,8 +604,9 @@ def api_options_debug(symbol):
 @app.route('/api/signal/<symbol>')
 def api_signal(symbol):
     """Get cached convergence signal from database (< 50ms)"""
-    from models import Signal
+    from models import Signal, get_session
     
+    session = get_session()
     try:
         # Read from signals cache (FAST - just a database query)
         signal = session.query(Signal).filter_by(ticker=symbol.upper()).first()
@@ -634,12 +635,15 @@ def api_signal(symbol):
     except Exception as e:
         logger.error(f"Error fetching signal for {symbol}: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
 
 @app.route('/api/signals/all')
 def api_signals_all():
     """Get all cached signals (for dashboard grid) - ONE REQUEST"""
-    from models import Signal
+    from models import Signal, get_session
     
+    session = get_session()
     try:
         signals = session.query(Signal).all()
         
@@ -652,6 +656,8 @@ def api_signals_all():
     except Exception as e:
         logger.error(f"Error fetching all signals: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
 
 def _generate_recommendation(convergence, option):
     """Generate trading recommendation based on convergence + options"""
