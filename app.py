@@ -260,18 +260,25 @@ def stream_prices():
 
 @app.route('/api/stream/latest')
 def latest_prices():
-    """Get latest cached prices for all symbols"""
-    stream = get_alpaca_stream()
-    if not stream:
-        return jsonify({'error': 'Stream not initialized'}), 503
+    """Get latest prices for all symbols (REST fallback - stream disabled)"""
+    TICKERS = ['NVDA', 'TSLA', 'AMD', 'AAPL', 'AMZN', 'META', 'MSFT', 'GOOGL', 'NFLX', 'AVGO', 'ORCL', 'ADBE']
     
-    prices = {}
-    for symbol in stream.stock_symbols:
-        price_data = stream.get_latest_price(symbol)
-        if price_data:
-            prices[symbol] = price_data
-    
-    return jsonify(prices)
+    try:
+        alpaca = AlpacaClient()
+        quotes = []
+        
+        for ticker in TICKERS:
+            try:
+                snapshot = alpaca.get_snapshot(ticker)
+                quotes.append(snapshot)
+            except Exception as e:
+                logger.error(f"Error fetching {ticker}: {e}")
+                quotes.append(None)
+        
+        return jsonify({'quotes': quotes})
+    except Exception as e:
+        logger.error(f"Error in latest_prices: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
 
 # API Endpoints (for stock cards live data)
 @app.route('/api/alerts')
@@ -603,31 +610,77 @@ def api_options_debug(symbol):
 
 @app.route('/api/signal/<symbol>')
 def api_signal(symbol):
-    """Get cached convergence signal from database (< 50ms)"""
+    """Get convergence signal - cached if available, calculated on-demand otherwise"""
     from models import Signal, get_session
     
     session = get_session()
     try:
-        # Read from signals cache (FAST - just a database query)
+        # Try to read from signals cache first (FAST - < 50ms)
         signal = session.query(Signal).filter_by(ticker=symbol.upper()).first()
         
-        if not signal:
-            return jsonify({'error': f'Signal not found for {symbol}. Worker may not have processed it yet.'}), 404
+        if signal:
+            # Check if data is stale (> 5 minutes)
+            age_seconds = (datetime.utcnow() - signal.updated_at).total_seconds()
+            if age_seconds > 300:
+                logger.warning(f"Signal for {symbol} is stale ({age_seconds:.0f}s old)")
+            
+            # Return cached data
+            result = {
+                'ticker': signal.ticker,
+                'stock_price': float(signal.price) if signal.price else None,
+                'convergence': signal.convergence_json,
+                'option': signal.option_json,
+                'recommendation': _generate_recommendation(signal.convergence_json, signal.option_json),
+                'cached_at': signal.updated_at.isoformat() if signal.updated_at else None,
+                'age_seconds': age_seconds,
+                'source': 'cache'
+            }
+            return jsonify(result)
         
-        # Check if data is stale (> 5 minutes)
-        age_seconds = (datetime.utcnow() - signal.updated_at).total_seconds()
-        if age_seconds > 300:
-            logger.warning(f"Signal for {symbol} is stale ({age_seconds:.0f}s old)")
+        # Fallback: Calculate on-demand if not cached (worker hasn't run yet)
+        logger.info(f"Signal not cached for {symbol}, calculating on-demand...")
         
-        # Return cached data
+        alpaca = AlpacaClient()
+        quote = alpaca.get_snapshot(symbol.upper())
+        stock_price = quote.get('c', 0)
+        
+        if not stock_price:
+            return jsonify({'error': 'Could not get stock price'}), 500
+        
+        # Get SPY for market context
+        spy_quote = alpaca.get_snapshot('SPY')
+        spy_current = spy_quote.get('c', 0)
+        spy_prev = spy_quote.get('pc', spy_current)
+        market_data = {
+            'is_up': spy_current >= spy_prev,
+            'change_pct': ((spy_current - spy_prev) / spy_prev * 100) if spy_prev else 0
+        }
+        
+        # Run convergence scoring
+        scorer = get_convergence_scorer(ALPACA_API_KEY, ALPACA_SECRET_KEY)
+        convergence_result = scorer.score_ticker(symbol.upper(), quote, market_data)
+        
+        # Get optimal option
+        momentum_move = convergence_result['signals']['momentum']['metrics'].get('move_from_open', 0)
+        option_type = 'call' if momentum_move >= 0 else 'put'
+        chain_data = alpaca.get_options_chain(symbol.upper())
+        
+        optimal_option = None
+        if 'error' not in chain_data and chain_data.get('snapshots'):
+            selector = get_selector()
+            optimal_option = selector.select_best_contract(
+                chain_data.get('snapshots', {}),
+                stock_price,
+                option_type
+            )
+        
         result = {
-            'ticker': signal.ticker,
-            'stock_price': float(signal.price) if signal.price else None,
-            'convergence': signal.convergence_json,
-            'option': signal.option_json,
-            'recommendation': _generate_recommendation(signal.convergence_json, signal.option_json),
-            'cached_at': signal.updated_at.isoformat() if signal.updated_at else None,
-            'age_seconds': age_seconds
+            'ticker': symbol.upper(),
+            'stock_price': stock_price,
+            'convergence': convergence_result,
+            'option': optimal_option,
+            'recommendation': _generate_recommendation(convergence_result, optimal_option),
+            'source': 'calculated'
         }
         
         return jsonify(result)
