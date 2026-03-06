@@ -114,32 +114,22 @@ async function loadInitialPrices() {
 }
 
 async function preloadAllSignals() {
-    console.log('📊 Loading convergence data (batch API)...');
+    console.log('📊 Preloading convergence data for all tickers...');
     
-    try {
-        // NEW: Single batch request for all signals (FAST)
-        const response = await fetch('/api/signals/all');
-        const data = await response.json();
-        
-        // Cache all signals
-        data.signals.forEach(signal => {
-            signalCache[signal.ticker] = {
-                ticker: signal.ticker,
-                stock_price: signal.price,
-                convergence: signal.convergence,
-                option: signal.option,
-                recommendation: {
-                    action: signal.convergence?.grade || 'N/A',
-                    confidence: signal.confidence
-                }
-            };
-            updateCardWithSignal(signal.ticker);
-        });
-        
-        console.log(`✅ Loaded ${data.count} signals in batch (cached at ${data.timestamp})`);
-    } catch (err) {
-        console.error('❌ Batch signal load failed:', err);
-    }
+    // Fetch all signals in parallel
+    const promises = TICKERS.map(ticker => 
+        fetch(`/api/signal/${ticker}`)
+            .then(r => r.json())
+            .then(data => {
+                signalCache[ticker] = data;
+                updateCardWithSignal(ticker);
+                console.log(`✅ ${ticker} signal loaded`);
+            })
+            .catch(err => console.error(`❌ ${ticker} failed:`, err))
+    );
+    
+    await Promise.all(promises);
+    console.log('✅ All signals preloaded');
 }
 
 async function updatePrices() {
