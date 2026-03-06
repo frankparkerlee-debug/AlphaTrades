@@ -12,7 +12,7 @@ class OptionsSelector:
     
     def __init__(self):
         # Strategy parameters for asymmetric returns
-        self.target_dte_min = 1
+        self.target_dte_min = 0  # Include 0DTE for intraday momentum
         self.target_dte_max = 3
         self.delta_min = 0.30
         self.delta_max = 0.60
@@ -42,25 +42,45 @@ class OptionsSelector:
         
         # Parse all available options
         for opt_symbol, opt_data in options_data.items():
-            # Parse option symbol: SYMBOL_YYYYMMDD_SSSSSSSS[C/P]
-            parts = opt_symbol.split('_')
-            if len(parts) != 3:
-                continue
+            # Parse Alpaca option symbol format: NVDA260306C00257500
+            # Format: SYMBOL + YYMMDD + [C/P] + STRIKE (8 digits)
+            # Parse right-to-left to avoid ticker letters:
+            #   - Last 8 chars = strike (00257500)
+            #   - Char -9 = C or P
+            #   - Chars -15 to -10 = YYMMDD
+            #   - Everything before = ticker
             
-            exp_str = parts[1]  # YYYYMMDD
-            strike_and_type = parts[2]  # SSSSSSSS[C/P]
+            if len(opt_symbol) < 15:
+                continue  # Too short to be valid
             
-            opt_type = 'call' if strike_and_type[-1] == 'C' else 'put'
-            strike = int(strike_and_type[:-1]) / 1000.0
+            # Extract from right
+            strike_str = opt_symbol[-8:]  # Last 8 chars
+            opt_type_char = opt_symbol[-9]  # 9th char from end
+            exp_str = opt_symbol[-15:-9]  # 6 chars before type
+            
+            # Parse type
+            if opt_type_char == 'C':
+                opt_type = 'call'
+            elif opt_type_char == 'P':
+                opt_type = 'put'
+            else:
+                continue  # Invalid
             
             # Filter by type
             if opt_type != direction.lower():
                 continue
             
+            # Parse strike
+            try:
+                strike = int(strike_str) / 1000.0
+            except:
+                continue
+            
             # Parse expiration
             from datetime import datetime
             try:
-                exp_date = datetime.strptime(exp_str, '%Y%m%d').date()
+                # Convert YYMMDD to YYYYMMDD (assume 20XX)
+                exp_date = datetime.strptime('20' + exp_str, '%Y%m%d').date()
             except:
                 continue
             
@@ -91,6 +111,10 @@ class OptionsSelector:
             
             mid = (bid + ask) / 2
             
+            # Skip if mid price is too low (< $0.10)
+            if mid < 0.10:
+                continue
+            
             # Calculate % distance from stock price
             if direction.lower() == 'call':
                 pct_otm = ((strike - stock_price) / stock_price) * 100
@@ -101,15 +125,38 @@ class OptionsSelector:
             spread_pct = ((ask - bid) / mid) if mid > 0 else 1.0
             
             # Quality filters
-            if open_interest < self.min_open_interest:
-                continue
-            if volume < self.min_volume:
-                continue
+            # NOTE: Alpaca free tier doesn't return Greeks/OI, so we use looser filters
+            has_greeks = (delta != 0 or iv != 0)
+            
+            if has_greeks:
+                # Use strict filters if Greeks available
+                if open_interest < self.min_open_interest:
+                    continue
+                if volume < self.min_volume:
+                    continue
+                if abs(delta) < self.delta_min or abs(delta) > self.delta_max:
+                    continue
+                if iv < self.iv_min or iv > self.iv_max:
+                    continue
+            else:
+                # Fallback filters without Greeks - use moneyness instead
+                # Skip deep OTM (> 10%) or deep ITM (< -5%)
+                if direction.lower() == 'call':
+                    if pct_otm > 10 or pct_otm < -5:
+                        continue
+                else:
+                    if pct_otm > 10 or pct_otm < -5:
+                        continue
+                
+                # Approximate delta from moneyness for scoring
+                if direction.lower() == 'call':
+                    # Rough approximation: ATM ~0.50, +5% OTM ~0.30
+                    delta = max(0.1, 0.5 - (pct_otm / 20))
+                else:
+                    delta = -max(0.1, 0.5 - (pct_otm / 20))
+            
+            # Always check spread
             if spread_pct > self.max_bid_ask_spread_pct:
-                continue
-            if abs(delta) < self.delta_min or abs(delta) > self.delta_max:
-                continue
-            if iv < self.iv_min or iv > self.iv_max:
                 continue
             
             # Score this contract for asymmetric potential
@@ -164,8 +211,10 @@ class OptionsSelector:
         """
         score = 0.0
         
-        # DTE scoring (prefer 1-2 days)
-        if dte == 1:
+        # DTE scoring (prefer 0-2 days for momentum)
+        if dte == 0:
+            score += 28  # 0DTE can have explosive intraday moves
+        elif dte == 1:
             score += 30  # Best for asymmetric 1-day moves
         elif dte == 2:
             score += 25
