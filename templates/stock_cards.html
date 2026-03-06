@@ -635,16 +635,30 @@ async function updateExistingCards(quotes) {
 
 async function fetchSignalDataIfNeeded(ticker, quote) {
     try {
+        console.log(`🔄 Fetching signal data for ${ticker}...`);
+        const startTime = Date.now();
+        
         // Fetch convergence signal for all stocks
         const response = await fetch(`/api/signal/${ticker}`);
-        if (!response.ok) return null;
+        if (!response.ok) {
+            console.error(`❌ Signal API failed for ${ticker}: ${response.status}`);
+            return null;
+        }
         
         const data = await response.json();
+        const duration = Date.now() - startTime;
+        
+        console.log(`✅ Signal data for ${ticker} received in ${duration}ms:`, {
+            grade: data.convergence?.grade,
+            score: data.convergence?.total_score,
+            hasOptions: !!data.option,
+            optionSymbol: data.option?.symbol || 'null'
+        });
         
         // Cache all data (will show on cards regardless of score)
         return data;
     } catch (error) {
-        console.error(`Error fetching signal for ${ticker}:`, error);
+        console.error(`❌ Error fetching signal for ${ticker}:`, error);
         return null;
     }
 }
@@ -663,6 +677,8 @@ function createStockCardHTML(ticker, quote) {
 function createStockCardContent(ticker, quote, signalData) {
     const changePercent = ((quote.c - quote.pc) / quote.pc) * 100;
     const isPositive = changePercent >= 0;
+    
+    console.log(`🎨 Rendering ${ticker} card: signalData=${!!signalData}, option=${signalData?.option ? 'YES' : 'NO'}`);
     
     // If no signal data, show simple card (Strategy 1 style)
     if (!signalData) {
@@ -727,19 +743,24 @@ function createStockCardContent(ticker, quote, signalData) {
     } else {
         // No options available - determine why and show appropriate message
         const now = new Date();
-        const estHour = now.getHours() - 1; // CST to EST (rough)
+        // Get EST hour properly (CST + 1 = EST)
+        const estHour = now.getHours() + 1; // CST is 1 hour behind EST
         const isMarketHours = (estHour >= 9 && estHour < 16);
+        
+        console.log(`🕐 Time check: CST=${now.getHours()}:${now.getMinutes()}, EST=${estHour}:${now.getMinutes()}, Market=${isMarketHours ? 'OPEN' : 'CLOSED'}`);
         
         if (!isMarketHours) {
             optionsHTML = `
-                <div style="background: #6c757d; color: white; padding: 6px; border-radius: 4px; margin-top: 6px; font-size: 10px; text-align: center;">
-                    🌙 Market Closed - Options data available 9:30am-4pm EST
+                <div style="background: #6c757d; color: white; padding: 6px; border-radius: 4px; margin-top: 6px; font-size: 10px; text-align: center; font-weight: bold;">
+                    🌙 MARKET CLOSED<br>
+                    <span style="font-weight: normal;">Options: 9:30am-4pm EST Mon-Fri</span>
                 </div>
             `;
         } else {
             optionsHTML = `
                 <div style="background: #ffc107; color: #000; padding: 6px; border-radius: 4px; margin-top: 6px; font-size: 10px; text-align: center;">
-                    ⚠️ No suitable options (${rec.reason})
+                    ⚠️ No suitable options<br>
+                    <span style="font-size: 9px;">${rec.reason || 'No contracts meet criteria'}</span>
                 </div>
             `;
         }
@@ -792,10 +813,12 @@ async function showDetails(ticker, quote) {
     if (signalData) {
         // Use cached data immediately (instant load)
         console.log('⚡ Using cached signal data for', ticker);
+        modal.style.display = 'flex';
         modal.classList.add('active');
     } else {
         // Show loading state while fetching
         body.innerHTML = '<div style="text-align: center; padding: 40px;"><div class="spinner"></div><p>Loading convergence analysis...</p></div>';
+        modal.style.display = 'flex';
         modal.classList.add('active');
         console.log('📂 Fetching signal data for', ticker);
         
@@ -1005,7 +1028,10 @@ async function showDetails(ticker, quote) {
         </div>
     `;
     
+    // Show modal - must set display AND class
+    modal.style.display = 'flex';
     modal.classList.add('active');
+    console.log('✅ Modal opened');
 }
 
 function closeModal() {
