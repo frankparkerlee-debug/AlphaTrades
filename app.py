@@ -603,60 +603,54 @@ def api_options_debug(symbol):
 
 @app.route('/api/signal/<symbol>')
 def api_signal(symbol):
-    """Get complete convergence signal + optimal option for a ticker"""
+    """Get cached convergence signal from database (< 50ms)"""
+    from models import Signal
+    
     try:
-        alpaca = AlpacaClient()
+        # Read from signals cache (FAST - just a database query)
+        signal = session.query(Signal).filter_by(ticker=symbol.upper()).first()
         
-        # Get stock quote
-        quote = alpaca.get_snapshot(symbol.upper())
-        stock_price = quote.get('c', 0)
+        if not signal:
+            return jsonify({'error': f'Signal not found for {symbol}. Worker may not have processed it yet.'}), 404
         
-        if not stock_price:
-            return jsonify({'error': 'Could not get stock price'}), 500
+        # Check if data is stale (> 5 minutes)
+        age_seconds = (datetime.utcnow() - signal.updated_at).total_seconds()
+        if age_seconds > 300:
+            logger.warning(f"Signal for {symbol} is stale ({age_seconds:.0f}s old)")
         
-        # Get SPY for market context
-        spy_quote = alpaca.get_snapshot('SPY')
-        spy_current = spy_quote.get('c', 0)
-        spy_prev = spy_quote.get('pc', spy_current)
-        market_data = {
-            'is_up': spy_current >= spy_prev,
-            'change_pct': ((spy_current - spy_prev) / spy_prev * 100) if spy_prev else 0
-        }
-        
-        # Run convergence scoring
-        scorer = get_convergence_scorer(ALPACA_API_KEY, ALPACA_SECRET_KEY)
-        convergence_result = scorer.score_ticker(symbol.upper(), quote, market_data)
-        
-        # Get optimal option based on convergence direction
-        # Use momentum signal to determine direction
-        momentum_move = convergence_result['signals']['momentum']['metrics'].get('move_from_open', 0)
-        option_type = 'call' if momentum_move >= 0 else 'put'
-        
-        # Get options chain
-        chain_data = alpaca.get_options_chain(symbol.upper())
-        
-        optimal_option = None
-        if 'error' not in chain_data and chain_data.get('snapshots'):
-            selector = get_selector()
-            optimal_option = selector.select_best_contract(
-                chain_data.get('snapshots', {}),
-                stock_price,
-                option_type
-            )
-        
-        # Combine results
+        # Return cached data
         result = {
-            'ticker': symbol.upper(),
-            'stock_price': stock_price,
-            'convergence': convergence_result,
-            'option': optimal_option,
-            'recommendation': _generate_recommendation(convergence_result, optimal_option)
+            'ticker': signal.ticker,
+            'stock_price': float(signal.price) if signal.price else None,
+            'convergence': signal.convergence_json,
+            'option': signal.option_json,
+            'recommendation': _generate_recommendation(signal.convergence_json, signal.option_json),
+            'cached_at': signal.updated_at.isoformat() if signal.updated_at else None,
+            'age_seconds': age_seconds
         }
         
         return jsonify(result)
         
     except Exception as e:
-        logger.error(f"Error generating signal for {symbol}: {e}", exc_info=True)
+        logger.error(f"Error fetching signal for {symbol}: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/signals/all')
+def api_signals_all():
+    """Get all cached signals (for dashboard grid) - ONE REQUEST"""
+    from models import Signal
+    
+    try:
+        signals = session.query(Signal).all()
+        
+        return jsonify({
+            'signals': [s.to_dict() for s in signals],
+            'count': len(signals),
+            'timestamp': datetime.utcnow().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error fetching all signals: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 def _generate_recommendation(convergence, option):

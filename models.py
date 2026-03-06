@@ -1,13 +1,53 @@
 """
 SQLAlchemy models for AlphaTrades database
 """
-from sqlalchemy import create_engine, Column, Integer, String, Numeric, DateTime, Date, Boolean, Text, ARRAY, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Numeric, DateTime, Date, Boolean, Text, ARRAY, ForeignKey, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker
 from datetime import datetime
 import os
 
 Base = declarative_base()
+
+class Signal(Base):
+    """Cached convergence signals - pre-computed by background worker"""
+    __tablename__ = 'signals'
+    
+    id = Column(Integer, primary_key=True)
+    ticker = Column(String(10), unique=True, nullable=False, index=True)
+    
+    # Stock data
+    price = Column(Numeric(10, 2))
+    change_pct = Column(Numeric(6, 3))
+    
+    # Convergence score
+    grade = Column(String(3))
+    score = Column(Integer)
+    convergence_count = Column(Integer)
+    confidence = Column(String(20))
+    
+    # Full data (JSON)
+    convergence_json = Column(JSON)  # Complete convergence breakdown
+    option_json = Column(JSON)       # Optimal option contract
+    
+    # Metadata
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    
+    def to_dict(self):
+        return {
+            'ticker': self.ticker,
+            'price': float(self.price) if self.price else None,
+            'change_pct': float(self.change_pct) if self.change_pct else None,
+            'grade': self.grade,
+            'score': self.score,
+            'convergence_count': self.convergence_count,
+            'confidence': self.confidence,
+            'convergence': self.convergence_json,
+            'option': self.option_json,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'age_seconds': (datetime.utcnow() - self.updated_at).total_seconds() if self.updated_at else None
+        }
 
 class Alert(Base):
     __tablename__ = 'alerts'

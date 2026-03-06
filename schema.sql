@@ -1,5 +1,33 @@
 -- AlphaTrades Database Schema
 
+-- Signals table: Cached convergence signals (pre-computed by worker)
+CREATE TABLE IF NOT EXISTS signals (
+    id SERIAL PRIMARY KEY,
+    ticker VARCHAR(10) UNIQUE NOT NULL,
+    
+    -- Stock data
+    price DECIMAL(10,2),
+    change_pct DECIMAL(6,3),
+    
+    -- Convergence score
+    grade VARCHAR(3),
+    score INTEGER,
+    convergence_count INTEGER,
+    confidence VARCHAR(20),
+    
+    -- Full data (JSON)
+    convergence_json JSONB,  -- Complete convergence breakdown
+    option_json JSONB,       -- Optimal option contract
+    
+    -- Metadata
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_signals_ticker ON signals(ticker);
+CREATE INDEX idx_signals_grade ON signals(grade);
+CREATE INDEX idx_signals_updated ON signals(updated_at DESC);
+
 -- Alerts table: Every grade calculation (continuous log)
 CREATE TABLE IF NOT EXISTS alerts (
     id SERIAL PRIMARY KEY,
