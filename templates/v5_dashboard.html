@@ -1,0 +1,288 @@
+{% extends "base.html" %}
+
+{% block title %}V5 Dashboard - AlphaTrades{% endblock %}
+
+{% block content %}
+<style>
+    body { margin: 0; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    
+    .header { text-align: center; color: white; margin-bottom: 20px; }
+    .header h1 { margin: 0; font-size: 2.5em; font-weight: 800; }
+    .header .subtitle { font-size: 1.2em; margin-top: 5px; opacity: 0.9; }
+    
+    .stats-bar { background: rgba(255,255,255,0.2); padding: 15px; border-radius: 12px; color: white; margin-bottom: 20px; display: flex; justify-content: space-around; max-width: 1400px; margin-left: auto; margin-right: auto; }
+    .stat { text-align: center; }
+    .stat-value { font-size: 24px; font-weight: 800; }
+    .stat-label { font-size: 12px; opacity: 0.9; margin-top: 5px; }
+    
+    .stock-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; max-width: 1400px; margin: 0 auto; }
+    
+    .stock-card { background: white; border-radius: 12px; padding: 20px; cursor: pointer; transition: all 0.3s; box-shadow: 0 4px 6px rgba(0,0,0,0.1); position: relative; }
+    .stock-card:hover { transform: translateY(-5px); box-shadow: 0 8px 12px rgba(0,0,0,0.2); }
+    .stock-card.loading { opacity: 0.6; }
+    
+    /* Grade colors */
+    .stock-card.grade-A { border-left: 6px solid #48bb78; }
+    .stock-card.grade-B { border-left: 6px solid #4299e1; }
+    .stock-card.grade-C { border-left: 6px solid #ed8936; }
+    .stock-card.grade-D { border-left: 6px solid #f56565; }
+    .stock-card.grade-F { border-left: 6px solid #a0aec0; }
+    
+    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+    .ticker { font-size: 24px; font-weight: 800; color: #2d3748; }
+    .grade-badge { font-size: 28px; font-weight: 800; padding: 5px 15px; border-radius: 8px; }
+    .grade-badge.A { background: #c6f6d5; color: #22543d; }
+    .grade-badge.B { background: #bee3f8; color: #2c5282; }
+    .grade-badge.C { background: #feebc8; color: #7c2d12; }
+    .grade-badge.D { background: #fed7d7; color: #742a2a; }
+    .grade-badge.F { background: #e2e8f0; color: #2d3748; }
+    
+    .price-section { margin-bottom: 15px; }
+    .current-price { font-size: 28px; font-weight: 700; color: #2d3748; }
+    .price-change { font-size: 14px; font-weight: 600; }
+    .price-change.positive { color: #48bb78; }
+    .price-change.negative { color: #f56565; }
+    
+    .score-section { background: #f7fafc; padding: 12px; border-radius: 8px; margin-bottom: 10px; }
+    .score-value { font-size: 36px; font-weight: 800; color: #2d3748; }
+    .score-label { font-size: 12px; color: #718096; margin-top: 5px; }
+    
+    .signals-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; font-size: 11px; }
+    .signal-item { display: flex; justify-content: space-between; padding: 4px; background: #edf2f7; border-radius: 4px; }
+    .signal-label { color: #718096; }
+    .signal-value { font-weight: 600; color: #2d3748; }
+    
+    .trade-setup { background: #edf2f7; padding: 10px; border-radius: 8px; margin-top: 10px; font-size: 12px; }
+    .trade-setup.active { background: #c6f6d5; border: 2px solid #48bb78; }
+    .setup-row { display: flex; justify-content: space-between; margin-bottom: 5px; }
+    
+    .decision-badge { display: inline-block; padding: 8px 16px; border-radius: 6px; font-weight: 600; font-size: 12px; margin-top: 10px; }
+    .decision-badge.take { background: #48bb78; color: white; }
+    .decision-badge.consider { background: #4299e1; color: white; }
+    .decision-badge.skip { background: #a0aec0; color: white; }
+    
+    .last-update { text-align: center; color: white; font-size: 12px; margin-top: 20px; opacity: 0.8; }
+</style>
+
+<div class="header">
+    <h1>🎯 V5 Dashboard</h1>
+    <div class="subtitle">100-Point Momentum Confirmation • 15 Tickers • 30+ Trades/Month</div>
+</div>
+
+<div class="stats-bar">
+    <div class="stat">
+        <div class="stat-value" id="statActiveSignals">-</div>
+        <div class="stat-label">Active Signals (≥80)</div>
+    </div>
+    <div class="stat">
+        <div class="stat-value" id="statAvgScore">-</div>
+        <div class="stat-label">Average Score</div>
+    </div>
+    <div class="stat">
+        <div class="stat-value" id="statGradeA">-</div>
+        <div class="stat-label">A/A+ Grades</div>
+    </div>
+    <div class="stat">
+        <div class="stat-value" id="statLastUpdate">Initializing...</div>
+        <div class="stat-label">Last Update</div>
+    </div>
+</div>
+
+<div class="stock-grid" id="stockGrid">
+    <!-- Cards will be inserted here -->
+</div>
+
+<div class="last-update">Auto-refreshing every 30 seconds during market hours</div>
+
+<script>
+const TICKERS = [
+    'AMD', 'NVDA', 'TSLA',  // Proven performers
+    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META',  // Mega caps
+    'NFLX', 'AVGO', 'ORCL', 'ADBE',  // Mid caps
+    'CRM', 'INTC', 'QCOM'  // Additional tech
+];
+
+let scoresCache = {};
+let refreshInterval = null;
+
+// Initialize on page load
+async function init() {
+    console.log('🚀 V5 Dashboard initializing...');
+    await loadAllScores();
+    
+    // Auto-refresh every 30 seconds
+    refreshInterval = setInterval(loadAllScores, 30000);
+    
+    console.log('✅ V5 Dashboard ready');
+}
+
+async function loadAllScores() {
+    const grid = document.getElementById('stockGrid');
+    
+    try {
+        // Fetch all scores in parallel
+        const promises = TICKERS.map(ticker => 
+            fetch(`/api/v5/score/${ticker}`)
+                .then(r => r.json())
+                .catch(err => {
+                    console.error(`Error fetching ${ticker}:`, err);
+                    return null;
+                })
+        );
+        
+        const results = await Promise.all(promises);
+        
+        // Update cache
+        results.forEach((data, idx) => {
+            if (data) {
+                scoresCache[TICKERS[idx]] = data;
+            }
+        });
+        
+        // Render cards
+        grid.innerHTML = TICKERS.map(ticker => {
+            const data = scoresCache[ticker];
+            return data ? createCard(ticker, data) : createLoadingCard(ticker);
+        }).join('');
+        
+        // Update stats
+        updateStats(results.filter(r => r !== null));
+        
+        // Update timestamp
+        const now = new Date();
+        document.getElementById('statLastUpdate').textContent = 
+            now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        
+    } catch (error) {
+        console.error('Error loading scores:', error);
+        grid.innerHTML = '<p style="color:white; text-align:center;">Error loading data. Retrying...</p>';
+    }
+}
+
+function createCard(ticker, data) {
+    const gradeClass = data.grade.charAt(0);  // A, B, C, D, F
+    const isSignal = data.score >= 80;
+    const decisionClass = data.decision.includes('TAKE') ? 'take' : 
+                          data.decision.includes('CONSIDER') ? 'consider' : 'skip';
+    
+    const breakdown = data.breakdown || {};
+    
+    return `
+        <div class="stock-card grade-${gradeClass}" onclick="showDetails('${ticker}')">
+            <div class="card-header">
+                <div class="ticker">${ticker}</div>
+                <div class="grade-badge ${gradeClass}">${data.grade}</div>
+            </div>
+            
+            <div class="price-section">
+                <div class="current-price">$${data.current_price ? data.current_price.toFixed(2) : '-'}</div>
+                <div class="price-change ${data.direction === 'CALL' ? 'positive' : 'negative'}">
+                    ${data.direction} • Range: ${data.intraday_range || 0}%
+                </div>
+            </div>
+            
+            <div class="score-section">
+                <div class="score-value">${data.score}/100</div>
+                <div class="score-label">${isSignal ? '🟢 SIGNAL' : '⚪ MONITORING'}</div>
+            </div>
+            
+            <div class="signals-grid">
+                <div class="signal-item">
+                    <span class="signal-label">Catalyst</span>
+                    <span class="signal-value">${breakdown.catalyst?.score || 0}</span>
+                </div>
+                <div class="signal-item">
+                    <span class="signal-label">Volume</span>
+                    <span class="signal-value">${breakdown.volume?.score || 0}</span>
+                </div>
+                <div class="signal-item">
+                    <span class="signal-label">Direction</span>
+                    <span class="signal-value">${breakdown.direction?.score || 0}</span>
+                </div>
+                <div class="signal-item">
+                    <span class="signal-label">Range</span>
+                    <span class="signal-value">${breakdown.range?.score || 0}</span>
+                </div>
+                <div class="signal-item">
+                    <span class="signal-label">Timing</span>
+                    <span class="signal-value">${breakdown.timing?.score || 0}</span>
+                </div>
+                <div class="signal-item">
+                    <span class="signal-label">RSI</span>
+                    <span class="signal-value">${breakdown.rsi?.score || 0}</span>
+                </div>
+            </div>
+            
+            ${isSignal ? `
+            <div class="trade-setup active">
+                <div class="setup-row">
+                    <span>Entry:</span>
+                    <strong>$${data.trade_setup?.entry_price || '-'}</strong>
+                </div>
+                <div class="setup-row">
+                    <span>Target:</span>
+                    <strong>$${data.trade_setup?.target_price || '-'}</strong>
+                </div>
+                <div class="setup-row">
+                    <span>Stop:</span>
+                    <strong>$${data.trade_setup?.stop_price || '-'}</strong>
+                </div>
+            </div>
+            ` : ''}
+            
+            <div class="decision-badge ${decisionClass}">
+                ${data.decision}
+            </div>
+        </div>
+    `;
+}
+
+function createLoadingCard(ticker) {
+    return `
+        <div class="stock-card loading">
+            <div class="card-header">
+                <div class="ticker">${ticker}</div>
+                <div class="grade-badge F">-</div>
+            </div>
+            <div style="text-align:center; padding:40px; color:#a0aec0;">
+                Loading...
+            </div>
+        </div>
+    `;
+}
+
+function updateStats(results) {
+    const activeSignals = results.filter(r => r && r.score >= 80).length;
+    const avgScore = results.length > 0 ? 
+        Math.round(results.reduce((sum, r) => sum + (r ? r.score : 0), 0) / results.length) : 0;
+    const gradeA = results.filter(r => r && (r.grade === 'A+' || r.grade === 'A' || r.grade === 'A-')).length;
+    
+    document.getElementById('statActiveSignals').textContent = activeSignals;
+    document.getElementById('statAvgScore').textContent = avgScore;
+    document.getElementById('statGradeA').textContent = gradeA;
+}
+
+function showDetails(ticker) {
+    const data = scoresCache[ticker];
+    if (!data) return;
+    
+    alert(`${ticker} Details:\n\n` +
+          `Score: ${data.score}/100\n` +
+          `Grade: ${data.grade}\n` +
+          `Direction: ${data.direction}\n` +
+          `Price: $${data.current_price}\n` +
+          `Range: ${data.intraday_range}%\n\n` +
+          `Decision: ${data.decision}`);
+}
+
+// Start on load
+window.addEventListener('load', init);
+
+// Cleanup on unload
+window.addEventListener('beforeunload', () => {
+    if (refreshInterval) {
+        clearInterval(refreshInterval);
+    }
+});
+</script>
+{% endblock %}

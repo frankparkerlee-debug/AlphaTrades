@@ -749,6 +749,61 @@ def _generate_recommendation(convergence, option):
         'risk_reward': '1:1.67'
     }
 
+@app.route('/v5')
+def v5_dashboard():
+    """V5 Dashboard - 100-Point Momentum Confirmation Strategy"""
+    return render_template('v5_dashboard.html')
+
+@app.route('/api/v5/score/<symbol>')
+def api_v5_score(symbol):
+    """Get V5 score for a ticker"""
+    try:
+        from scorer_v5 import get_v5_scorer
+        
+        # Get current quote
+        alpaca = AlpacaClient()
+        snapshot = alpaca.get_snapshot(symbol.upper())
+        
+        if not snapshot:
+            return jsonify({'error': 'No data available'}), 404
+        
+        # Get 20-day average volume (from bars)
+        bars = alpaca.get_bars(symbol.upper(), timeframe='1Day', limit=20)
+        if bars and len(bars) > 0:
+            avg_volume = sum(bar['v'] for bar in bars) / len(bars)
+        else:
+            avg_volume = snapshot.get('v', 0)
+        
+        # Build quote_data for scorer
+        quote_data = {
+            'open': snapshot.get('o', 0),
+            'high': snapshot.get('h', 0),
+            'low': snapshot.get('l', 0),
+            'current': snapshot.get('c', 0),
+            'volume': snapshot.get('v', 0),
+            'avg_volume': avg_volume
+        }
+        
+        # Get SPY for market alignment (optional)
+        market_data = None
+        try:
+            spy_snapshot = alpaca.get_snapshot('SPY')
+            if spy_snapshot:
+                spy_direction = 'UP' if spy_snapshot.get('c', 0) > spy_snapshot.get('o', 0) else 'DOWN'
+                market_data = {'spy_direction': spy_direction}
+        except:
+            pass
+        
+        # Calculate V5 score
+        scorer = get_v5_scorer()
+        result = scorer.score_ticker(symbol.upper(), quote_data, market_data)
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error scoring {symbol}: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/favicon.ico')
 def favicon():
     """Return simple favicon to prevent 404"""
