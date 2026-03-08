@@ -267,13 +267,19 @@ class V5Scorer:
     
     def _calculate_trade_setup(self, ticker, current, is_bullish, direction, intraday_range):
         """Calculate trade setup details"""
-        # Target and stop prices
+        if current <= 0:
+            return {}
+        
+        # Target and stop prices (dynamic based on momentum)
+        # Use intraday range to scale targets - bigger range = bigger targets
+        range_multiplier = max(1.0, min(2.0, intraday_range / 2.0))  # 1x to 2x based on range
+        
         if is_bullish:
-            target_price = current * 1.015  # +1.5% target
-            stop_price = current * 0.995  # -0.5% stop
+            target_price = current * (1 + 0.015 * range_multiplier)  # +1.5% to +3% target
+            stop_price = current * 0.65  # -35% stop loss
         else:
-            target_price = current * 0.985  # -1.5% target
-            stop_price = current * 1.005  # +0.5% stop
+            target_price = current * (1 - 0.015 * range_multiplier)  # -1.5% to -3% target
+            stop_price = current * 1.35  # +35% stop loss
         
         # ATM strike calculation
         if current >= 500:
