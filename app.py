@@ -60,8 +60,13 @@ def hold_time(entry_time):
     return f"{hours}h"
 
 @app.route('/')
+def home():
+    """Main Dashboard - V5 Strategy"""
+    return render_template('v5_pro.html')
+
+@app.route('/archive/stock-cards')
 def stock_cards():
-    """Stock Cards Page - Live monitoring"""
+    """ARCHIVED: Stock Cards Page - Live monitoring"""
     return render_template(
         'stock_cards.html',
         alpaca_key=ALPACA_API_KEY,
@@ -69,9 +74,9 @@ def stock_cards():
         alpaca_data_url=ALPACA_DATA_URL
     )
 
-@app.route('/trader')
+@app.route('/archive/trader')
 def trader_simulation():
-    """Trader Simulation Page - Performance dashboard"""
+    """ARCHIVED: Trader Simulation Page - Performance dashboard"""
     session = get_session()
     
     try:
@@ -139,9 +144,9 @@ def trader_simulation():
     finally:
         session.close()
 
-@app.route('/feed')
+@app.route('/archive/feed')
 def options_feed():
-    """Options Feed Page - Historical alerts with filters"""
+    """ARCHIVED: Options Feed Page - Historical alerts with filters"""
     session = get_session()
     
     try:
@@ -816,15 +821,58 @@ def api_v5_score(symbol):
         scorer = get_v5_scorer()
         result = scorer.score_ticker(symbol.upper(), quote_data, market_data)
         
+        # Add real options data if available
+        try:
+            trade_setup = result.get('trade_setup', {})
+            if trade_setup and 'direction' in trade_setup:
+                direction = trade_setup['direction']
+                option_type = 'call' if direction == 'CALL' else 'put'
+                
+                # Get options chain
+                chain_data = alpaca.get_options_chain(symbol.upper())
+                
+                if 'error' not in chain_data and chain_data.get('snapshots'):
+                    selector = get_selector()
+                    optimal_option = selector.select_best_contract(
+                        chain_data.get('snapshots', {}),
+                        snapshot.get('c', 0),
+                        option_type
+                    )
+                    
+                    if optimal_option:
+                        result['option'] = {
+                            'symbol': optimal_option['symbol'],
+                            'strike': optimal_option['strike'],
+                            'expiration': optimal_option['expiration'].strftime('%Y-%m-%d'),
+                            'dte': optimal_option['dte'],
+                            'bid': optimal_option['bid'],
+                            'ask': optimal_option['ask'],
+                            'mid': optimal_option['mid'],
+                            'last': optimal_option['last'],
+                            'delta': optimal_option['delta'],
+                            'iv': optimal_option['iv'],
+                            'volume': optimal_option['volume'],
+                            'open_interest': optimal_option['open_interest'],
+                            'pct_otm': optimal_option['pct_otm']
+                        }
+        except Exception as e:
+            logger.warning(f"Could not fetch options for {symbol}: {e}")
+            # Continue without options data
+        
         return jsonify(result)
         
     except Exception as e:
         logger.error(f"Error scoring {symbol}: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/backtest')
+def backtest():
+    """Backtest Page - Browser-based backtesting"""
+    return render_template('v5_backtest.html')
+
 @app.route('/v5/backtest')
 def v5_backtest():
-    """V5 Backtest Page - Browser-based backtesting"""
+    """V5 Backtest Page (legacy route)"""
     return render_template('v5_backtest.html')
 
 @app.route('/api/v5/backtest/run', methods=['POST'])
@@ -833,23 +881,25 @@ def api_v5_backtest_run():
     try:
         data = request.json
         tickers = data.get('tickers', [])
+        strategy = data.get('strategy', 'momentum')
         threshold = data.get('threshold', 'B+')
         start_date = data.get('start_date', '2025-03-01')
         end_date = data.get('end_date', '2026-03-01')
+        starting_capital = data.get('starting_capital', 600)
         
         if not tickers:
             return jsonify({'error': 'No tickers provided'}), 400
         
-        logger.info(f"Running Alpaca backtest: {len(tickers)} tickers, {threshold} threshold, {start_date} to {end_date}")
+        logger.info(f"Running Alpaca backtest: {len(tickers)} tickers, {strategy} strategy, {threshold} threshold, ${starting_capital} capital, {start_date} to {end_date}")
         
         # Import Alpaca backtest engine
         from backtest_v5_alpaca import V5BacktesterAlpaca
         
         # Run backtest
-        backtester = V5BacktesterAlpaca(tickers, start_date, end_date)
+        backtester = V5BacktesterAlpaca(tickers, start_date, end_date, starting_capital=starting_capital)
         results = backtester.run_backtest(threshold)
         
-        logger.info(f"Backtest complete: {results['total_trades']} trades, {results['win_rate']:.1f}% win rate")
+        logger.info(f"Backtest complete: {results['total_trades']} trades, {results['win_rate']:.1f}% win rate, ${results['total_pnl']:.2f} P&L")
         
         return jsonify(results)
         

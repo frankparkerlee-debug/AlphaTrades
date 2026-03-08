@@ -281,9 +281,9 @@
         </header>
         
         <div class="nav-links">
-            <a href="/v5">← Back to Dashboard</a>
-            <a href="/">Stock Cards</a>
-            <a href="/trader">Trader</a>
+            <a href="/">← Dashboard</a>
+            <a href="/backtest" class="active">Backtest</a>
+            <a href="/archive/stock-cards">Archive</a>
         </div>
         
         <div class="backtest-form">
@@ -356,6 +356,15 @@
             </div>
             
             <div class="form-group">
+                <label>Strategy</label>
+                <select id="strategy">
+                    <option value="momentum" selected>V5 Momentum (100-Point Scoring)</option>
+                    <option value="earnings" disabled>Earnings Catalyst (Coming Soon)</option>
+                    <option value="reversal" disabled>Mean Reversion (Coming Soon)</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
                 <label>Entry Threshold</label>
                 <select id="threshold">
                     <option value="B">B (70+)</option>
@@ -364,6 +373,11 @@
                     <option value="A">A (85+)</option>
                     <option value="A+">A+ (90+)</option>
                 </select>
+            </div>
+            
+            <div class="form-group">
+                <label>Starting Capital</label>
+                <input type="number" id="startingCapital" value="600" min="100" step="100" placeholder="Starting capital ($)">
             </div>
             
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
@@ -409,9 +423,11 @@
                 return;
             }
             
+            const strategy = document.getElementById('strategy').value;
             const threshold = document.getElementById('threshold').value;
             const startDate = document.getElementById('startDate').value;
             const endDate = document.getElementById('endDate').value;
+            const startingCapital = parseInt(document.getElementById('startingCapital').value) || 600;
             
             // Hide results, show loading
             document.getElementById('results').classList.remove('visible');
@@ -427,9 +443,11 @@
                     },
                     body: JSON.stringify({
                         tickers: selectedTickers,
+                        strategy: strategy,
                         threshold: threshold,
                         start_date: startDate,
-                        end_date: endDate
+                        end_date: endDate,
+                        starting_capital: startingCapital
                     })
                 });
                 

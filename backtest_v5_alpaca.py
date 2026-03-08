@@ -28,10 +28,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class V5BacktesterAlpaca:
-    def __init__(self, tickers, start_date, end_date):
+    def __init__(self, tickers, start_date, end_date, starting_capital=600):
         self.tickers = tickers
         self.start_date = start_date
         self.end_date = end_date
+        self.starting_capital = starting_capital
         self.scorer = V5Scorer()
         self.alpaca = AlpacaClient()
         
@@ -197,32 +198,83 @@ class V5BacktesterAlpaca:
                 if score < threshold:
                     continue
                 
-                # RULE: No trading first 15 minutes (simulated - we skip this in daily data)
-                # In real-time, would check: if current_time < 9:45 AM ET, skip
+                # Signal detected on day i - enter next bar (can be same day or next)
+                if i + 1 >= len(bars):
+                    continue  # Need at least one bar ahead
                 
-                # Simulate trade (same-day exit)
-                entry_price = close
-                exit_price = close  # Same-day exit at close
+                # Enter at next bar's open (could be same day if intraday, or next day if EOD)
+                entry_index = i + 1
+                next_bar = bars[entry_index]
+                entry_price = float(next_bar['o'])
                 
-                # Calculate P/L (using simplified 1:1 option pricing)
-                # Assume ATM option moves ~0.7x underlying for small moves
+                # Find exit - check same bar first (for same-day momentum), then future bars
+                exit_price = None
+                exit_index = None
+                max_hold_days = 3  # Max 3 bars ahead
+                
+                # Check from entry bar onwards (allows same-day exits for momentum)
+                for j in range(entry_index, min(entry_index + max_hold_days, len(bars))):
+                    exit_bar = bars[j]
+                    exit_close = float(exit_bar['c'])
+                    
+                    # Exit conditions:
+                    is_bullish = score_result['direction'] == 'CALL'
+                    move_pct = ((exit_close - entry_price) / entry_price) * 100
+                    
+                    # Exit if hit target OR stop OR max hold reached
+                    # Targets are looser to allow trades to develop
+                    if is_bullish:
+                        # CALL: Exit if stock up 2%+ (target) OR down 1%+ (stop) OR max hold
+                        if move_pct >= 2.0 or move_pct <= -1.0 or j >= entry_index + max_hold_days:
+                            exit_price = exit_close
+                            exit_index = j
+                            break
+                    else:  # PUT
+                        # PUT: Exit if stock down 2%+ (target) OR up 1%+ (stop) OR max hold
+                        if move_pct <= -2.0 or move_pct >= 1.0 or j >= entry_index + max_hold_days:
+                            exit_price = exit_close
+                            exit_index = j
+                            break
+                
+                if exit_price is None:
+                    continue  # No valid exit found
+                
+                # Calculate P/L on options (approximate using delta)
                 underlying_move_pct = ((exit_price - entry_price) / entry_price) * 100
-                option_move_pct = underlying_move_pct * 0.7  # Delta approximation
                 
-                # Position size: $1000
-                position_size = 1000
-                pnl = position_size * (option_move_pct / 100)
+                # CORRECT option P/L calculation
+                # Example: Stock $100 → $104 (+4%)
+                # Option at $2.50 (2.5% of stock)
+                # Stock move: $4
+                # Option move: $4 * 0.5 (delta) = $2
+                # Option % move: $2 / $2.50 = 80%
+                # P&L on $120 position: $96
+                
+                option_entry_price = entry_price * 0.025  # ~2.5% of stock price
+                option_delta = 0.5  # ATM delta
+                
+                stock_move_dollars = exit_price - entry_price
+                option_move_dollars = stock_move_dollars * option_delta
+                option_pct_move = (option_move_dollars / option_entry_price) * 100
+                
+                # Position sizing based on starting capital
+                position_size = min(self.starting_capital * 0.2, 200)  # 20% max, $200 cap
+                pnl = position_size * (option_pct_move / 100)
+                
+                hold_days = exit_index - entry_index  # Days held (1, 2, or 3)
                 
                 trades.append({
                     'ticker': ticker,
-                    'date': date.strftime('%Y-%m-%d'),
+                    'entry_date': bars[entry_index]['t'][:10],
+                    'exit_date': bars[exit_index]['t'][:10],
+                    'hold_days': hold_days,
                     'score': score,
                     'grade': score_result['grade'],
                     'direction': score_result['direction'],
                     'entry': entry_price,
                     'exit': exit_price,
                     'underlying_move_pct': underlying_move_pct,
-                    'option_move_pct': option_move_pct,
+                    'option_pct_move': option_pct_move,
                     'pnl': pnl,
                     'position_size': position_size
                 })

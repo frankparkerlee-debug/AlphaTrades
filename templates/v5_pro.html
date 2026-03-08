@@ -52,6 +52,32 @@
     .nav-stat-value.positive { color: #10b981; }
     .nav-stat-value.negative { color: #ef4444; }
     
+    .nav-links {
+        display: flex;
+        gap: 20px;
+        align-items: center;
+    }
+    
+    .nav-link {
+        color: #94a3b8;
+        text-decoration: none;
+        font-size: 13px;
+        font-weight: 500;
+        padding: 6px 12px;
+        border-radius: 4px;
+        transition: all 0.2s;
+    }
+    
+    .nav-link:hover {
+        color: #fff;
+        background: #1a1f3a;
+    }
+    
+    .nav-link.active {
+        color: #3b82f6;
+        background: rgba(59, 130, 246, 0.1);
+    }
+    
     /* Main Content */
     .main-content {
         max-width: 1800px;
@@ -329,6 +355,20 @@
         color: #64748b;
     }
     
+    .option-contract.real-data {
+        background: rgba(16, 185, 129, 0.05);
+        border: 1px solid rgba(16, 185, 129, 0.2);
+        border-radius: 4px;
+        padding: 10px;
+    }
+    
+    .option-symbol {
+        font-size: 12px;
+        font-weight: 600;
+        color: #10b981;
+        font-family: 'Courier New', monospace;
+    }
+    
     /* Trade Setup */
     .trade-setup {
         background: #1a1f3a;
@@ -434,6 +474,11 @@
     <div class="logo">
         ALPHA<span class="logo-accent">TRADES</span> <span style="font-size:12px; color:#64748b; font-weight:400;">V5 Pro</span>
     </div>
+    <div class="nav-links">
+        <a href="/" class="nav-link active">Dashboard</a>
+        <a href="/backtest" class="nav-link">Backtest</a>
+        <a href="/archive/stock-cards" class="nav-link">Archive</a>
+    </div>
     <div class="nav-stats">
         <div>
             <span class="nav-stat-label">SIGNALS</span>
@@ -475,7 +520,33 @@
     <div class="stock-grid" id="stockGrid">
         <!-- Cards will be inserted here -->
     </div>
+    
+    <!-- Archive Links Footer -->
+    <div style="margin-top: 60px; padding: 30px 0; border-top: 1px solid #1a1f3a; text-align: center;">
+        <div style="color: #64748b; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 15px;">
+            Legacy Tools
+        </div>
+        <div style="display: flex; gap: 20px; justify-content: center; flex-wrap: wrap;">
+            <a href="/archive/stock-cards" style="color: #94a3b8; text-decoration: none; font-size: 13px; padding: 8px 16px; border: 1px solid #2d3548; border-radius: 6px; transition: all 0.2s;">
+                Stock Cards
+            </a>
+            <a href="/archive/trader" style="color: #94a3b8; text-decoration: none; font-size: 13px; padding: 8px 16px; border: 1px solid #2d3548; border-radius: 6px; transition: all 0.2s;">
+                Trader Simulation
+            </a>
+            <a href="/archive/feed" style="color: #94a3b8; text-decoration: none; font-size: 13px; padding: 8px 16px; border: 1px solid #2d3548; border-radius: 6px; transition: all 0.2s;">
+                Options Feed
+            </a>
+        </div>
+    </div>
 </div>
+
+<style>
+    div[style*="Legacy Tools"] + div a:hover {
+        color: #fff;
+        background: #1a1f3a;
+        border-color: #3b82f6;
+    }
+</style>
 
 <script>
 const TICKERS = ['AMD', 'NVDA', 'TSLA', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NFLX', 'AVGO', 'ORCL', 'ADBE', 'CRM', 'INTC', 'QCOM'];
@@ -617,7 +688,7 @@ function createCard(ticker, data) {
                 </div>
             </div>
             
-            ${data.trade_setup && isSignal ? `
+            ${data.trade_setup ? `
             <div class="trade-setup">
                 <div class="setup-header">TRADE SETUP</div>
                 <div class="setup-row">
@@ -635,27 +706,55 @@ function createCard(ticker, data) {
             </div>
             
             <div class="options-section">
-                <div class="options-header">RECOMMENDED OPTIONS</div>
-                <div class="option-contract">
-                    <div>
-                        <span class="option-strike">$${data.trade_setup.atm_strike || '-'}</span>
-                        <span class="option-type">ATM ${data.direction}</span>
-                    </div>
-                    <div>
-                        <div class="option-premium">$${data.trade_setup.atm_premium_est || '-'}</div>
-                        <div class="option-target">Target: $${(data.trade_setup.atm_premium_est * 1.5).toFixed(2)}</div>
-                    </div>
+                <div class="options-header">
+                    ${data.option ? 'LIVE OPTIONS DATA' : 'RECOMMENDED OPTIONS (ESTIMATED)'}
                 </div>
-                <div class="option-contract">
-                    <div>
-                        <span class="option-strike">$${data.trade_setup.otm_strike || '-'}</span>
-                        <span class="option-type">OTM ${data.direction}</span>
+                ${data.option ? `
+                    <div class="option-contract real-data">
+                        <div>
+                            <div class="option-symbol">${data.option.symbol || ticker}</div>
+                            <div style="font-size:11px; color:#64748b;">
+                                $${data.option.strike} ${data.direction} · ${data.option.dte}DTE
+                            </div>
+                        </div>
+                        <div>
+                            <div class="option-premium">
+                                BID: $${data.option.bid?.toFixed(2) || '-'} 
+                                / ASK: $${data.option.ask?.toFixed(2) || '-'}
+                            </div>
+                            <div class="option-target">
+                                MID: $${data.option.mid?.toFixed(2) || '-'} 
+                                | Target: $${(data.option.mid * 1.5).toFixed(2)}
+                            </div>
+                            <div style="font-size:10px; color:#64748b; margin-top:4px;">
+                                Δ ${data.option.delta?.toFixed(3) || '-'} 
+                                | IV ${(data.option.iv * 100).toFixed(1)}% 
+                                | Vol ${data.option.volume || 0}
+                            </div>
+                        </div>
                     </div>
-                    <div>
-                        <div class="option-premium">$${data.trade_setup.otm_premium_est || '-'}</div>
-                        <div class="option-target">Target: $${(data.trade_setup.otm_premium_est * 1.7).toFixed(2)}</div>
+                ` : `
+                    <div class="option-contract">
+                        <div>
+                            <span class="option-strike">$${data.trade_setup.atm_strike || '-'}</span>
+                            <span class="option-type">ATM ${data.direction}</span>
+                        </div>
+                        <div>
+                            <div class="option-premium">~$${data.trade_setup.atm_premium_est || '-'}</div>
+                            <div class="option-target">Target: $${(data.trade_setup.atm_premium_est * 1.5).toFixed(2)}</div>
+                        </div>
                     </div>
-                </div>
+                    <div class="option-contract">
+                        <div>
+                            <span class="option-strike">$${data.trade_setup.otm_strike || '-'}</span>
+                            <span class="option-type">OTM ${data.direction}</span>
+                        </div>
+                        <div>
+                            <div class="option-premium">~$${data.trade_setup.otm_premium_est || '-'}</div>
+                            <div class="option-target">Target: $${(data.trade_setup.otm_premium_est * 1.7).toFixed(2)}</div>
+                        </div>
+                    </div>
+                `}
             </div>
             ` : ''}
         </div>
