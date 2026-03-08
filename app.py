@@ -816,7 +816,7 @@ def v5_backtest():
 
 @app.route('/api/v5/backtest/run', methods=['POST'])
 def api_v5_backtest_run():
-    """Run V5 backtest server-side (uses Render API keys)"""
+    """Run V5 backtest server-side using Alpaca historical data"""
     try:
         data = request.json
         tickers = data.get('tickers', [])
@@ -827,13 +827,13 @@ def api_v5_backtest_run():
         if not tickers:
             return jsonify({'error': 'No tickers provided'}), 400
         
-        logger.info(f"Running backtest: {len(tickers)} tickers, {threshold} threshold, {start_date} to {end_date}")
+        logger.info(f"Running Alpaca backtest: {len(tickers)} tickers, {threshold} threshold, {start_date} to {end_date}")
         
-        # Import backtest engine
-        from backtest_v5 import V5Backtester
+        # Import Alpaca backtest engine
+        from backtest_v5_alpaca import V5BacktesterAlpaca
         
         # Run backtest
-        backtester = V5Backtester(tickers, start_date, end_date)
+        backtester = V5BacktesterAlpaca(tickers, start_date, end_date)
         results = backtester.run_backtest(threshold)
         
         logger.info(f"Backtest complete: {results['total_trades']} trades, {results['win_rate']:.1f}% win rate")
