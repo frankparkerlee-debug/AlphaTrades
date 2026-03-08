@@ -213,25 +213,33 @@ class V5BacktesterAlpaca:
                 max_hold_days = 3  # Max 3 bars ahead
                 
                 # Check from entry bar onwards (allows same-day exits for momentum)
+                # Exit based on OPTION P/L, not just stock movement
+                option_entry_price = entry_price * 0.025  # Calculate option entry price
+                
                 for j in range(entry_index, min(entry_index + max_hold_days, len(bars))):
                     exit_bar = bars[j]
                     exit_close = float(exit_bar['c'])
                     
-                    # Exit conditions:
-                    is_bullish = score_result['direction'] == 'CALL'
-                    move_pct = ((exit_close - entry_price) / entry_price) * 100
+                    # Calculate option P/L for this bar
+                    stock_move_dollars = exit_close - entry_price
+                    option_move_dollars = stock_move_dollars * 0.5  # delta
+                    option_current_price = option_entry_price + option_move_dollars
+                    option_pnl_pct = ((option_current_price - option_entry_price) / option_entry_price) * 100
                     
-                    # Exit if hit target OR stop OR max hold reached
-                    # Targets are looser to allow trades to develop
+                    is_bullish = score_result['direction'] == 'CALL'
+                    
+                    # Exit conditions based on OPTION performance
+                    # Target: +50% on option (better risk/reward)
+                    # Stop: -30% on option (tighter loss control)
                     if is_bullish:
-                        # CALL: Exit if stock up 2%+ (target) OR down 1%+ (stop) OR max hold
-                        if move_pct >= 2.0 or move_pct <= -1.0 or j >= entry_index + max_hold_days:
+                        # CALL: Exit if option +50% (target) OR -30% (stop) OR max hold
+                        if option_pnl_pct >= 50.0 or option_pnl_pct <= -30.0 or j >= entry_index + max_hold_days - 1:
                             exit_price = exit_close
                             exit_index = j
                             break
                     else:  # PUT
-                        # PUT: Exit if stock down 2%+ (target) OR up 1%+ (stop) OR max hold
-                        if move_pct <= -2.0 or move_pct >= 1.0 or j >= entry_index + max_hold_days:
+                        # PUT: Exit if option +50% (target) OR -30% (stop) OR max hold
+                        if option_pnl_pct >= 50.0 or option_pnl_pct <= -30.0 or j >= entry_index + max_hold_days - 1:
                             exit_price = exit_close
                             exit_index = j
                             break

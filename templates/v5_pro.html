@@ -52,32 +52,6 @@
     .nav-stat-value.positive { color: #10b981; }
     .nav-stat-value.negative { color: #ef4444; }
     
-    .nav-links {
-        display: flex;
-        gap: 20px;
-        align-items: center;
-    }
-    
-    .nav-link {
-        color: #94a3b8;
-        text-decoration: none;
-        font-size: 13px;
-        font-weight: 500;
-        padding: 6px 12px;
-        border-radius: 4px;
-        transition: all 0.2s;
-    }
-    
-    .nav-link:hover {
-        color: #fff;
-        background: #1a1f3a;
-    }
-    
-    .nav-link.active {
-        color: #3b82f6;
-        background: rgba(59, 130, 246, 0.1);
-    }
-    
     /* Main Content */
     .main-content {
         max-width: 1800px;
@@ -474,11 +448,6 @@
     <div class="logo">
         ALPHA<span class="logo-accent">TRADES</span> <span style="font-size:12px; color:#64748b; font-weight:400;">V5 Pro</span>
     </div>
-    <div class="nav-links">
-        <a href="/" class="nav-link active">Dashboard</a>
-        <a href="/backtest" class="nav-link">Backtest</a>
-        <a href="/archive/stock-cards" class="nav-link">Archive</a>
-    </div>
     <div class="nav-stats">
         <div>
             <span class="nav-stat-label">SIGNALS</span>
@@ -714,7 +683,7 @@ function createCard(ticker, data) {
                         <div>
                             <div class="option-symbol">${data.option.symbol || ticker}</div>
                             <div style="font-size:11px; color:#64748b;">
-                                $${data.option.strike} ${data.direction} · ${data.option.dte}DTE
+                                $${data.option.strike} ${data.direction} · Exp ${data.option.expiration || '-'} (${data.option.dte}DTE)
                             </div>
                         </div>
                         <div>
@@ -724,7 +693,7 @@ function createCard(ticker, data) {
                             </div>
                             <div class="option-target">
                                 MID: $${data.option.mid?.toFixed(2) || '-'} 
-                                | Target: $${(data.option.mid * 1.5).toFixed(2)}
+                                | Target: $${(data.option.mid * 1.5).toFixed(2)} (+50%)
                             </div>
                             <div style="font-size:10px; color:#64748b; margin-top:4px;">
                                 Δ ${data.option.delta?.toFixed(3) || '-'} 
