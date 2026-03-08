@@ -785,7 +785,8 @@ def api_v5_score(symbol):
             return jsonify({'error': 'No data available'}), 404
         
         # Get 20-day average volume (from bars)
-        bars = alpaca.get_bars(symbol.upper(), timeframe='1Day', limit=20)
+        bars_response = alpaca.get_bars(symbol.upper(), timeframe='1Day', limit=20)
+        bars = bars_response.get('bars', []) if bars_response else []
         if bars and len(bars) > 0:
             avg_volume = sum(bar['v'] for bar in bars) / len(bars)
         else:
