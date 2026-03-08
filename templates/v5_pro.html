@@ -1,0 +1,699 @@
+{% extends "base.html" %}
+
+{% block title %}V5 Trade Station - AlphaTrades{% endblock %}
+
+{% block content %}
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: #0a0e27;
+        color: #e0e6ed;
+        min-height: 100vh;
+        padding: 0;
+    }
+    
+    /* Top Navigation */
+    .top-nav {
+        background: #0f1629;
+        border-bottom: 1px solid #1a1f3a;
+        padding: 12px 24px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    
+    .logo {
+        font-size: 18px;
+        font-weight: 700;
+        color: #fff;
+        letter-spacing: -0.5px;
+    }
+    
+    .logo-accent { color: #3b82f6; }
+    
+    .nav-stats {
+        display: flex;
+        gap: 32px;
+        font-size: 13px;
+    }
+    
+    .nav-stat-label {
+        color: #64748b;
+        margin-right: 8px;
+    }
+    
+    .nav-stat-value {
+        color: #e0e6ed;
+        font-weight: 600;
+    }
+    
+    .nav-stat-value.positive { color: #10b981; }
+    .nav-stat-value.negative { color: #ef4444; }
+    
+    /* Main Content */
+    .main-content {
+        max-width: 1800px;
+        margin: 0 auto;
+        padding: 24px;
+    }
+    
+    /* Filters Bar */
+    .filters-bar {
+        background: #0f1629;
+        border: 1px solid #1a1f3a;
+        border-radius: 8px;
+        padding: 16px 20px;
+        margin-bottom: 20px;
+        display: flex;
+        gap: 16px;
+        align-items: center;
+    }
+    
+    .filter-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    
+    .filter-label {
+        font-size: 12px;
+        color: #64748b;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    .filter-select {
+        background: #1a1f3a;
+        border: 1px solid #2d3548;
+        color: #e0e6ed;
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-size: 13px;
+        cursor: pointer;
+    }
+    
+    .filter-select:focus {
+        outline: none;
+        border-color: #3b82f6;
+    }
+    
+    .refresh-btn {
+        background: #3b82f6;
+        color: white;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        margin-left: auto;
+    }
+    
+    .refresh-btn:hover {
+        background: #2563eb;
+    }
+    
+    .refresh-btn:active {
+        transform: scale(0.98);
+    }
+    
+    /* Stock Grid */
+    .stock-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+        gap: 16px;
+    }
+    
+    /* Stock Card */
+    .stock-card {
+        background: #0f1629;
+        border: 1px solid #1a1f3a;
+        border-radius: 8px;
+        padding: 20px;
+        transition: all 0.2s;
+        cursor: pointer;
+        position: relative;
+    }
+    
+    .stock-card:hover {
+        border-color: #2d3548;
+        transform: translateY(-2px);
+    }
+    
+    .stock-card.signal {
+        border-left: 3px solid #10b981;
+    }
+    
+    .stock-card.loading {
+        opacity: 0.5;
+        pointer-events: none;
+    }
+    
+    /* Card Header */
+    .card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 16px;
+    }
+    
+    .ticker-info {
+        flex: 1;
+    }
+    
+    .ticker {
+        font-size: 18px;
+        font-weight: 700;
+        color: #fff;
+        margin-bottom: 4px;
+    }
+    
+    .price {
+        font-size: 24px;
+        font-weight: 700;
+        color: #e0e6ed;
+        margin-bottom: 4px;
+    }
+    
+    .price-change {
+        font-size: 13px;
+        font-weight: 600;
+    }
+    
+    .price-change.positive { color: #10b981; }
+    .price-change.negative { color: #ef4444; }
+    
+    .grade-badge {
+        background: #1a1f3a;
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-size: 20px;
+        font-weight: 700;
+        line-height: 1;
+        text-align: center;
+        min-width: 56px;
+    }
+    
+    .grade-badge.A { background: #10b981; color: #0a0e27; }
+    .grade-badge.B { background: #3b82f6; color: white; }
+    .grade-badge.C { background: #f59e0b; color: #0a0e27; }
+    .grade-badge.D { background: #64748b; color: white; }
+    
+    /* Score Section */
+    .score-section {
+        background: #1a1f3a;
+        border-radius: 6px;
+        padding: 12px;
+        margin-bottom: 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    
+    .score-value {
+        font-size: 32px;
+        font-weight: 700;
+        color: #fff;
+    }
+    
+    .score-label {
+        font-size: 11px;
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    .score-bar-container {
+        flex: 1;
+        margin-left: 16px;
+    }
+    
+    .score-bar {
+        height: 8px;
+        background: #2d3548;
+        border-radius: 4px;
+        overflow: hidden;
+        margin-bottom: 4px;
+    }
+    
+    .score-bar-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #3b82f6, #10b981);
+        transition: width 0.3s;
+        border-radius: 4px;
+    }
+    
+    /* Signals Grid */
+    .signals-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
+        margin-bottom: 16px;
+        font-size: 11px;
+    }
+    
+    .signal-item {
+        background: #1a1f3a;
+        padding: 8px;
+        border-radius: 4px;
+        text-align: center;
+    }
+    
+    .signal-value {
+        font-size: 16px;
+        font-weight: 700;
+        color: #e0e6ed;
+        margin-bottom: 2px;
+    }
+    
+    .signal-label {
+        color: #64748b;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+    }
+    
+    /* Options Section */
+    .options-section {
+        background: #1a1f3a;
+        border-radius: 6px;
+        padding: 12px;
+        margin-top: 16px;
+    }
+    
+    .options-header {
+        font-size: 11px;
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 10px;
+        font-weight: 600;
+    }
+    
+    .option-contract {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 0;
+        border-top: 1px solid #2d3548;
+    }
+    
+    .option-contract:first-of-type {
+        border-top: none;
+    }
+    
+    .option-strike {
+        font-size: 13px;
+        font-weight: 600;
+        color: #e0e6ed;
+    }
+    
+    .option-type {
+        font-size: 11px;
+        color: #64748b;
+        margin-left: 8px;
+    }
+    
+    .option-premium {
+        font-size: 14px;
+        font-weight: 700;
+        color: #10b981;
+    }
+    
+    .option-target {
+        font-size: 11px;
+        color: #64748b;
+    }
+    
+    /* Trade Setup */
+    .trade-setup {
+        background: #1a1f3a;
+        border: 1px solid #10b981;
+        border-radius: 6px;
+        padding: 12px;
+        margin-top: 12px;
+    }
+    
+    .setup-header {
+        font-size: 11px;
+        color: #10b981;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 10px;
+        font-weight: 600;
+    }
+    
+    .setup-row {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 6px;
+        font-size: 13px;
+    }
+    
+    .setup-row:last-child {
+        margin-bottom: 0;
+    }
+    
+    .setup-label {
+        color: #64748b;
+    }
+    
+    .setup-value {
+        font-weight: 600;
+        color: #e0e6ed;
+    }
+    
+    /* Loading Skeleton */
+    .skeleton {
+        background: linear-gradient(90deg, #1a1f3a 25%, #2d3548 50%, #1a1f3a 75%);
+        background-size: 200% 100%;
+        animation: loading 1.5s infinite;
+        border-radius: 4px;
+    }
+    
+    @keyframes loading {
+        0% { background-position: 200% 0; }
+        100% { background-position: -200% 0; }
+    }
+    
+    .skeleton-text {
+        height: 16px;
+        margin-bottom: 8px;
+    }
+    
+    .skeleton-price {
+        height: 28px;
+        width: 120px;
+        margin-bottom: 8px;
+    }
+    
+    /* Status Indicator */
+    .status-indicator {
+        position: absolute;
+        top: 16px;
+        right: 16px;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #10b981;
+    }
+    
+    .status-indicator.loading {
+        background: #f59e0b;
+        animation: pulse 2s infinite;
+    }
+    
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+    }
+    
+    /* Responsive */
+    @media (max-width: 1400px) {
+        .stock-grid {
+            grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+        }
+    }
+    
+    @media (max-width: 768px) {
+        .stock-grid {
+            grid-template-columns: 1fr;
+        }
+        
+        .nav-stats {
+            display: none;
+        }
+    }
+</style>
+
+<div class="top-nav">
+    <div class="logo">
+        ALPHA<span class="logo-accent">TRADES</span> <span style="font-size:12px; color:#64748b; font-weight:400;">V5 Pro</span>
+    </div>
+    <div class="nav-stats">
+        <div>
+            <span class="nav-stat-label">SIGNALS</span>
+            <span class="nav-stat-value" id="navSignals">-</span>
+        </div>
+        <div>
+            <span class="nav-stat-label">AVG SCORE</span>
+            <span class="nav-stat-value" id="navAvgScore">-</span>
+        </div>
+        <div>
+            <span class="nav-stat-label">UPDATED</span>
+            <span class="nav-stat-value" id="navUpdated">--:--</span>
+        </div>
+    </div>
+</div>
+
+<div class="main-content">
+    <div class="filters-bar">
+        <div class="filter-group">
+            <span class="filter-label">Grade</span>
+            <select class="filter-select" id="filterGrade">
+                <option value="ALL">All Grades</option>
+                <option value="A">A+ / A / A-</option>
+                <option value="B">B+ / B</option>
+                <option value="SIGNAL">Signals Only (≥80)</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <span class="filter-label">Direction</span>
+            <select class="filter-select" id="filterDirection">
+                <option value="ALL">All</option>
+                <option value="CALL">Calls Only</option>
+                <option value="PUT">Puts Only</option>
+            </select>
+        </div>
+        <button class="refresh-btn" id="refreshBtn">Refresh Data</button>
+    </div>
+    
+    <div class="stock-grid" id="stockGrid">
+        <!-- Cards will be inserted here -->
+    </div>
+</div>
+
+<script>
+const TICKERS = ['AMD', 'NVDA', 'TSLA', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NFLX', 'AVGO', 'ORCL', 'ADBE', 'CRM', 'INTC', 'QCOM'];
+let scoresCache = {};
+let optionsCache = {};
+let refreshInterval = null;
+
+async function init() {
+    console.log('V5 Pro initializing...');
+    
+    // Show loading skeletons
+    renderLoadingCards();
+    
+    // Load data
+    await loadAllData();
+    
+    // Auto-refresh every 30 seconds
+    refreshInterval = setInterval(loadAllData, 30000);
+    
+    // Filter handlers
+    document.getElementById('filterGrade').addEventListener('change', renderCards);
+    document.getElementById('filterDirection').addEventListener('change', renderCards);
+    document.getElementById('refreshBtn').addEventListener('click', () => {
+        renderLoadingCards();
+        loadAllData();
+    });
+    
+    console.log('V5 Pro ready');
+}
+
+async function loadAllData() {
+    try {
+        const promises = TICKERS.map(ticker => 
+            fetch(`/api/v5/score/${ticker}`)
+                .then(r => r.json())
+                .catch(err => null)
+        );
+        
+        const results = await Promise.all(promises);
+        
+        results.forEach((data, idx) => {
+            if (data) {
+                scoresCache[TICKERS[idx]] = data;
+            }
+        });
+        
+        renderCards();
+        updateNavStats();
+        
+        const now = new Date();
+        document.getElementById('navUpdated').textContent = 
+            now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+            
+    } catch (error) {
+        console.error('Error loading data:', error);
+    }
+}
+
+function renderLoadingCards() {
+    const grid = document.getElementById('stockGrid');
+    grid.innerHTML = TICKERS.map(ticker => createLoadingCard(ticker)).join('');
+}
+
+function renderCards() {
+    const grade = document.getElementById('filterGrade').value;
+    const direction = document.getElementById('filterDirection').value;
+    
+    let filtered = TICKERS.filter(ticker => {
+        const data = scoresCache[ticker];
+        if (!data) return false;
+        
+        if (grade === 'A' && !['A+', 'A', 'A-'].includes(data.grade)) return false;
+        if (grade === 'B' && !['B+', 'B'].includes(data.grade)) return false;
+        if (grade === 'SIGNAL' && data.score < 80) return false;
+        
+        if (direction !== 'ALL' && data.direction !== direction) return false;
+        
+        return true;
+    });
+    
+    const grid = document.getElementById('stockGrid');
+    grid.innerHTML = filtered.map(ticker => {
+        const data = scoresCache[ticker];
+        return data ? createCard(ticker, data) : createLoadingCard(ticker);
+    }).join('');
+}
+
+function createCard(ticker, data) {
+    const gradeClass = data.grade.charAt(0);
+    const isSignal = data.score >= 80;
+    const scorePercent = data.score;
+    
+    const bd = data.breakdown || {};
+    
+    return `
+        <div class="stock-card ${isSignal ? 'signal' : ''}">
+            ${isSignal ? '<div class="status-indicator"></div>' : ''}
+            
+            <div class="card-header">
+                <div class="ticker-info">
+                    <div class="ticker">${ticker}</div>
+                    <div class="price">$${data.current_price ? data.current_price.toFixed(2) : '-'}</div>
+                    <div class="price-change ${data.direction === 'CALL' ? 'positive' : 'negative'}">
+                        ${data.direction} · ${data.intraday_range || 0}% range
+                    </div>
+                </div>
+                <div class="grade-badge ${gradeClass}">${data.grade}</div>
+            </div>
+            
+            <div class="score-section">
+                <div>
+                    <div class="score-value">${data.score}</div>
+                    <div class="score-label">Score</div>
+                </div>
+                <div class="score-bar-container">
+                    <div class="score-bar">
+                        <div class="score-bar-fill" style="width: ${scorePercent}%"></div>
+                    </div>
+                    <div class="score-label">${isSignal ? 'ACTIVE SIGNAL' : 'MONITORING'}</div>
+                </div>
+            </div>
+            
+            <div class="signals-grid">
+                <div class="signal-item">
+                    <div class="signal-value">${bd.catalyst?.score || 0}</div>
+                    <div class="signal-label">Catalyst</div>
+                </div>
+                <div class="signal-item">
+                    <div class="signal-value">${bd.volume?.score || 0}</div>
+                    <div class="signal-label">Volume</div>
+                </div>
+                <div class="signal-item">
+                    <div class="signal-value">${bd.range?.score || 0}</div>
+                    <div class="signal-label">Range</div>
+                </div>
+                <div class="signal-item">
+                    <div class="signal-value">${bd.timing?.score || 0}</div>
+                    <div class="signal-label">Timing</div>
+                </div>
+            </div>
+            
+            ${data.trade_setup && isSignal ? `
+            <div class="trade-setup">
+                <div class="setup-header">TRADE SETUP</div>
+                <div class="setup-row">
+                    <span class="setup-label">Entry</span>
+                    <span class="setup-value">$${data.trade_setup.entry_price || '-'}</span>
+                </div>
+                <div class="setup-row">
+                    <span class="setup-label">Target</span>
+                    <span class="setup-value">$${data.trade_setup.target_price || '-'} (+${Math.abs(data.trade_setup.target_pct || 0)}%)</span>
+                </div>
+                <div class="setup-row">
+                    <span class="setup-label">Stop</span>
+                    <span class="setup-value">$${data.trade_setup.stop_price || '-'} (${data.trade_setup.stop_pct || 0}%)</span>
+                </div>
+            </div>
+            
+            <div class="options-section">
+                <div class="options-header">RECOMMENDED OPTIONS</div>
+                <div class="option-contract">
+                    <div>
+                        <span class="option-strike">$${data.trade_setup.atm_strike || '-'}</span>
+                        <span class="option-type">ATM ${data.direction}</span>
+                    </div>
+                    <div>
+                        <div class="option-premium">$${data.trade_setup.atm_premium_est || '-'}</div>
+                        <div class="option-target">Target: $${(data.trade_setup.atm_premium_est * 1.5).toFixed(2)}</div>
+                    </div>
+                </div>
+                <div class="option-contract">
+                    <div>
+                        <span class="option-strike">$${data.trade_setup.otm_strike || '-'}</span>
+                        <span class="option-type">OTM ${data.direction}</span>
+                    </div>
+                    <div>
+                        <div class="option-premium">$${data.trade_setup.otm_premium_est || '-'}</div>
+                        <div class="option-target">Target: $${(data.trade_setup.otm_premium_est * 1.7).toFixed(2)}</div>
+                    </div>
+                </div>
+            </div>
+            ` : ''}
+        </div>
+    `;
+}
+
+function createLoadingCard(ticker) {
+    return `
+        <div class="stock-card loading">
+            <div class="status-indicator loading"></div>
+            <div class="card-header">
+                <div class="ticker-info">
+                    <div class="ticker">${ticker}</div>
+                    <div class="skeleton skeleton-price"></div>
+                    <div class="skeleton skeleton-text" style="width: 100px;"></div>
+                </div>
+                <div class="grade-badge">-</div>
+            </div>
+            <div class="score-section">
+                <div class="skeleton skeleton-text" style="width: 60px;"></div>
+            </div>
+        </div>
+    `;
+}
+
+function updateNavStats() {
+    const scores = Object.values(scoresCache);
+    const signals = scores.filter(s => s.score >= 80).length;
+    const avgScore = scores.length > 0 ? 
+        Math.round(scores.reduce((sum, s) => sum + s.score, 0) / scores.length) : 0;
+    
+    document.getElementById('navSignals').textContent = signals;
+    document.getElementById('navAvgScore').textContent = avgScore;
+}
+
+window.addEventListener('load', init);
+window.addEventListener('beforeunload', () => {
+    if (refreshInterval) clearInterval(refreshInterval);
+});
+</script>
+{% endblock %}

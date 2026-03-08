@@ -752,6 +752,11 @@ def _generate_recommendation(convergence, option):
 @app.route('/v5')
 def v5_dashboard():
     """V5 Dashboard - 100-Point Momentum Confirmation Strategy"""
+    return render_template('v5_pro.html')
+
+@app.route('/v5/basic')
+def v5_dashboard_basic():
+    """V5 Dashboard - Basic Version"""
     return render_template('v5_dashboard.html')
 
 @app.route('/api/v5/score/<symbol>')
