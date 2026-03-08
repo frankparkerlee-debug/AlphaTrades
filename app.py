@@ -809,6 +809,41 @@ def api_v5_score(symbol):
         logger.error(f"Error scoring {symbol}: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/v5/backtest')
+def v5_backtest():
+    """V5 Backtest Page - Browser-based backtesting"""
+    return render_template('v5_backtest.html')
+
+@app.route('/api/v5/backtest/run', methods=['POST'])
+def api_v5_backtest_run():
+    """Run V5 backtest server-side (uses Render API keys)"""
+    try:
+        data = request.json
+        tickers = data.get('tickers', [])
+        threshold = data.get('threshold', 'B+')
+        start_date = data.get('start_date', '2025-03-01')
+        end_date = data.get('end_date', '2026-03-01')
+        
+        if not tickers:
+            return jsonify({'error': 'No tickers provided'}), 400
+        
+        logger.info(f"Running backtest: {len(tickers)} tickers, {threshold} threshold, {start_date} to {end_date}")
+        
+        # Import backtest engine
+        from backtest_v5 import V5Backtester
+        
+        # Run backtest
+        backtester = V5Backtester(tickers, start_date, end_date)
+        results = backtester.run_backtest(threshold)
+        
+        logger.info(f"Backtest complete: {results['total_trades']} trades, {results['win_rate']:.1f}% win rate")
+        
+        return jsonify(results)
+        
+    except Exception as e:
+        logger.error(f"Backtest error: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/favicon.ico')
 def favicon():
     """Return simple favicon to prevent 404"""

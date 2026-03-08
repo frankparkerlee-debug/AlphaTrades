@@ -1,0 +1,188 @@
+{
+  "B+": {
+    "threshold": "B+",
+    "threshold_score": 75,
+    "total_trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "win_rate": 0,
+    "total_pnl": 0,
+    "avg_win": 0,
+    "avg_loss": 0,
+    "profit_factor": 0,
+    "trades_per_day": 0.0,
+    "trades_per_month": 0.0,
+    "ticker_stats": {
+      "AMD": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0,
+        "total_pnl": 0,
+        "avg_win": 0,
+        "avg_loss": 0
+      },
+      "NVDA": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0,
+        "total_pnl": 0,
+        "avg_win": 0,
+        "avg_loss": 0
+      },
+      "TSLA": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0,
+        "total_pnl": 0,
+        "avg_win": 0,
+        "avg_loss": 0
+      },
+      "AAPL": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0,
+        "total_pnl": 0,
+        "avg_win": 0,
+        "avg_loss": 0
+      },
+      "MSFT": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0,
+        "total_pnl": 0,
+        "avg_win": 0,
+        "avg_loss": 0
+      }
+    },
+    "sample_trades": []
+  },
+  "A-": {
+    "threshold": "A-",
+    "threshold_score": 80,
+    "total_trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "win_rate": 0,
+    "total_pnl": 0,
+    "avg_win": 0,
+    "avg_loss": 0,
+    "profit_factor": 0,
+    "trades_per_day": 0.0,
+    "trades_per_month": 0.0,
+    "ticker_stats": {
+      "AMD": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0,
+        "total_pnl": 0,
+        "avg_win": 0,
+        "avg_loss": 0
+      },
+      "NVDA": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0,
+        "total_pnl": 0,
+        "avg_win": 0,
+        "avg_loss": 0
+      },
+      "TSLA": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0,
+        "total_pnl": 0,
+        "avg_win": 0,
+        "avg_loss": 0
+      },
+      "AAPL": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0,
+        "total_pnl": 0,
+        "avg_win": 0,
+        "avg_loss": 0
+      },
+      "MSFT": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0,
+        "total_pnl": 0,
+        "avg_win": 0,
+        "avg_loss": 0
+      }
+    },
+    "sample_trades": []
+  },
+  "A": {
+    "threshold": "A",
+    "threshold_score": 85,
+    "total_trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "win_rate": 0,
+    "total_pnl": 0,
+    "avg_win": 0,
+    "avg_loss": 0,
+    "profit_factor": 0,
+    "trades_per_day": 0.0,
+    "trades_per_month": 0.0,
+    "ticker_stats": {
+      "AMD": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0,
+        "total_pnl": 0,
+        "avg_win": 0,
+        "avg_loss": 0
+      },
+      "NVDA": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0,
+        "total_pnl": 0,
+        "avg_win": 0,
+        "avg_loss": 0
+      },
+      "TSLA": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0,
+        "total_pnl": 0,
+        "avg_win": 0,
+        "avg_loss": 0
+      },
+      "AAPL": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0,
+        "total_pnl": 0,
+        "avg_win": 0,
+        "avg_loss": 0
+      },
+      "MSFT": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0,
+        "total_pnl": 0,
+        "avg_win": 0,
+        "avg_loss": 0
+      }
+    },
+    "sample_trades": []
+  }
+}

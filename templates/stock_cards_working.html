@@ -1,0 +1,375 @@
+{% extends "base.html" %}
+
+{% block title %}AlphaTrades - Stock Signals{% endblock %}
+
+{% block content %}
+<style>
+    body { margin: 0; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .header { text-align: center; color: white; margin-bottom: 30px; }
+    .header h1 { margin: 0; font-size: 2.5em; font-weight: 800; }
+    .update-bar { background: rgba(255,255,255,0.2); padding: 15px; border-radius: 12px; text-align: center; color: white; margin-bottom: 20px; }
+    .stock-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; max-width: 1400px; margin: 0 auto; }
+    
+    .stock-card { background: white; border-radius: 12px; padding: 20px; cursor: pointer; transition: all 0.3s; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+    .stock-card:hover { transform: translateY(-5px); box-shadow: 0 8px 12px rgba(0,0,0,0.2); }
+    .stock-card.loading { opacity: 0.6; }
+    
+    .stock-ticker { font-size: 24px; font-weight: 800; color: #2d3748; margin-bottom: 10px; }
+    .stock-price { font-size: 28px; font-weight: 700; color: #2d3748; margin-bottom: 5px; }
+    .price-change { font-size: 14px; font-weight: 600; margin-bottom: 15px; }
+    .price-change.positive { color: #48bb78; }
+    .price-change.negative { color: #f56565; }
+    
+    .convergence-info { background: #f7fafc; padding: 12px; border-radius: 8px; margin-top: 10px; }
+    .convergence-info .grade { font-size: 32px; font-weight: 800; display: inline-block; margin-right: 10px; }
+    .grade-A { color: #48bb78; }
+    .grade-B { color: #4299e1; }
+    .grade-C { color: #ed8936; }
+    .grade-D { color: #f56565; }
+    
+    .signals { font-size: 12px; color: #718096; margin-top: 8px; }
+    .options-box { background: #edf2f7; padding: 8px; border-radius: 6px; margin-top: 10px; font-size: 11px; line-height: 1.5; }
+    .options-box.market-closed { background: #718096; color: white; text-align: center; font-weight: 600; }
+    .options-box.has-options { background: #c6f6d5; border: 2px solid #48bb78; }
+    
+    .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; }
+    .modal.active { display: flex; align-items: center; justify-content: center; }
+    .modal-content { background: white; border-radius: 12px; padding: 30px; max-width: 900px; width: 90%; max-height: 90vh; overflow-y: auto; }
+    .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+    .close-btn { background: #f56565; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; }
+</style>
+
+<div class="header">
+    <h1>🎯 AlphaTrades</h1>
+    <p>7-Signal Convergence · Asymmetric Returns</p>
+</div>
+
+<div class="update-bar">
+    <span id="updateTime">Initializing...</span>
+</div>
+
+<div class="stock-grid" id="stockGrid">
+    <!-- Cards will be inserted here -->
+</div>
+
+<!-- Modal -->
+<div class="modal" id="detailModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 id="modalTitle">Stock Details</h2>
+            <button class="close-btn" id="closeModalBtn">✕ Close</button>
+        </div>
+        <div id="modalBody">Loading...</div>
+    </div>
+</div>
+
+<script>
+const TICKERS = ['NVDA', 'TSLA', 'AMD', 'AAPL', 'AMZN', 'META', 'MSFT', 'GOOGL', 'NFLX', 'AVGO', 'ORCL', 'ADBE'];
+let signalCache = {};  // Preloaded signal data
+let priceCache = {};   // Latest prices
+
+// Initialize on page load
+async function init() {
+    console.log('🚀 AlphaTrades initializing...');
+    
+    // Step 1: Fetch and render basic cards with prices (fast)
+    await loadInitialPrices();
+    
+    // Step 2: Start background preload (non-blocking)
+    preloadAllSignals();  // Don't await - let it run in background
+    
+    // Step 3: Start price updates (every 5 seconds)
+    setInterval(updatePrices, 5000);
+    
+    console.log('✅ AlphaTrades ready (signals loading in background)');
+}
+
+async function loadInitialPrices() {
+    try {
+        const response = await fetch('/api/stream/latest');
+        const data = await response.json();
+        
+        // Render cards with just prices
+        const grid = document.getElementById('stockGrid');
+        grid.innerHTML = TICKERS.map((ticker, idx) => {
+            const quote = data.quotes[idx];
+            if (!quote) return '';
+            priceCache[ticker] = quote;
+            return createBasicCard(ticker, quote);
+        }).join('');
+        
+        // Set up click handlers (event delegation)
+        grid.addEventListener('click', (e) => {
+            const card = e.target.closest('.stock-card');
+            if (card) {
+                const ticker = card.dataset.ticker;
+                openModal(ticker);
+            }
+        });
+        
+        document.getElementById('updateTime').textContent = `Last update: ${new Date().toLocaleTimeString()}`;
+    } catch (error) {
+        console.error('Failed to load prices:', error);
+    }
+}
+
+async function preloadAllSignals() {
+    console.log('📊 Preloading convergence data for all tickers...');
+    
+    // Fetch all signals in parallel
+    const promises = TICKERS.map(ticker => 
+        fetch(`/api/signal/${ticker}`)
+            .then(r => r.json())
+            .then(data => {
+                signalCache[ticker] = data;
+                updateCardWithSignal(ticker);
+                console.log(`✅ ${ticker} signal loaded`);
+            })
+            .catch(err => console.error(`❌ ${ticker} failed:`, err))
+    );
+    
+    await Promise.all(promises);
+    console.log('✅ All signals preloaded');
+}
+
+async function updatePrices() {
+    try {
+        const response = await fetch('/api/stream/latest');
+        const data = await response.json();
+        
+        TICKERS.forEach((ticker, idx) => {
+            const quote = data.quotes[idx];
+            if (quote) {
+                priceCache[ticker] = quote;
+                updateCardPrice(ticker, quote);
+            }
+        });
+        
+        document.getElementById('updateTime').textContent = `Last update: ${new Date().toLocaleTimeString()}`;
+    } catch (error) {
+        console.error('Price update failed:', error);
+    }
+}
+
+function createBasicCard(ticker, quote) {
+    const changePercent = ((quote.c - quote.pc) / quote.pc) * 100;
+    const isPositive = changePercent >= 0;
+    
+    return `
+        <div class="stock-card loading" data-ticker="${ticker}">
+            <div class="stock-ticker">${ticker}</div>
+            <div class="stock-price">$${quote.c.toFixed(2)}</div>
+            <div class="price-change ${isPositive ? 'positive' : 'negative'}">
+                ${isPositive ? '▲' : '▼'} ${Math.abs(changePercent).toFixed(2)}%
+            </div>
+            <div class="convergence-info">Loading convergence data...</div>
+        </div>
+    `;
+}
+
+function updateCardWithSignal(ticker) {
+    const card = document.querySelector(`[data-ticker="${ticker}"]`);
+    if (!card) return;
+    
+    const signal = signalCache[ticker];
+    const quote = priceCache[ticker];
+    if (!signal || !quote) return;
+    
+    const conv = signal.convergence;
+    const option = signal.option;
+    const rec = signal.recommendation;
+    
+    const changePercent = ((quote.c - quote.pc) / quote.pc) * 100;
+    const isPositive = changePercent >= 0;
+    
+    // Check market hours (CST browser time: 8:30am-3pm CST = 9:30am-4pm EST)
+    const now = new Date();
+    const hour = now.getHours();
+    const minute = now.getMinutes();
+    const day = now.getDay();
+    const timeInMinutes = hour * 60 + minute;
+    const marketOpen = 8 * 60 + 30;  // 8:30am CST
+    const marketClose = 15 * 60;     // 3:00pm CST
+    const isMarketHours = (day >= 1 && day <= 5) && (timeInMinutes >= marketOpen && timeInMinutes < marketClose);
+    
+    // Build options display
+    let optionsHTML = '';
+    if (option) {
+        optionsHTML = `
+            <div class="options-box has-options">
+                <strong>${option.symbol}</strong> $${option.mid.toFixed(2)}<br>
+                Strike: $${option.strike.toFixed(2)} | Exp: ${option.expiration}<br>
+                Stop: $${(rec.stop || option.mid * 0.70).toFixed(2)} | Target: $${(rec.target || option.mid * 1.50).toFixed(2)}
+            </div>
+        `;
+    } else if (!isMarketHours) {
+        optionsHTML = `
+            <div class="options-box market-closed">
+                🌙 MARKET CLOSED<br>
+                <span style="font-size: 10px;">Options: Mon-Fri 8:30am-3pm CST</span>
+            </div>
+        `;
+    }
+    
+    card.innerHTML = `
+        <div class="stock-ticker">${ticker}</div>
+        <div class="stock-price">$${quote.c.toFixed(2)}</div>
+        <div class="price-change ${isPositive ? 'positive' : 'negative'}">
+            ${isPositive ? '▲' : '▼'} ${Math.abs(changePercent).toFixed(2)}%
+        </div>
+        <div class="convergence-info">
+            <span class="grade grade-${conv.grade[0]}">${conv.grade}</span>
+            <strong>${conv.total_score}/100</strong> · ${conv.convergence_count}/7 signals
+        </div>
+        <div class="signals">
+            ${rec.action} · ${conv.confidence} confidence
+        </div>
+        ${optionsHTML}
+    `;
+    
+    card.classList.remove('loading');
+}
+
+function updateCardPrice(ticker, quote) {
+    const card = document.querySelector(`[data-ticker="${ticker}"]`);
+    if (!card) return;
+    
+    const changePercent = ((quote.c - quote.pc) / quote.pc) * 100;
+    const isPositive = changePercent >= 0;
+    
+    const priceEl = card.querySelector('.stock-price');
+    const changeEl = card.querySelector('.price-change');
+    
+    if (priceEl) priceEl.textContent = `$${quote.c.toFixed(2)}`;
+    if (changeEl) {
+        changeEl.textContent = `${isPositive ? '▲' : '▼'} ${Math.abs(changePercent).toFixed(2)}%`;
+        changeEl.className = `price-change ${isPositive ? 'positive' : 'negative'}`;
+    }
+}
+
+function openModal(ticker) {
+    const modal = document.getElementById('detailModal');
+    const title = document.getElementById('modalTitle');
+    const body = document.getElementById('modalBody');
+    
+    // Show modal immediately with loading state
+    title.textContent = `${ticker}`;
+    body.innerHTML = '<div style="text-align: center; padding: 40px;"><h2>⏳ Loading signal data...</h2><p>Analyzing convergence, options, and market conditions...</p></div>';
+    modal.classList.add('active');
+    
+    // Check if data is already cached
+    const signal = signalCache[ticker];
+    if (signal) {
+        renderModalContent(ticker, signal);
+        return;
+    }
+    
+    // Fetch signal data if not cached
+    fetch(`/api/signal/${ticker}`)
+        .then(r => r.json())
+        .then(data => {
+            signalCache[ticker] = data;  // Cache it
+            renderModalContent(ticker, data);
+        })
+        .catch(err => {
+            body.innerHTML = `<div style="text-align: center; padding: 40px; color: #f56565;"><h2>❌ Error Loading Data</h2><p>${err.message}</p></div>`;
+        });
+}
+
+function renderModalContent(ticker, signal) {
+    const title = document.getElementById('modalTitle');
+    const body = document.getElementById('modalBody');
+    
+    const conv = signal.convergence;
+    const option = signal.option;
+    const rec = signal.recommendation;
+    
+    title.textContent = `${ticker} - Grade ${conv.grade}`;
+    
+    // Build news HTML
+    let newsHTML = '<h3>📰 Recent News</h3><ul>';
+    if (conv.signals.news.recent_news && conv.signals.news.recent_news.length > 0) {
+        conv.signals.news.recent_news.forEach(article => {
+            newsHTML += `<li>${article.headline} <em>(${article.hours_ago.toFixed(1)}h ago)</em></li>`;
+        });
+    } else {
+        newsHTML += '<li>No recent news</li>';
+    }
+    newsHTML += '</ul>';
+    
+    // Build signals HTML
+    const signals = [
+        { name: 'Momentum', signal: conv.signals.momentum, max: 25 },
+        { name: 'Volume', signal: conv.signals.volume, max: 20 },
+        { name: 'Trend', signal: conv.signals.trend, max: 15 },
+        { name: 'Technical', signal: conv.signals.technical, max: 10 },
+        { name: 'News', signal: conv.signals.news, max: 15 },
+        { name: 'Sentiment', signal: conv.signals.sentiment, max: 10 },
+        { name: 'Market', signal: conv.signals.market, max: 5 }
+    ];
+    
+    let signalsHTML = '<h3>🎯 Signal Breakdown</h3>';
+    signals.forEach(s => {
+        signalsHTML += `
+            <div style="margin: 10px 0; padding: 10px; background: #f7fafc; border-radius: 6px;">
+                <strong>${s.signal.status} ${s.name}</strong>: ${s.signal.score}/${s.max}<br>
+                <small>${s.signal.reason}</small>
+            </div>
+        `;
+    });
+    
+    // Build options HTML
+    let optionsHTML = '<h3>💰 Options Contract</h3>';
+    if (option) {
+        optionsHTML += `
+            <table style="width: 100%; border-collapse: collapse;">
+                <tr><td><strong>Contract:</strong></td><td>${option.symbol}</td></tr>
+                <tr><td><strong>Strike:</strong></td><td>$${option.strike.toFixed(2)}</td></tr>
+                <tr><td><strong>Expiration:</strong></td><td>${option.expiration} (${option.dte} days)</td></tr>
+                <tr><td><strong>Entry:</strong></td><td>$${option.mid.toFixed(2)}</td></tr>
+                <tr><td><strong>Stop:</strong></td><td style="color: red;">$${(rec.stop || option.mid * 0.70).toFixed(2)}</td></tr>
+                <tr><td><strong>Target:</strong></td><td style="color: green;">$${(rec.target || option.mid * 1.50).toFixed(2)}</td></tr>
+                <tr><td><strong>Delta:</strong></td><td>${option.delta.toFixed(3)}</td></tr>
+                <tr><td><strong>IV:</strong></td><td>${(option.iv * 100).toFixed(1)}%</td></tr>
+            </table>
+        `;
+    } else {
+        optionsHTML += `<p style="color: #718096;">${rec.reason}</p>`;
+    }
+    
+    body.innerHTML = `
+        <p><strong>Score:</strong> ${conv.total_score}/100 · <strong>Convergence:</strong> ${conv.convergence_count}/7 signals · <strong>Confidence:</strong> ${conv.confidence}</p>
+        <p><strong>Recommendation:</strong> ${rec.action}</p>
+        ${signalsHTML}
+        ${newsHTML}
+        ${optionsHTML}
+    `;
+}
+
+function closeModal() {
+    document.getElementById('detailModal').classList.remove('active');
+}
+
+// Close button event listener
+document.getElementById('closeModalBtn').addEventListener('click', () => {
+    closeModal();
+});
+
+// Click outside to close
+document.getElementById('detailModal').addEventListener('click', (e) => {
+    if (e.target.id === 'detailModal') {
+        closeModal();
+    }
+});
+
+// ESC to close
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        closeModal();
+    }
+});
+
+// Start
+init();
+</script>
+{% endblock %}
