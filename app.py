@@ -6,6 +6,8 @@ Three-page architecture:
 3. Options Feed - Historical alerts with filters
 """
 from flask import Flask, jsonify, request, render_template, Response, stream_with_context
+from flask_compress import Compress
+from flask_caching import Cache
 from models import Alert, Trade, DailyPerformance, ModelConfig, AccountState, get_session
 from alpaca_client import AlpacaClient
 from options_selector import get_selector
@@ -22,6 +24,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+
+# Enable gzip compression (70-80% smaller responses)
+Compress(app)
+
+# Enable simple in-memory caching
+cache = Cache(app, config={
+    'CACHE_TYPE': 'SimpleCache',  # In-memory cache
+    'CACHE_DEFAULT_TIMEOUT': 30   # Cache for 30 seconds
+})
 
 # WebSocket stream DISABLED - causing worker timeouts
 # Issue: Even without monkey patching, stream init blocks workers
@@ -692,6 +703,7 @@ def api_signal(symbol):
         session.close()
 
 @app.route('/api/signals/all')
+@cache.cached(timeout=30, query_string=True)  # Cache for 30 seconds
 def api_signals_all():
     """Get all cached signals (for dashboard grid) - ONE REQUEST"""
     from models import Signal, get_session
