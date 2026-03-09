@@ -49,11 +49,7 @@ ALPACA_SECRET_KEY = os.getenv('ALPACA_SECRET_KEY')
 class SignalWorker:
     """Background worker that pre-computes V5 momentum signals"""
     
-    def __init__(self):
-        print("   📦 Creating database session...", flush=True)
-        self.session = get_session()
-        print("   ✅ Database connected", flush=True)
-        
+    def __init__(self):        
         print("   📦 Creating Alpaca client...", flush=True)
         self.alpaca = AlpacaClient()
         print("   ✅ Alpaca client ready", flush=True)
@@ -77,6 +73,10 @@ class SignalWorker:
         print(f"   Update interval: {UPDATE_INTERVAL} seconds", flush=True)
         print(f"", flush=True)
     
+    def _get_fresh_session(self):
+        """Get a fresh database session for each update cycle"""
+        return get_session()
+    
     def update_all_signals(self):
         """Pre-compute and cache all signals in database"""
         print(f"\n{'='*60}", flush=True)
@@ -85,6 +85,10 @@ class SignalWorker:
         
         logger.info("=" * 60)
         logger.info(f"📊 Starting signal update cycle at {datetime.now()}")
+        
+        # Create fresh database session for this cycle
+        session = self._get_fresh_session()
+        logger.info("✅ Fresh database session created")
         
         # Get SPY for market context (once per cycle)
         try:
@@ -144,21 +148,34 @@ class SignalWorker:
                 option_type = 'call' if direction == 'CALL' else 'put'
                 
                 # 5. Get options chain (EXPENSIVE - but cached)
-                chain_data = self.alpaca.get_options_chain(ticker.upper())
-                
                 optimal_option = None
-                if 'error' not in chain_data and chain_data.get('snapshots'):
-                    optimal_option = self.selector.select_best_contract(
-                        chain_data.get('snapshots', {}),
-                        stock_price,
-                        option_type
-                    )
+                try:
+                    chain_data = self.alpaca.get_options_chain(ticker.upper())
+                    
+                    if 'error' not in chain_data and chain_data.get('snapshots'):
+                        optimal_option = self.selector.select_best_contract(
+                            chain_data.get('snapshots', {}),
+                            stock_price,
+                            option_type
+                        )
+                        if optimal_option:
+                            logger.info(f"   💰 Found option: {optimal_option['symbol']} @ ${optimal_option['mid']:.2f}")
+                        else:
+                            logger.info(f"   ⚠️  No suitable option found for {ticker} (continuing anyway)")
+                    else:
+                        logger.info(f"   ⚠️  Options chain unavailable for {ticker} (continuing anyway)")
+                except Exception as opt_error:
+                    logger.warning(f"   ⚠️  Options error for {ticker}: {opt_error} (continuing anyway)")
+                    optimal_option = None
                 
                 # 6. STORE in database (upsert)
-                signal = self.session.query(Signal).filter_by(ticker=ticker).first()
+                signal = session.query(Signal).filter_by(ticker=ticker).first()
                 if not signal:
                     signal = Signal(ticker=ticker)
-                    self.session.add(signal)
+                    session.add(signal)
+                    logger.info(f"   📝 Creating new signal for {ticker}")
+                else:
+                    logger.info(f"   📝 Updating existing signal for {ticker}")
                 
                 # Update all fields
                 signal.price = Decimal(str(stock_price))
@@ -172,7 +189,13 @@ class SignalWorker:
                 signal.option_json = optimal_option
                 signal.updated_at = datetime.now(pytz.UTC)
                 
-                self.session.commit()
+                try:
+                    session.commit()
+                    logger.info(f"   💾 Database commit successful for {ticker}")
+                except Exception as commit_error:
+                    logger.error(f"   ❌ Database commit failed for {ticker}: {commit_error}")
+                    session.rollback()
+                    raise
                 
                 # Log result
                 option_str = ""
@@ -189,7 +212,19 @@ class SignalWorker:
                 
             except Exception as e:
                 logger.error(f"❌ {ticker}: {e}", exc_info=True)
+                try:
+                    session.rollback()
+                    logger.info(f"   🔄 Session rolled back for {ticker}")
+                except:
+                    pass
                 error_count += 1
+        
+        # Close session after all tickers processed
+        try:
+            session.close()
+            logger.info("✅ Database session closed")
+        except Exception as e:
+            logger.error(f"⚠️  Error closing session: {e}")
         
         logger.info("-" * 60)
         logger.info(f"✅ Updated {updated_count} signals | ❌ {error_count} errors")
