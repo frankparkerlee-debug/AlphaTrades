@@ -29,7 +29,7 @@ MOMENTUM_MIN_SCORE = 60  # B grade
 
 # Test period
 START_DATE = date(2024, 1, 1)
-END_DATE = date(2026, 2, 28)
+END_DATE = date(2025, 12, 31)
 
 # Tickers to backtest
 TICKERS = ['AMD', 'NVDA', 'TSLA', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NFLX', 'AVGO', 
@@ -302,6 +302,7 @@ class BacktestEngine:
         }
 
 def main():
+    print("🚀 Starting backtest...", flush=True)
     print("="*80)
     print("💰 FULL HISTORICAL BACKTEST: Momentum vs V5")
     print("="*80)
