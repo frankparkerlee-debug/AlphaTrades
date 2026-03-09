@@ -750,7 +750,7 @@ function updateCardValues(card, data) {
         const optSymbolEl = card.querySelector('.option-symbol');
         const optPriceEl = card.querySelector('.option-price');
         
-        if (optSymbolEl) optSymbolEl.textContent = data.option.symbol || 'N/A';
+        if (optSymbolEl) optSymbolEl.textContent = parseOCCSymbol(data.option.symbol) || 'N/A';
         if (optPriceEl) {
             const newOptPrice = data.option.mid ? `$${data.option.mid.toFixed(2)}` : '-';
             if (optPriceEl.textContent !== newOptPrice) {
@@ -759,6 +759,37 @@ function updateCardValues(card, data) {
                 setTimeout(() => optPriceEl.classList.remove('updating'), 500);
             }
         }
+    }
+}
+
+function parseOCCSymbol(occSymbol) {
+    // Parse OCC symbol: AMD260313C00195000
+    // Format: SYMBOL + YYMMDD + [C/P] + STRIKE (8 digits, 3 decimals)
+    
+    if (!occSymbol || occSymbol.length < 15) return occSymbol;
+    
+    try {
+        // Extract from right side (works for any ticker length)
+        const strikeStr = occSymbol.slice(-8);  // Last 8 chars
+        const optType = occSymbol.slice(-9, -8);  // 9th char from end
+        const dateStr = occSymbol.slice(-15, -9);  // 6 chars before type
+        
+        // Parse strike (divide by 1000 for actual price)
+        const strike = parseInt(strikeStr) / 1000;
+        
+        // Parse date (YYMMDD)
+        const year = '20' + dateStr.slice(0, 2);
+        const month = dateStr.slice(2, 4);
+        const day = dateStr.slice(4, 6);
+        
+        // Format as requested: "3-13-26 $390 CALL" or "03-13-2026 $195 CALL"
+        const typeLabel = optType === 'C' ? 'CALL' : 'PUT';
+        
+        // Short format
+        return `${month}-${day}-${dateStr.slice(0, 2)} $${strike} ${typeLabel}`;
+        
+    } catch (e) {
+        return occSymbol;  // Fallback if parsing fails
     }
 }
 
@@ -840,9 +871,9 @@ function createCard(ticker, data) {
                 ${data.option ? `
                     <div class="option-contract real-data">
                         <div>
-                            <div class="option-symbol">${data.option.symbol || ticker}</div>
+                            <div class="option-symbol">${parseOCCSymbol(data.option.symbol) || ticker}</div>
                             <div style="font-size:11px; color:#64748b;">
-                                $${data.option.strike} ${data.direction} · Exp ${data.option.expiration || '-'} (${data.option.dte}DTE)
+                                Strike: $${data.option.strike} · Exp ${data.option.expiration || '-'}
                             </div>
                         </div>
                         <div>
