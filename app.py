@@ -776,9 +776,86 @@ def v5_dashboard_basic():
     """V5 Dashboard - Basic Version"""
     return render_template('v5_dashboard.html')
 
+@app.route('/api/v5/signals')
+@cache.cached(timeout=2, query_string=True)  # Cache for 2 seconds
+def api_v5_signals():
+    """Get all V5 signals from cache (FAST - reads from database)"""
+    from models import Signal, get_session
+    
+    session = get_session()
+    try:
+        signals = session.query(Signal).all()
+        
+        result = {
+            'signals': [],
+            'count': len(signals),
+            'timestamp': datetime.utcnow().isoformat()
+        }
+        
+        for signal in signals:
+            # Extract V5 data from convergence_json (which now stores V5 results)
+            v5_data = signal.convergence_json or {}
+            
+            signal_dict = {
+                'ticker': signal.ticker,
+                'current_price': float(signal.price) if signal.price else None,
+                'change_pct': float(signal.change_pct) if signal.change_pct else None,
+                'score': signal.score,
+                'grade': signal.grade,
+                'decision': signal.confidence,
+                'direction': v5_data.get('direction', 'N/A'),
+                'intraday_range': v5_data.get('intraday_range', 0),
+                'breakdown': v5_data.get('breakdown', {}),
+                'trade_setup': v5_data.get('trade_setup', {}),
+                'option': signal.option_json,
+                'updated_at': signal.updated_at.isoformat() if signal.updated_at else None,
+                'age_seconds': (datetime.utcnow() - signal.updated_at).total_seconds() if signal.updated_at else None
+            }
+            
+            result['signals'].append(signal_dict)
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error fetching V5 signals: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
+
 @app.route('/api/v5/score/<symbol>')
 def api_v5_score(symbol):
-    """Get V5 score for a ticker"""
+    """Get V5 score for a ticker (FALLBACK - calculates on-demand if not cached)"""
+    from models import Signal, get_session
+    
+    # Try cache first
+    session = get_session()
+    try:
+        signal = session.query(Signal).filter_by(ticker=symbol.upper()).first()
+        
+        if signal and signal.updated_at:
+            age_seconds = (datetime.utcnow() - signal.updated_at).total_seconds()
+            
+            # If fresh (< 10 seconds), return cached
+            if age_seconds < 10:
+                v5_data = signal.convergence_json or {}
+                return jsonify({
+                    'ticker': signal.ticker,
+                    'current_price': float(signal.price) if signal.price else None,
+                    'score': signal.score,
+                    'grade': signal.grade,
+                    'decision': signal.confidence,
+                    'direction': v5_data.get('direction', 'N/A'),
+                    'intraday_range': v5_data.get('intraday_range', 0),
+                    'breakdown': v5_data.get('breakdown', {}),
+                    'trade_setup': v5_data.get('trade_setup', {}),
+                    'option': signal.option_json,
+                    'source': 'cache',
+                    'age_seconds': age_seconds
+                })
+    finally:
+        session.close()
+    
+    # Fallback: Calculate on-demand (slow path)
     try:
         from scorer_v5 import get_v5_scorer
         
@@ -820,6 +897,7 @@ def api_v5_score(symbol):
         # Calculate V5 score
         scorer = get_v5_scorer()
         result = scorer.score_ticker(symbol.upper(), quote_data, market_data)
+        result['source'] = 'calculated'
         
         # Add real options data if available
         try:

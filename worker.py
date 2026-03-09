@@ -1,7 +1,7 @@
 """
-Background Worker - Pre-compute Convergence Signals
-Calculates expensive 7-signal convergence scores and caches in database
-Runs every 60 seconds, making dashboard API calls instant (< 50ms)
+Background Worker - Pre-compute V5 Signals
+Calculates expensive V5 momentum scores and caches in database
+Runs every 2 seconds, making dashboard API calls instant (< 50ms)
 """
 import os
 import time
@@ -9,7 +9,7 @@ import logging
 from datetime import datetime
 from decimal import Decimal
 from models import Signal, get_session
-from scorer_convergence import get_convergence_scorer
+from scorer_v5 import get_v5_scorer
 from options_selector import get_selector
 from alpaca_client import AlpacaClient
 
@@ -20,26 +20,26 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration
-TICKERS = ['NVDA', 'TSLA', 'AMD', 'AAPL', 'AMZN', 'META', 'MSFT', 'GOOGL', 'NFLX', 'AVGO', 'ORCL', 'ADBE']
-UPDATE_INTERVAL = 60  # seconds
+TICKERS = ['NVDA', 'TSLA', 'AMD', 'AAPL', 'AMZN', 'META', 'MSFT', 'GOOGL', 'NFLX', 'AVGO', 'ORCL', 'ADBE', 'CRM', 'INTC', 'QCOM']
+UPDATE_INTERVAL = 2  # seconds - FAST refresh for real-time dashboard
 
 # Alpaca credentials
 ALPACA_API_KEY = os.getenv('ALPACA_API_KEY')
 ALPACA_SECRET_KEY = os.getenv('ALPACA_SECRET_KEY')
 
 class SignalWorker:
-    """Background worker that pre-computes convergence signals"""
+    """Background worker that pre-computes V5 momentum signals"""
     
     def __init__(self):
         self.session = get_session()
         self.alpaca = AlpacaClient()
-        self.scorer = get_convergence_scorer(ALPACA_API_KEY, ALPACA_SECRET_KEY)
+        self.scorer = get_v5_scorer()
         self.selector = get_selector()
         
-        logger.info("🚀 Signal Worker initialized")
+        logger.info("🚀 V5 Signal Worker initialized")
         logger.info(f"   Tickers: {', '.join(TICKERS)}")
         logger.info(f"   Update interval: {UPDATE_INTERVAL}s")
-        logger.info(f"   Using: 7-signal ConvergenceScorer + OptionsSelector")
+        logger.info(f"   Using: V5 100-Point Momentum Scorer + OptionsSelector")
     
     def update_all_signals(self):
         """Pre-compute and cache all signals in database"""
@@ -68,19 +68,42 @@ class SignalWorker:
                 # 1. Get stock quote
                 quote = self.alpaca.get_snapshot(ticker.upper())
                 stock_price = quote.get('c', 0)
+                open_price = quote.get('o', 0)
+                high = quote.get('h', 0)
+                low = quote.get('l', 0)
+                volume = quote.get('v', 0)
                 
                 if not stock_price:
                     logger.warning(f"⚠️  {ticker}: No price data")
                     continue
                 
-                # 2. Calculate convergence (EXPENSIVE - but only once per minute)
-                convergence_result = self.scorer.score_ticker(ticker.upper(), quote, market_data)
+                # Get 20-day average volume (from bars)
+                bars_response = self.alpaca.get_bars(ticker.upper(), timeframe='1Day', limit=20)
+                bars = bars_response.get('bars', []) if bars_response else []
+                if bars and len(bars) > 0:
+                    avg_volume = sum(bar['v'] for bar in bars) / len(bars)
+                else:
+                    avg_volume = volume
                 
-                # 3. Get optimal option based on momentum direction
-                momentum_move = convergence_result['signals']['momentum']['metrics'].get('move_from_open', 0)
-                option_type = 'call' if momentum_move >= 0 else 'put'
+                # 2. Build quote_data for V5 scorer
+                quote_data = {
+                    'open': open_price,
+                    'high': high,
+                    'low': low,
+                    'current': stock_price,
+                    'volume': volume,
+                    'avg_volume': avg_volume
+                }
                 
-                # 4. Get options chain (EXPENSIVE - but cached)
+                # 3. Calculate V5 score (EXPENSIVE - but only once per 2 seconds)
+                v5_result = self.scorer.score_ticker(ticker.upper(), quote_data, market_data)
+                
+                # 4. Get optimal option based on V5 direction
+                trade_setup = v5_result.get('trade_setup', {})
+                direction = trade_setup.get('direction', 'CALL')
+                option_type = 'call' if direction == 'CALL' else 'put'
+                
+                # 5. Get options chain (EXPENSIVE - but cached)
                 chain_data = self.alpaca.get_options_chain(ticker.upper())
                 
                 optimal_option = None
@@ -91,7 +114,7 @@ class SignalWorker:
                         option_type
                     )
                 
-                # 5. STORE in database (upsert)
+                # 6. STORE in database (upsert)
                 signal = self.session.query(Signal).filter_by(ticker=ticker).first()
                 if not signal:
                     signal = Signal(ticker=ticker)
@@ -101,11 +124,11 @@ class SignalWorker:
                 signal.price = Decimal(str(stock_price))
                 prev_close = quote.get('pc', stock_price)
                 signal.change_pct = Decimal(str(((stock_price - prev_close) / prev_close) * 100))
-                signal.grade = convergence_result['grade']
-                signal.score = convergence_result['total_score']
-                signal.convergence_count = convergence_result['convergence_count']
-                signal.confidence = convergence_result['confidence']
-                signal.convergence_json = convergence_result
+                signal.grade = v5_result['grade']
+                signal.score = v5_result['score']
+                signal.convergence_count = v5_result['breakdown'].get('range', {}).get('score', 0)  # Use range score as proxy
+                signal.confidence = v5_result['decision']
+                signal.convergence_json = v5_result  # Store full V5 result
                 signal.option_json = optimal_option
                 signal.updated_at = datetime.utcnow()
                 
@@ -119,7 +142,7 @@ class SignalWorker:
                 logger.info(
                     f"✅ {ticker:6s} | ${stock_price:7.2f} ({signal.change_pct:+6.2f}%) | "
                     f"Grade: {signal.grade:3s} | Score: {signal.score:3d}/100 | "
-                    f"Signals: {signal.convergence_count}/7{option_str}"
+                    f"Decision: {signal.confidence}{option_str}"
                 )
                 
                 updated_count += 1
@@ -135,8 +158,8 @@ class SignalWorker:
     def run(self):
         """Main worker loop"""
         logger.info("=" * 60)
-        logger.info("  AlphaTrades Signal Worker  ")
-        logger.info("  7-Signal Convergence Pre-Computation")
+        logger.info("  AlphaTrades V5 Signal Worker  ")
+        logger.info("  100-Point Momentum Pre-Computation")
         logger.info("=" * 60)
         
         cycle_count = 0

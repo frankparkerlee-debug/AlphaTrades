@@ -490,7 +490,11 @@
         </div>
         <div>
             <span class="nav-stat-label">UPDATED</span>
-            <span class="nav-stat-value" id="navUpdated">--:--</span>
+            <span class="nav-stat-value" id="navUpdated">--:--:--</span>
+        </div>
+        <div>
+            <span class="nav-stat-label">LIVE</span>
+            <span class="nav-stat-value" style="color: #10b981;" id="navLiveIndicator">●</span>
         </div>
     </div>
 </div>
@@ -555,7 +559,7 @@ let optionsCache = {};
 let refreshInterval = null;
 
 async function init() {
-    console.log('V5 Pro initializing...');
+    console.log('V5 Pro initializing with 2-second live updates...');
     
     // Show loading skeletons
     renderLoadingCards();
@@ -563,8 +567,8 @@ async function init() {
     // Load data
     await loadAllData();
     
-    // Auto-refresh every 30 seconds
-    refreshInterval = setInterval(loadAllData, 30000);
+    // Auto-refresh every 2 seconds for REAL-TIME updates
+    refreshInterval = setInterval(loadAllData, 2000);
     
     // Filter handlers
     document.getElementById('filterGrade').addEventListener('change', renderCards);
@@ -579,26 +583,27 @@ async function init() {
 
 async function loadAllData() {
     try {
-        const promises = TICKERS.map(ticker => 
-            fetch(`/api/v5/score/${ticker}`)
-                .then(r => r.json())
-                .catch(err => null)
-        );
+        // FAST: Single API call fetches ALL signals from cache (< 50ms)
+        const response = await fetch('/api/v5/signals');
+        const data = await response.json();
         
-        const results = await Promise.all(promises);
-        
-        results.forEach((data, idx) => {
-            if (data) {
-                scoresCache[TICKERS[idx]] = data;
-            }
-        });
+        if (data.signals) {
+            // Update cache with fresh data
+            data.signals.forEach(signal => {
+                scoresCache[signal.ticker] = signal;
+            });
+            
+            // Log data age for monitoring
+            const avgAge = data.signals.reduce((sum, s) => sum + (s.age_seconds || 0), 0) / data.signals.length;
+            console.log(`📊 Updated ${data.signals.length} signals | Avg age: ${avgAge.toFixed(1)}s`);
+        }
         
         renderCards();
         updateNavStats();
         
         const now = new Date();
         document.getElementById('navUpdated').textContent = 
-            now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+            now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
             
     } catch (error) {
         console.error('Error loading data:', error);
