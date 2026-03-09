@@ -140,9 +140,17 @@ class AlpacaClient:
         strike_increment = 5 if stock_price > 50 else 1
         target_strike = round(stock_price / strike_increment) * strike_increment
         
-        # Calculate target expiration (next trading day + dte_preference)
-        # Simple: today + dte_preference days (ignore weekends for now, Alpaca will find nearest)
-        target_date = date.today() + timedelta(days=dte_preference)
+        # Calculate target expiration (next valid options expiration - Friday)
+        # Options expire on Fridays (weekly) or 3rd Friday (monthly)
+        today = date.today()
+        
+        # Find next Friday
+        days_until_friday = (4 - today.weekday()) % 7  # Friday = 4
+        if days_until_friday == 0:
+            # Today is Friday - use it if dte_preference = 0, else next Friday
+            days_until_friday = 7 if dte_preference > 0 else 0
+        
+        target_date = today + timedelta(days=days_until_friday)
         
         # Build OCC symbol: AAPL260314C00150000
         # Format: SYMBOL + YYMMDD + [C/P] + STRIKE (8 digits, 3 decimals)
