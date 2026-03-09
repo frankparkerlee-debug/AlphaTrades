@@ -13,6 +13,7 @@ import time
 import logging
 from datetime import datetime
 from decimal import Decimal
+import pytz
 
 print("✅ Standard library imports successful", flush=True)
 
@@ -169,7 +170,7 @@ class SignalWorker:
                 signal.confidence = v5_result['decision']
                 signal.convergence_json = v5_result  # Store full V5 result
                 signal.option_json = optimal_option
-                signal.updated_at = datetime.utcnow()
+                signal.updated_at = datetime.now(pytz.UTC)
                 
                 self.session.commit()
                 

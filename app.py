@@ -15,6 +15,7 @@ from scorer_convergence import get_convergence_scorer
 # DISABLED: Stream causing worker timeouts even without monkey patching
 # from alpaca_stream_gevent import get_stream
 from datetime import datetime, timedelta
+import pytz
 import logging
 import os
 import json
@@ -636,7 +637,7 @@ def api_signal(symbol):
         
         if signal:
             # Check if data is stale (> 5 minutes)
-            age_seconds = (datetime.utcnow() - signal.updated_at).total_seconds()
+            age_seconds = (datetime.now(pytz.UTC) - signal.updated_at).total_seconds()
             if age_seconds > 300:
                 logger.warning(f"Signal for {symbol} is stale ({age_seconds:.0f}s old)")
             
@@ -720,7 +721,7 @@ def api_signals_all():
         return jsonify({
             'signals': [s.to_dict() for s in signals],
             'count': len(signals),
-            'timestamp': datetime.utcnow().isoformat()
+            'timestamp': datetime.now(pytz.UTC).isoformat()
         })
         
     except Exception as e:
@@ -786,10 +787,12 @@ def api_v5_signals():
     try:
         signals = session.query(Signal).all()
         
+        now = datetime.now(pytz.UTC)
+        
         result = {
             'signals': [],
             'count': len(signals),
-            'timestamp': datetime.utcnow().isoformat()
+            'timestamp': now.isoformat()
         }
         
         for signal in signals:
@@ -809,7 +812,7 @@ def api_v5_signals():
                 'trade_setup': v5_data.get('trade_setup', {}),
                 'option': signal.option_json,
                 'updated_at': signal.updated_at.isoformat() if signal.updated_at else None,
-                'age_seconds': (datetime.utcnow() - signal.updated_at).total_seconds() if signal.updated_at else None
+                'age_seconds': (now - signal.updated_at).total_seconds() if signal.updated_at else None
             }
             
             result['signals'].append(signal_dict)
@@ -833,7 +836,7 @@ def api_v5_score(symbol):
         signal = session.query(Signal).filter_by(ticker=symbol.upper()).first()
         
         if signal and signal.updated_at:
-            age_seconds = (datetime.utcnow() - signal.updated_at).total_seconds()
+            age_seconds = (datetime.now(pytz.UTC) - signal.updated_at).total_seconds()
             
             # If fresh (< 10 seconds), return cached
             if age_seconds < 10:
