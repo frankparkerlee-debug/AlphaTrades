@@ -3,15 +3,33 @@ Background Worker - Pre-compute V5 Signals
 Calculates expensive V5 momentum scores and caches in database
 Runs every 2 seconds, making dashboard API calls instant (< 50ms)
 """
+# DIAGNOSTIC: Print before ANY imports to confirm script execution
+print("="*70, flush=True)
+print("📦 worker.py - SCRIPT STARTING", flush=True)
+print("="*70, flush=True)
+
 import os
 import time
 import logging
 from datetime import datetime
 from decimal import Decimal
+
+print("✅ Standard library imports successful", flush=True)
+
 from models import Signal, get_session
+print("✅ models imported", flush=True)
+
 from scorer_v5 import get_v5_scorer
+print("✅ scorer_v5 imported", flush=True)
+
 from options_selector import get_selector
+print("✅ options_selector imported", flush=True)
+
 from alpaca_client import AlpacaClient
+print("✅ alpaca_client imported", flush=True)
+
+print("✅ ALL IMPORTS SUCCESSFUL", flush=True)
+print("", flush=True)
 
 logging.basicConfig(
     level=logging.INFO,
