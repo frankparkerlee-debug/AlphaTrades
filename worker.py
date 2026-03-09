@@ -31,18 +31,39 @@ class SignalWorker:
     """Background worker that pre-computes V5 momentum signals"""
     
     def __init__(self):
+        print("   📦 Creating database session...", flush=True)
         self.session = get_session()
+        print("   ✅ Database connected", flush=True)
+        
+        print("   📦 Creating Alpaca client...", flush=True)
         self.alpaca = AlpacaClient()
+        print("   ✅ Alpaca client ready", flush=True)
+        
+        print("   📦 Creating V5 scorer...", flush=True)
         self.scorer = get_v5_scorer()
+        print("   ✅ V5 scorer ready", flush=True)
+        
+        print("   📦 Creating options selector...", flush=True)
         self.selector = get_selector()
+        print("   ✅ Options selector ready", flush=True)
         
         logger.info("🚀 V5 Signal Worker initialized")
         logger.info(f"   Tickers: {', '.join(TICKERS)}")
         logger.info(f"   Update interval: {UPDATE_INTERVAL}s")
         logger.info(f"   Using: V5 100-Point Momentum Scorer + OptionsSelector")
+        
+        print(f"", flush=True)
+        print(f"🎯 Configuration:", flush=True)
+        print(f"   Tickers: {len(TICKERS)} ({', '.join(TICKERS[:5])}...)", flush=True)
+        print(f"   Update interval: {UPDATE_INTERVAL} seconds", flush=True)
+        print(f"", flush=True)
     
     def update_all_signals(self):
         """Pre-compute and cache all signals in database"""
+        print(f"\n{'='*60}", flush=True)
+        print(f"📊 UPDATE CYCLE STARTING at {datetime.now()}", flush=True)
+        print(f"{'='*60}", flush=True)
+        
         logger.info("=" * 60)
         logger.info(f"📊 Starting signal update cycle at {datetime.now()}")
         
@@ -188,18 +209,37 @@ class SignalWorker:
 
 def main():
     """Entry point"""
+    # Force immediate log output
+    print("=" * 70, flush=True)
+    print("🚀 AlphaTrades V5 Worker Starting...", flush=True)
+    print("=" * 70, flush=True)
+    
     # Validate environment
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
         logger.error("❌ ALPACA_API_KEY or ALPACA_SECRET_KEY not set! Exiting...")
+        print("❌ Missing Alpaca credentials!", flush=True)
         return
     
     if not os.getenv('DATABASE_URL'):
         logger.error("❌ DATABASE_URL not set! Exiting...")
+        print("❌ Missing DATABASE_URL!", flush=True)
         return
     
+    print(f"✅ Environment validated", flush=True)
+    print(f"✅ Database URL: {os.getenv('DATABASE_URL')[:50]}...", flush=True)
+    print(f"✅ Alpaca Key: {ALPACA_API_KEY[:10]}...", flush=True)
+    print(f"", flush=True)
+    
     # Start worker
-    worker = SignalWorker()
-    worker.run()
+    try:
+        worker = SignalWorker()
+        print("✅ Worker initialized successfully", flush=True)
+        print("🔄 Starting main loop...", flush=True)
+        worker.run()
+    except Exception as e:
+        print(f"❌ FATAL ERROR: {e}", flush=True)
+        logger.error(f"❌ FATAL ERROR in main: {e}", exc_info=True)
+        raise
 
 if __name__ == '__main__':
     main()
