@@ -136,11 +136,12 @@ def download_ticker_data(ticker: str, start_date: datetime, end_date: datetime, 
     
     while current_date < end_date:
         # Chunk: current_date to end of month or end_date
-        chunk_end = min(
-            datetime(current_date.year, current_date.month + 1, 1) if current_date.month < 12 
-            else datetime(current_date.year + 1, 1, 1),
-            end_date
-        )
+        if current_date.month < 12:
+            next_month = datetime(current_date.year, current_date.month + 1, 1, tzinfo=pytz.UTC)
+        else:
+            next_month = datetime(current_date.year + 1, 1, 1, tzinfo=pytz.UTC)
+        
+        chunk_end = min(next_month, end_date)
         
         # Check if we already have this chunk
         existing_bars = session.execute(
