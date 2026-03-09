@@ -1,8 +1,9 @@
-{% extends "base.html" %}
-
-{% block title %}V5 Trade Station - AlphaTrades{% endblock %}
-
-{% block content %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>V5 Trade Station - AlphaTrades</title>
 <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     
@@ -51,6 +52,32 @@
     
     .nav-stat-value.positive { color: #10b981; }
     .nav-stat-value.negative { color: #ef4444; }
+    
+    .nav-links {
+        display: flex;
+        gap: 20px;
+        align-items: center;
+    }
+    
+    .nav-link {
+        color: #94a3b8;
+        text-decoration: none;
+        font-size: 13px;
+        font-weight: 500;
+        padding: 6px 12px;
+        border-radius: 4px;
+        transition: all 0.2s;
+    }
+    
+    .nav-link:hover {
+        color: #fff;
+        background: #1a1f3a;
+    }
+    
+    .nav-link.active {
+        color: #3b82f6;
+        background: rgba(59, 130, 246, 0.1);
+    }
     
     /* Main Content */
     .main-content {
@@ -448,6 +475,10 @@
     <div class="logo">
         ALPHA<span class="logo-accent">TRADES</span> <span style="font-size:12px; color:#64748b; font-weight:400;">V5 Pro</span>
     </div>
+    <div class="nav-links">
+        <a href="/" class="nav-link active">Dashboard</a>
+        <a href="/backtest" class="nav-link">Backtest</a>
+    </div>
     <div class="nav-stats">
         <div>
             <span class="nav-stat-label">SIGNALS</span>
@@ -764,4 +795,5 @@ window.addEventListener('beforeunload', () => {
     if (refreshInterval) clearInterval(refreshInterval);
 });
 </script>
-{% endblock %}
+</body>
+</html>
