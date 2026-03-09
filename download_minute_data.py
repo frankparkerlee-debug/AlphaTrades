@@ -76,10 +76,11 @@ def download_ticker_chunk(ticker: str, start_date: datetime, end_date: datetime)
         
         bars_response = alpaca_client.get_stock_bars(request_params)
         
-        if not bars_response or ticker not in bars_response:
+        # BarSet object - access via .data dict or .df
+        if not bars_response or not hasattr(bars_response, 'data'):
             return []
         
-        bars_data = bars_response[ticker]
+        bars_data = bars_response.data.get(ticker, [])
         
         # Convert to list of dicts
         bars_list = []
