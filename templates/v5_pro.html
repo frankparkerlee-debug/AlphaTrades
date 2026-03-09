@@ -469,6 +469,42 @@
             display: none;
         }
     }
+    
+    /* Smooth value updates (Robinhood-style) */
+    .price.updating,
+    .score-value.updating,
+    .option-price.updating {
+        animation: valueUpdate 0.5s ease-in-out;
+        color: #00ff88;
+    }
+    
+    @keyframes valueUpdate {
+        0% { 
+            opacity: 1;
+            transform: scale(1);
+        }
+        50% { 
+            opacity: 0.7;
+            transform: scale(1.05);
+            color: #00ff88;
+        }
+        100% { 
+            opacity: 1;
+            transform: scale(1);
+        }
+    }
+    
+    /* Smooth transitions on all value fields */
+    .price,
+    .score-value,
+    .option-price,
+    .grade-badge {
+        transition: all 0.3s ease-in-out;
+    }
+    
+    .score-bar-fill {
+        transition: width 0.5s ease-in-out;
+    }
 </style>
 
 <div class="top-nav">
@@ -633,10 +669,97 @@ function renderCards() {
     });
     
     const grid = document.getElementById('stockGrid');
-    grid.innerHTML = filtered.map(ticker => {
+    
+    // SMOOTH UPDATE: Only touch cards that need changes (like Robinhood)
+    const existingCardIds = Array.from(grid.children).map(card => card.dataset.ticker);
+    
+    // Remove cards not in filtered list
+    Array.from(grid.children).forEach(card => {
+        if (!filtered.includes(card.dataset.ticker)) {
+            card.remove();
+        }
+    });
+    
+    // Update or add cards
+    filtered.forEach(ticker => {
         const data = scoresCache[ticker];
-        return data ? createCard(ticker, data) : createLoadingCard(ticker);
-    }).join('');
+        if (!data) return;
+        
+        let card = grid.querySelector(`[data-ticker="${ticker}"]`);
+        
+        if (card) {
+            // Card exists - UPDATE IN PLACE (smooth, no rebuild)
+            updateCardValues(card, data);
+        } else {
+            // Card doesn't exist - CREATE IT
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = createCard(ticker, data);
+            card = tempDiv.firstElementChild;
+            grid.appendChild(card);
+        }
+    });
+}
+
+function updateCardValues(card, data) {
+    // SMOOTH IN-PLACE UPDATES (only touch changed values)
+    const ticker = data.ticker;
+    
+    // Update price with flash animation
+    const priceEl = card.querySelector('.price');
+    if (priceEl) {
+        const newPrice = `$${data.current_price ? data.current_price.toFixed(2) : '-'}`;
+        if (priceEl.textContent !== newPrice) {
+            priceEl.classList.add('updating');
+            priceEl.textContent = newPrice;
+            setTimeout(() => priceEl.classList.remove('updating'), 500);
+        }
+    }
+    
+    // Update direction/range
+    const changeEl = card.querySelector('.price-change');
+    if (changeEl) {
+        const newChange = `${data.direction} · ${data.intraday_range || 0}% range`;
+        changeEl.textContent = newChange;
+        changeEl.className = `price-change ${data.direction === 'CALL' ? 'positive' : 'negative'}`;
+    }
+    
+    // Update score with animation
+    const scoreValueEl = card.querySelector('.score-value');
+    if (scoreValueEl && scoreValueEl.textContent != data.score) {
+        scoreValueEl.classList.add('updating');
+        scoreValueEl.textContent = data.score;
+        setTimeout(() => scoreValueEl.classList.remove('updating'), 500);
+    }
+    
+    // Update score bar
+    const scoreBarFill = card.querySelector('.score-bar-fill');
+    if (scoreBarFill) {
+        scoreBarFill.style.width = `${data.score}%`;
+    }
+    
+    // Update grade badge
+    const gradeBadge = card.querySelector('.grade-badge');
+    if (gradeBadge && gradeBadge.textContent !== data.grade) {
+        const gradeClass = data.grade.charAt(0);
+        gradeBadge.className = `grade-badge ${gradeClass}`;
+        gradeBadge.textContent = data.grade;
+    }
+    
+    // Update option contract if present
+    if (data.option) {
+        const optSymbolEl = card.querySelector('.option-symbol');
+        const optPriceEl = card.querySelector('.option-price');
+        
+        if (optSymbolEl) optSymbolEl.textContent = data.option.symbol || 'N/A';
+        if (optPriceEl) {
+            const newOptPrice = data.option.mid ? `$${data.option.mid.toFixed(2)}` : '-';
+            if (optPriceEl.textContent !== newOptPrice) {
+                optPriceEl.classList.add('updating');
+                optPriceEl.textContent = newOptPrice;
+                setTimeout(() => optPriceEl.classList.remove('updating'), 500);
+            }
+        }
+    }
 }
 
 function createCard(ticker, data) {
@@ -647,7 +770,7 @@ function createCard(ticker, data) {
     const bd = data.breakdown || {};
     
     return `
-        <div class="stock-card ${isSignal ? 'signal' : ''}">
+        <div class="stock-card ${isSignal ? 'signal' : ''}" data-ticker="${ticker}">
             ${isSignal ? '<div class="status-indicator"></div>' : ''}
             
             <div class="card-header">

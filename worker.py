@@ -142,30 +142,29 @@ class SignalWorker:
                 # 3. Calculate V5 score (EXPENSIVE - but only once per 2 seconds)
                 v5_result = self.scorer.score_ticker(ticker.upper(), quote_data, market_data)
                 
-                # 4. Get optimal option based on V5 direction
+                # 4. Get TARGETED option contract (FAST - fetches only ONE contract)
                 trade_setup = v5_result.get('trade_setup', {})
                 direction = trade_setup.get('direction', 'CALL')
                 option_type = 'call' if direction == 'CALL' else 'put'
                 
-                # 5. Get options chain (EXPENSIVE - but cached)
+                # Use algorithm-driven targeted contract fetch (1000x faster than full chain)
                 optimal_option = None
                 try:
-                    chain_data = self.alpaca.get_options_chain(ticker.upper())
+                    # Fetch ONLY the contract we need (ATM, 1 DTE, algorithm direction)
+                    optimal_option = self.alpaca.get_target_option_contract(
+                        ticker.upper(),
+                        stock_price,
+                        option_type,
+                        dte_preference=1  # 1 DTE = tomorrow expiry (our sweet spot)
+                    )
                     
-                    if 'error' not in chain_data and chain_data.get('snapshots'):
-                        optimal_option = self.selector.select_best_contract(
-                            chain_data.get('snapshots', {}),
-                            stock_price,
-                            option_type
-                        )
-                        if optimal_option:
-                            logger.info(f"   💰 Found option: {optimal_option['symbol']} @ ${optimal_option['mid']:.2f}")
-                        else:
-                            logger.info(f"   ⚠️  No suitable option found for {ticker} (continuing anyway)")
+                    if optimal_option:
+                        logger.info(f"   💰 {ticker} option: {optimal_option['symbol']} @ ${optimal_option['mid']:.2f}")
                     else:
-                        logger.info(f"   ⚠️  Options chain unavailable for {ticker} (continuing anyway)")
+                        logger.info(f"   ⚠️  {ticker}: No option found (continuing with stock data)")
+                        
                 except Exception as opt_error:
-                    logger.warning(f"   ⚠️  Options error for {ticker}: {opt_error} (continuing anyway)")
+                    logger.warning(f"   ⚠️  {ticker} options error: {opt_error} (continuing)")
                     optimal_option = None
                 
                 # 6. STORE in database (upsert)

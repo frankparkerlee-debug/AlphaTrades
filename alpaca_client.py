@@ -120,9 +120,94 @@ class AlpacaClient:
             'v': daily_bar.get('v', 0),      # volume
         }
     
+    def get_target_option_contract(self, underlying_symbol, stock_price, direction, dte_preference=1):
+        """
+        SMART: Fetch ONE specific contract based on algorithm output
+        Much faster than fetching entire chain (1000+ contracts)
+        
+        Args:
+            underlying_symbol: Stock ticker
+            stock_price: Current stock price
+            direction: 'call' or 'put' (from V5 algorithm)
+            dte_preference: Days to expiration (1 = tomorrow, default)
+        
+        Returns:
+            Single contract dict or None
+        """
+        from datetime import date, timedelta
+        
+        # Calculate ATM strike (round to nearest $5 for stocks > $50, else $1)
+        strike_increment = 5 if stock_price > 50 else 1
+        target_strike = round(stock_price / strike_increment) * strike_increment
+        
+        # Calculate target expiration (next trading day + dte_preference)
+        # Simple: today + dte_preference days (ignore weekends for now, Alpaca will find nearest)
+        target_date = date.today() + timedelta(days=dte_preference)
+        
+        # Build OCC symbol: AAPL260314C00150000
+        # Format: SYMBOL + YYMMDD + [C/P] + STRIKE (8 digits, 3 decimals)
+        exp_str = target_date.strftime('%y%m%d')
+        opt_type = 'C' if direction.lower() == 'call' else 'P'
+        strike_str = f"{int(target_strike * 1000):08d}"
+        occ_symbol = f"{underlying_symbol}{exp_str}{opt_type}{strike_str}"
+        
+        # Fetch JUST THIS ONE CONTRACT
+        url = f"{self.data_url}/v1beta1/options/snapshots"
+        params = {'symbols': occ_symbol}
+        
+        try:
+            response = requests.get(url, headers=self.headers, params=params, timeout=3)
+            
+            if response.status_code == 403:
+                return {'error': 'Options data requires Alpaca Premium subscription'}
+            
+            if response.status_code == 404:
+                # Contract doesn't exist, try nearby strikes
+                for offset in [-strike_increment, strike_increment, -2*strike_increment, 2*strike_increment]:
+                    alt_strike = target_strike + offset
+                    alt_strike_str = f"{int(alt_strike * 1000):08d}"
+                    alt_symbol = f"{underlying_symbol}{exp_str}{opt_type}{alt_strike_str}"
+                    params = {'symbols': alt_symbol}
+                    response = requests.get(url, headers=self.headers, params=params, timeout=3)
+                    if response.status_code == 200:
+                        break
+            
+            if response.status_code != 200:
+                return None
+            
+            data = response.json()
+            snapshots = data.get('snapshots', {})
+            
+            if not snapshots:
+                return None
+            
+            # Return first (and should be only) contract
+            contract_symbol = list(snapshots.keys())[0]
+            contract_data = snapshots[contract_symbol]
+            
+            # Format for options_selector compatibility
+            return {
+                'symbol': contract_symbol,
+                'strike': target_strike,
+                'expiration': target_date.isoformat(),
+                'type': direction.lower(),
+                'bid': contract_data.get('latestQuote', {}).get('bp', 0),
+                'ask': contract_data.get('latestQuote', {}).get('ap', 0),
+                'mid': (contract_data.get('latestQuote', {}).get('bp', 0) + 
+                        contract_data.get('latestQuote', {}).get('ap', 0)) / 2,
+                'delta': contract_data.get('greeks', {}).get('delta'),
+                'iv': contract_data.get('impliedVolatility'),
+                'volume': contract_data.get('latestTrade', {}).get('s', 0),
+                'open_interest': contract_data.get('openInterest', 0)
+            }
+            
+        except Exception as e:
+            # Silently fail, return None (worker will handle)
+            return None
+    
     def get_options_chain(self, underlying_symbol):
         """
-        Get options chain for a symbol
+        Get options chain for a symbol (DEPRECATED - use get_target_option_contract instead)
         Note: Requires Alpaca Premium subscription for options data
         """
         url = f"{self.data_url}/v1beta1/options/snapshots/{underlying_symbol}"
