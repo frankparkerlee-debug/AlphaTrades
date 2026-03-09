@@ -1,13 +1,39 @@
 """
 SQLAlchemy models for AlphaTrades database
 """
-from sqlalchemy import create_engine, Column, Integer, String, Numeric, DateTime, Date, Boolean, Text, ARRAY, ForeignKey, JSON
+from sqlalchemy import create_engine, Column, Integer, String, Numeric, DateTime, Date, Boolean, Text, ARRAY, ForeignKey, JSON, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker
 from datetime import datetime
 import os
 
 Base = declarative_base()
+
+class MinuteBar(Base):
+    """Minute-level OHLCV price data for backtesting and strategy development"""
+    __tablename__ = 'minute_bars'
+    
+    id = Column(Integer, primary_key=True)
+    ticker = Column(String(10), nullable=False, index=True)
+    timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
+    
+    # OHLCV
+    open = Column(Numeric(12, 4), nullable=False)
+    high = Column(Numeric(12, 4), nullable=False)
+    low = Column(Numeric(12, 4), nullable=False)
+    close = Column(Numeric(12, 4), nullable=False)
+    volume = Column(Integer, nullable=False)
+    
+    # Additional Alpaca fields
+    vwap = Column(Numeric(12, 4))
+    trade_count = Column(Integer)
+    
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    
+    # Composite index for fast queries
+    __table_args__ = (
+        Index('idx_minute_bars_ticker_timestamp', 'ticker', 'timestamp'),
+    )
 
 class Signal(Base):
     """Cached convergence signals - pre-computed by background worker"""
