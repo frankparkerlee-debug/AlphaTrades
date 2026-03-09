@@ -224,7 +224,14 @@ class V5BacktesterAlpaca:
                     stock_move_dollars = exit_close - entry_price
                     option_move_dollars = stock_move_dollars * 0.5  # delta
                     option_current_price = option_entry_price + option_move_dollars
+                    
+                    # Cap option price at $0 (can't go negative)
+                    option_current_price = max(0, option_current_price)
+                    
                     option_pnl_pct = ((option_current_price - option_entry_price) / option_entry_price) * 100
+                    
+                    # Cap percentage moves for realistic exit detection
+                    option_pnl_pct = max(-100, min(500, option_pnl_pct))
                     
                     is_bullish = score_result['direction'] == 'CALL'
                     
@@ -263,7 +270,16 @@ class V5BacktesterAlpaca:
                 
                 stock_move_dollars = exit_price - entry_price
                 option_move_dollars = stock_move_dollars * option_delta
-                option_pct_move = (option_move_dollars / option_entry_price) * 100
+                option_exit_price = option_entry_price + option_move_dollars
+                
+                # CRITICAL: Cap option price at $0 (can't go negative)
+                option_exit_price = max(0, option_exit_price)
+                
+                # Calculate percentage move
+                option_pct_move = ((option_exit_price - option_entry_price) / option_entry_price) * 100
+                
+                # Cap at -100% max loss and +500% max gain (reasonable limits)
+                option_pct_move = max(-100, min(500, option_pct_move))
                 
                 # Position sizing based on starting capital
                 position_size = min(self.starting_capital * 0.2, 200)  # 20% max, $200 cap
