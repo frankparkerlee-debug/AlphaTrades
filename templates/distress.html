@@ -113,6 +113,35 @@
     border-radius: 4px;
 }
 
+/* Triage grades */
+.triage-grade {
+    display: inline-block;
+    width: 28px;
+    height: 28px;
+    line-height: 28px;
+    text-align: center;
+    border-radius: 6px;
+    font-weight: 700;
+    font-size: 14px;
+}
+.triage-a { background: #ef4444; color: #fff; }
+.triage-b { background: #f59e0b; color: #fff; }
+.triage-c { background: #64748b; color: #fff; }
+.triage-d { background: #1e293b; color: #64748b; }
+
+.grade-a { background: rgba(239,68,68,0.1); }
+.grade-b { background: rgba(245,158,11,0.05); }
+
+.focus-badge {
+    font-size: 9px;
+    background: #3b82f6;
+    color: #fff;
+    padding: 2px 4px;
+    border-radius: 3px;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
 .put-rec {
     font-family: 'SF Mono', monospace;
     font-size: 12px;
@@ -190,20 +219,21 @@
 </div>
 
 <div class="earnings-section">
-    <h2 class="section-title">Upcoming Earnings (Next 14 Days)</h2>
+    <h2 class="section-title">Upcoming Earnings — PUT Triage (Sorted by Potential)</h2>
+    <p style="color:#64748b;font-size:12px;margin-bottom:12px;">A/B grades = worth analyzing • 30d price drop + 5-10 days out = higher score</p>
     <table class="earnings-table" id="earningsTable">
         <thead>
             <tr>
+                <th>Grade</th>
                 <th>Ticker</th>
-                <th>Date</th>
-                <th>Time</th>
-                <th>Est. Move</th>
-                <th>Distress Score</th>
+                <th>Days</th>
+                <th>Date/Time</th>
+                <th>30d Chg</th>
                 <th>Action</th>
             </tr>
         </thead>
         <tbody id="earningsBody">
-            <tr><td colspan="6" class="loading">Loading earnings calendar...</td></tr>
+            <tr><td colspan="6" class="loading">Loading earnings calendar with triage scores...</td></tr>
         </tbody>
     </table>
 </div>
@@ -277,18 +307,29 @@ async function loadEarnings() {
         const tbody = document.getElementById('earningsBody');
         
         if (data.events && data.events.length > 0) {
-            tbody.innerHTML = data.events.map(e => `
-                <tr>
-                    <td><strong>${e.ticker}</strong></td>
-                    <td>${e.date}</td>
-                    <td>${e.time || 'TBD'}</td>
-                    <td>${e.est_move || '--'}%</td>
-                    <td>${e.distress_score || '--'}</td>
+            tbody.innerHTML = data.events.map(e => {
+                const gradeClass = e.triage_grade === 'A' ? 'grade-a' : 
+                                   e.triage_grade === 'B' ? 'grade-b' : 
+                                   e.triage_grade === 'C' ? 'grade-c' : 'grade-d';
+                const priceColor = e.price_change_30d < -10 ? 'color:#ef4444' : 
+                                   e.price_change_30d < 0 ? 'color:#f59e0b' : 
+                                   e.price_change_30d > 10 ? 'color:#22c55e' : '';
+                const focusBadge = e.in_focus_list ? '<span class="focus-badge">TECH</span>' : '';
+                
+                return `
+                <tr class="${gradeClass}">
+                    <td>
+                        <span class="triage-grade triage-${e.triage_grade?.toLowerCase()}">${e.triage_grade || '-'}</span>
+                    </td>
+                    <td><strong>${e.ticker}</strong> ${focusBadge}</td>
+                    <td>${e.days_out ?? '--'}d</td>
+                    <td>${e.date} ${e.time === 'bmo' ? '🌅' : e.time === 'amc' ? '🌙' : ''}</td>
+                    <td style="${priceColor}">${e.price_change_30d != null ? e.price_change_30d.toFixed(1) + '%' : '--'}</td>
                     <td><button class="filter-btn" onclick="scanTicker('${e.ticker}')">Analyze</button></td>
                 </tr>
-            `).join('');
+            `}).join('');
         } else {
-            tbody.innerHTML = '<tr><td colspan="6">No upcoming earnings in watchlist</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6">No upcoming earnings</td></tr>';
         }
     } catch(e) {
         document.getElementById('earningsBody').innerHTML = '<tr><td colspan="6">Error loading earnings</td></tr>';

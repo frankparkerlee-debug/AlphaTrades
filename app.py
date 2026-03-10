@@ -1166,19 +1166,80 @@ def api_distress_earnings_calendar():
         # Sort by date
         earnings.sort(key=lambda x: x.get('date', ''))
         
-        # Format response - show ALL with flag for focus list
+        # Quick triage: Get 30-day price changes for quick PUT scoring
+        from alpaca_client import AlpacaClient
+        alpaca = AlpacaClient()
+        
+        # Format response with quick triage scores
         events = []
-        for e in earnings[:100]:  # Top 100 upcoming
+        tickers_to_check = [e.get('symbol', '') for e in earnings[:100] if e.get('symbol')]
+        
+        # Batch fetch price data for quick triage (fast)
+        price_changes = {}
+        try:
+            for ticker in tickers_to_check[:50]:  # Limit to 50 for speed
+                try:
+                    bars = alpaca.get_bars(ticker, timeframe='1Day', limit=30)
+                    if bars and 'bars' in bars and len(bars['bars']) >= 2:
+                        old_price = bars['bars'][0].get('c', 0)
+                        new_price = bars['bars'][-1].get('c', 0)
+                        if old_price > 0:
+                            price_changes[ticker] = ((new_price - old_price) / old_price) * 100
+                except:
+                    pass
+        except Exception as e:
+            logger.warning(f"Could not fetch price changes: {e}")
+        
+        for e in earnings[:100]:
             ticker = e.get('symbol', '')
+            price_chg = price_changes.get(ticker)
+            
+            # Quick triage score (higher = more PUT potential)
+            # Based on: price decline, days to earnings
+            triage_score = 0
+            if price_chg is not None:
+                if price_chg <= -15:
+                    triage_score += 40  # Heavy decline
+                elif price_chg <= -10:
+                    triage_score += 30
+                elif price_chg <= -5:
+                    triage_score += 20
+                elif price_chg <= 0:
+                    triage_score += 10
+                # Stocks up big might be due for pullback on miss
+                elif price_chg >= 20:
+                    triage_score += 15
+            
+            # Days until earnings bonus (sweet spot is 5-10 days)
+            earn_date = e.get('date', '')
+            if earn_date:
+                try:
+                    days_out = (datetime.strptime(earn_date, '%Y-%m-%d') - today).days
+                    if 5 <= days_out <= 10:
+                        triage_score += 20  # Perfect entry window
+                    elif 3 <= days_out <= 14:
+                        triage_score += 10
+                except:
+                    days_out = None
+            else:
+                days_out = None
+            
             events.append({
                 'ticker': ticker,
                 'date': e.get('date'),
-                'time': e.get('hour', 'bmo'),  # bmo = before market, amc = after
+                'days_out': days_out,
+                'time': e.get('hour', 'bmo'),
                 'eps_estimate': e.get('epsEstimate'),
                 'eps_actual': e.get('epsActual'),
                 'revenue_estimate': e.get('revenueEstimate'),
-                'in_focus_list': ticker in TECH_100,  # Flag if in our watchlist
+                'in_focus_list': ticker in TECH_100,
+                'price_change_30d': round(price_chg, 1) if price_chg else None,
+                'triage_score': triage_score,
+                'triage_grade': 'A' if triage_score >= 50 else 'B' if triage_score >= 30 else 'C' if triage_score >= 15 else 'D'
             })
+        
+        # Sort by triage score (highest first)
+        events.sort(key=lambda x: (-x['triage_score'], x.get('date', '')))
         
         return jsonify({
             'events': events,
