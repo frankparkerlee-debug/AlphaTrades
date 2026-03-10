@@ -661,9 +661,9 @@ class LaunchControlScorer:
                               direction: str, grade: str, intraday_range: float,
                               atr: float) -> Dict:
         """
-        Calculate trade setup details
+        Calculate trade setup details (always returns setup for UI display)
         """
-        if close <= 0 or grade in ['B-', 'C']:
+        if close <= 0:
             return {}
         
         # ATM strike calculation
@@ -686,13 +686,24 @@ class LaunchControlScorer:
         else:
             suggested_dte = 1
         
+        # Target and stop based on ATR
+        if is_bullish:
+            target_price = round(close + (atr * 1.5), 2)
+            stop_price = round(close - (atr * 0.75), 2)
+        else:
+            target_price = round(close - (atr * 1.5), 2)
+            stop_price = round(close + (atr * 0.75), 2)
+        
         return {
             'direction': direction,
             'entry_price': round(close, 2),
+            'target_price': target_price,
+            'stop_price': stop_price,
             'atm_strike': atm_strike,
             'suggested_dte': suggested_dte,
             'atr': round(atr, 2),
-            'intraday_range_pct': round((intraday_range / close * 100), 2) if close > 0 else 0
+            'intraday_range_pct': round((intraday_range / close * 100), 2) if close > 0 else 0,
+            'tradeable': grade not in ['B-', 'C']  # Flag if grade warrants trading
         }
     
     def _get_exit_strategy(self, grade: str) -> Dict:
