@@ -1003,11 +1003,10 @@ def health():
 # DISTRESS SCANNER ENDPOINTS
 # ============================================================================
 
+# Same 15 tickers as Launch Control for consistency
 DISTRESS_WATCHLIST = [
-    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NFLX', 'TSLA', 'NVDA',
-    'LULU', 'NKE', 'TGT', 'WMT', 'COST',
-    'SNAP', 'PINS', 'ROKU', 'SHOP', 'SQ', 'PYPL',
-    'DIS', 'SBUX', 'MCD', 'BA', 'UAL', 'DAL'
+    'NVDA', 'TSLA', 'AMD', 'AAPL', 'AMZN', 'META', 'MSFT', 'GOOGL', 
+    'NFLX', 'AVGO', 'ORCL', 'ADBE', 'CRM', 'INTC', 'QCOM'
 ]
 
 @app.route('/distress')

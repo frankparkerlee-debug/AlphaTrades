@@ -164,7 +164,8 @@
 
 {% block scripts %}
 <script>
-const WATCHLIST = ['AAPL','MSFT','GOOGL','AMZN','META','NFLX','TSLA','NVDA','AMD','LULU','NKE','TGT','SNAP','ROKU'];
+// Same 15 tickers as Launch Control
+const WATCHLIST = ['NVDA','TSLA','AMD','AAPL','AMZN','META','MSFT','GOOGL','NFLX','AVGO','ORCL','ADBE','CRM','INTC','QCOM'];
 
 async function runScan() {
     const btn = document.getElementById('scanBtn');
