@@ -3,8 +3,7 @@ SQLAlchemy models for AlphaTrades database
 Combined: Core trading models + Distress Scanner models
 """
 from sqlalchemy import create_engine, Column, Integer, String, Numeric, DateTime, Date, Boolean, Text, ARRAY, ForeignKey, JSON, Index, Float
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship, sessionmaker
+from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from datetime import datetime
 from typing import Optional, Dict
 import os
