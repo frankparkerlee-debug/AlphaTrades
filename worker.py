@@ -123,16 +123,16 @@ class LaunchControlWorker:
             qqq_change = ((qqq_current - qqq_prev) / qqq_prev * 100) if qqq_prev else 0
             
             return {
-                'qqq_direction': 'up' if qqq_change >= 0 else 'down',
+                'qqq_direction': 'UP' if qqq_change >= 0 else 'DOWN',
                 'qqq_change': qqq_change,
-                'sector_direction': 'up' if qqq_change >= 0 else 'down',
+                'sector_direction': 'UP' if qqq_change >= 0 else 'DOWN',
                 'sector_change': qqq_change,
                 'vix': 18.0  # Would need VIX quote for accurate value
             }
         except Exception as e:
             logger.warning(f"Market data error: {e}")
             return {
-                'qqq_direction': 'up',
+                'qqq_direction': 'UP',
                 'qqq_change': 0.0,
                 'sector_direction': 'up',
                 'sector_change': 0.0,
