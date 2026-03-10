@@ -47,11 +47,7 @@
     border: 1px solid #1a1f3a;
     border-left: 4px solid #ef4444;
     border-radius: 8px;
-    padding: 16px 20px;
-    display: grid;
-    grid-template-columns: 100px 1fr 120px 140px;
-    gap: 24px;
-    align-items: center;
+    padding: 20px 24px;
 }
 .distress-signal.high-conviction {
     border-left-color: #ef4444;
@@ -72,6 +68,51 @@
 }
 .signal-score.critical { color: #ef4444; }
 .signal-score.warning { color: #f59e0b; }
+.signal-score.low { color: #64748b; }
+
+.signal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+.signal-breakdown {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px 24px;
+    margin-bottom: 16px;
+    padding: 12px;
+    background: #1e293b;
+    border-radius: 6px;
+}
+.breakdown-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    color: #94a3b8;
+}
+.breakdown-row strong { color: #fff; }
+.signal-signals {
+    font-size: 13px;
+    color: #94a3b8;
+    margin-bottom: 12px;
+}
+.signal-tag {
+    display: inline-block;
+    background: #334155;
+    padding: 4px 8px;
+    border-radius: 4px;
+    margin: 4px 4px 4px 0;
+    font-size: 11px;
+}
+.signal-recommendation {
+    font-size: 14px;
+    font-weight: 600;
+    padding: 8px 12px;
+    background: linear-gradient(90deg, #1e293b, transparent);
+    border-radius: 4px;
+}
+
 .put-rec {
     font-family: 'SF Mono', monospace;
     font-size: 12px;
@@ -294,10 +335,13 @@ function scanManual() {
 }
 
 function scanTicker(ticker) {
-    // Quick scan single ticker with feedback
+    // Scan single ticker and show results on-screen
     const btn = event.target;
+    const list = document.getElementById('signalList');
     btn.textContent = '...';
     btn.disabled = true;
+    
+    list.innerHTML = `<div class="loading">Analyzing ${ticker}...</div>`;
     
     fetch('/api/distress/scan', {
         method: 'POST',
@@ -310,18 +354,46 @@ function scanTicker(ticker) {
         btn.disabled = false;
         
         if (d.error) {
-            alert(`Error: ${d.error}`);
-        } else if (d.alerts && d.alerts.length) {
-            const a = d.alerts[0];
-            alert(`${ticker} Distress Score: ${a.score}/100\n\nSignals:\n- SEC Filings: ${a.data?.filings_8k || 0}\n- News Sentiment: ${(a.data?.news_sentiment?.average_sentiment || 0).toFixed(2)}\n- Insider Sales: ${a.data?.form4_filings || 0}`);
+            list.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${d.error}</p></div>`;
         } else {
-            alert(`${ticker}: No distress signals detected (Score < 60)`);
+            // Get the raw result (even if below threshold)
+            const results = d.all_results || d.alerts || [];
+            if (results.length > 0) {
+                const a = results[0];
+                const scoreClass = a.score >= 80 ? 'critical' : a.score >= 60 ? 'warning' : 'low';
+                const grade = a.score >= 80 ? 'A' : a.score >= 70 ? 'B+' : a.score >= 60 ? 'B' : a.score >= 40 ? 'C' : 'D';
+                list.innerHTML = `
+                    <div class="distress-signal ${a.score >= 60 ? 'high-conviction' : ''}">
+                        <div class="signal-header">
+                            <div class="signal-ticker">${ticker}</div>
+                            <div class="signal-score ${scoreClass}">${a.score}/100 (${grade})</div>
+                        </div>
+                        <div class="signal-breakdown">
+                            <div class="breakdown-row"><span>SEC 8-K Filings:</span> <strong>${a.data?.filings_8k || 0}</strong></div>
+                            <div class="breakdown-row"><span>Form 4 (Insider):</span> <strong>${a.data?.form4_filings || 0}</strong></div>
+                            <div class="breakdown-row"><span>News Articles:</span> <strong>${a.data?.news_count || 0}</strong></div>
+                            <div class="breakdown-row"><span>Avg Sentiment:</span> <strong>${(a.data?.news_sentiment?.average_sentiment || 0).toFixed(2)}</strong></div>
+                            <div class="breakdown-row"><span>Negative Ratio:</span> <strong>${((a.data?.news_sentiment?.negative_ratio || 0) * 100).toFixed(0)}%</strong></div>
+                            <div class="breakdown-row"><span>Days to Earnings:</span> <strong>${a.data?.days_until_earnings ?? 'N/A'}</strong></div>
+                        </div>
+                        <div class="signal-signals">
+                            <strong>Triggered Signals:</strong> ${a.signals_triggered || 0}
+                            ${a.signals?.map(s => `<div class="signal-tag">${s.type}: ${s.details || ''}</div>`).join('') || '<div class="signal-tag">None</div>'}
+                        </div>
+                        <div class="signal-recommendation">
+                            ${a.score >= 70 ? '🔴 STRONG PUT CANDIDATE' : a.score >= 60 ? '🟠 CONSIDER PUT' : a.score >= 40 ? '🟡 WATCH' : '⚪ NO TRADE'}
+                        </div>
+                    </div>
+                `;
+            } else {
+                list.innerHTML = `<div class="empty-state"><h3>${ticker}</h3><p>Score below threshold. No significant distress signals detected.</p></div>`;
+            }
         }
     })
     .catch(e => {
         btn.textContent = 'Analyze';
         btn.disabled = false;
-        alert(`Error scanning ${ticker}: ${e.message}`);
+        list.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${e.message}</p></div>`;
     });
 }
 

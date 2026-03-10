@@ -188,28 +188,28 @@ function createCard(ticker, data) {
             
             <div class="signals-grid">
                 <div class="signal-item">
-                    <span class="signal-label">Catalyst</span>
-                    <span class="signal-value">${breakdown.catalyst?.score || 0}</span>
+                    <span class="signal-label">PA</span>
+                    <span class="signal-value">${Math.round(breakdown.price_action?.score || 0)}/35</span>
                 </div>
                 <div class="signal-item">
-                    <span class="signal-label">Volume</span>
-                    <span class="signal-value">${breakdown.volume?.score || 0}</span>
+                    <span class="signal-label">Vol</span>
+                    <span class="signal-value">${Math.round(breakdown.volume?.score || 0)}/30</span>
                 </div>
                 <div class="signal-item">
-                    <span class="signal-label">Direction</span>
-                    <span class="signal-value">${breakdown.direction?.score || 0}</span>
+                    <span class="signal-label">News</span>
+                    <span class="signal-value">${Math.round(breakdown.news_sentiment?.score || 0)}/15</span>
                 </div>
                 <div class="signal-item">
-                    <span class="signal-label">Range</span>
-                    <span class="signal-value">${breakdown.range?.score || 0}</span>
+                    <span class="signal-label">Mkt</span>
+                    <span class="signal-value">${Math.round(breakdown.market_alignment?.score || 0)}/15</span>
                 </div>
                 <div class="signal-item">
-                    <span class="signal-label">Timing</span>
-                    <span class="signal-value">${breakdown.timing?.score || 0}</span>
+                    <span class="signal-label">Time</span>
+                    <span class="signal-value">${Math.round(breakdown.timing?.score || 0)}/5</span>
                 </div>
                 <div class="signal-item">
-                    <span class="signal-label">RSI</span>
-                    <span class="signal-value">${breakdown.rsi?.score || 0}</span>
+                    <span class="signal-label">Raw</span>
+                    <span class="signal-value">${Math.round(breakdown.raw_score || data.score)}</span>
                 </div>
             </div>
             

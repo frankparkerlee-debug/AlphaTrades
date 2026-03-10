@@ -1111,8 +1111,13 @@ def api_distress_scan():
             -x['score']
         ))
         
+        # Also include all results for detailed analysis view
+        all_results = [r for r in results if not r.get('error')]
+        all_results.sort(key=lambda x: -x.get('score', 0))
+        
         return jsonify({
             'alerts': high_conviction,
+            'all_results': all_results[:50],  # Include all for UI display
             'total_scanned': len(tickers_to_scan),
             'high_conviction_count': len(high_conviction),
             'scan_mode': scan_mode,
