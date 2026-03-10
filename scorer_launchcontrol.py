@@ -98,7 +98,12 @@ class LaunchControlScorer:
         # Calculate metrics
         price_change = abs(close - open_price)
         atr_multiple = price_change / atr if atr > 0 else 0
-        rel_volume = volume / vol_baseline if vol_baseline > 0 else 1.0
+        
+        # TIME-WEIGHTED volume comparison (not raw daily comparison)
+        expected_vol_pct = self._get_expected_volume_pct(timestamp)
+        expected_volume = vol_baseline * expected_vol_pct
+        rel_volume = volume / expected_volume if expected_volume > 0 else 1.0
+        
         intraday_range = high - low
         body_ratio = price_change / intraday_range if intraday_range > 0 else 0
         
@@ -203,6 +208,73 @@ class LaunchControlScorer:
             'atr_multiple': round(atr_multiple, 2),
             'rel_volume': round(rel_volume, 2)
         }
+    
+    def _get_expected_volume_pct(self, timestamp: datetime) -> float:
+        """
+        Get expected cumulative volume percentage at given time of day.
+        Based on typical intraday volume distribution (U-shaped curve).
+        
+        Returns: Expected fraction of daily volume (0.0 to 1.0)
+        """
+        hour = timestamp.hour
+        minute = timestamp.minute
+        
+        # Minutes since market open (9:30 AM ET)
+        minutes_since_open = (hour - 9) * 60 + (minute - 30)
+        
+        if minutes_since_open <= 0:
+            return 0.05  # Pre-market, minimal expected
+        
+        # Total trading minutes in a day
+        total_minutes = 390  # 9:30 AM to 4:00 PM
+        
+        if minutes_since_open >= total_minutes:
+            return 1.0
+        
+        # Cumulative volume distribution (empirical U-curve)
+        # Heavy volume at open and close, lighter midday
+        # Approximate cumulative percentages:
+        #   30 min (10:00): 12%
+        #   60 min (10:30): 20%
+        #   90 min (11:00): 28%
+        #  150 min (12:00): 40%
+        #  210 min (1:00):  50%
+        #  270 min (2:00):  60%
+        #  330 min (3:00):  75%
+        #  390 min (4:00): 100%
+        
+        cumulative_pcts = {
+            30: 0.12,   # 10:00 AM
+            60: 0.20,   # 10:30 AM
+            90: 0.28,   # 11:00 AM
+            120: 0.35,  # 11:30 AM
+            150: 0.42,  # 12:00 PM
+            180: 0.48,  # 12:30 PM
+            210: 0.54,  # 1:00 PM
+            240: 0.60,  # 1:30 PM
+            270: 0.66,  # 2:00 PM
+            300: 0.73,  # 2:30 PM
+            330: 0.82,  # 3:00 PM
+            360: 0.92,  # 3:30 PM
+            390: 1.00,  # 4:00 PM
+        }
+        
+        # Linear interpolation between checkpoints
+        checkpoints = sorted(cumulative_pcts.keys())
+        
+        for i, cp in enumerate(checkpoints):
+            if minutes_since_open <= cp:
+                if i == 0:
+                    return (minutes_since_open / cp) * cumulative_pcts[cp]
+                else:
+                    prev_cp = checkpoints[i-1]
+                    prev_pct = cumulative_pcts[prev_cp]
+                    curr_pct = cumulative_pcts[cp]
+                    # Linear interpolation
+                    progress = (minutes_since_open - prev_cp) / (cp - prev_cp)
+                    return prev_pct + progress * (curr_pct - prev_pct)
+        
+        return 1.0
     
     def _score_timing(self, timestamp: datetime, market_data: Optional[Dict]) -> Tuple[int, str, str]:
         """
