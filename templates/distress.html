@@ -80,6 +80,9 @@
     border-radius: 6px;
 }
 .put-strike { color: #ef4444; font-weight: 600; }
+.urgency-high { background: #ef4444; color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; }
+.urgency-medium { background: #f59e0b; color: #000; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; }
+.urgency-low { background: #64748b; color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; }
 
 .earnings-section {
     margin-top: 32px;
@@ -190,22 +193,24 @@ async function runScan() {
         
         if (data.alerts && data.alerts.length > 0) {
             list.innerHTML = data.alerts.map(a => `
-                <div class="distress-signal ${a.score >= 80 ? 'high-conviction' : ''}">
+                <div class="distress-signal ${a.urgency === 'HIGH' ? 'high-conviction' : ''}">
                     <div>
                         <div class="signal-ticker">${a.ticker}</div>
-                        <div class="signal-reason">${a.signals_triggered} signals</div>
+                        <div class="signal-reason">
+                            ${a.has_earnings ? 
+                                `Earnings in ${a.days_until_earnings} days` : 
+                                `${a.signals_triggered} signals`}
+                        </div>
                     </div>
                     <div class="signal-reason">${formatSignals(a.signal_details)}</div>
                     <div class="signal-score ${a.score >= 80 ? 'critical' : 'warning'}">${a.score}</div>
                     <div class="put-rec">
-                        ${a.put_recommendation ? 
-                            `<span class="put-strike">${a.put_recommendation.strike}P</span> ${a.put_recommendation.expiry}` : 
-                            'Analyzing...'}
+                        <span class="urgency-${a.urgency?.toLowerCase() || 'low'}">${a.urgency || 'LOW'}</span>
                     </div>
                 </div>
             `).join('');
         } else {
-            list.innerHTML = '<div class="empty-state"><h3>No High-Conviction Signals</h3><p>No distress signals above threshold (80+)</p></div>';
+            list.innerHTML = '<div class="empty-state"><h3>No Distress Signals</h3><p>No stocks with upcoming earnings showing distress (score 60+)</p></div>';
         }
     } catch(e) {
         list.innerHTML = '<div class="empty-state"><h3>Scan Error</h3><p>' + e.message + '</p></div>';

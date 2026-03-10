@@ -1015,24 +1015,89 @@ def distress_scanner_page():
 
 @app.route('/api/distress/scan', methods=['POST'])
 def api_distress_scan():
-    """Scan tickers for distress signals"""
+    """
+    Scan for distress signals - prioritizes stocks with upcoming earnings
+    Strategy: Find distressed companies BEFORE earnings = PUT opportunities
+    """
     try:
         from distress_scanner import DistressScanner
+        import requests
+        from datetime import timedelta
         
         data = request.json or {}
-        tickers = data.get('tickers', DISTRESS_WATCHLIST)
+        scan_mode = data.get('mode', 'earnings')  # 'earnings' or 'all'
         
         finnhub_key = os.getenv('FINNHUB_API_KEY')
-        scanner = DistressScanner(finnhub_api_key=finnhub_key)
-        results = scanner.scan_multiple(tickers, days_back=30)
         
-        high_conviction = [r for r in results if r.get('score', 0) >= 80 and not r.get('error')]
-        high_conviction.sort(key=lambda x: x['score'], reverse=True)
+        # STEP 1: Get stocks with upcoming earnings (next 14 days)
+        tickers_to_scan = []
+        earnings_map = {}  # ticker -> days until earnings
+        
+        if scan_mode == 'earnings' and finnhub_key:
+            try:
+                today = datetime.now()
+                from_date = today.strftime('%Y-%m-%d')
+                to_date = (today + timedelta(days=14)).strftime('%Y-%m-%d')
+                
+                url = "https://finnhub.io/api/v1/calendar/earnings"
+                params = {'from': from_date, 'to': to_date, 'token': finnhub_key}
+                resp = requests.get(url, params=params, timeout=10)
+                earnings_data = resp.json().get('earningsCalendar', [])
+                
+                for e in earnings_data:
+                    ticker = e.get('symbol')
+                    if ticker:
+                        tickers_to_scan.append(ticker)
+                        # Calculate days until earnings
+                        earn_date = datetime.strptime(e.get('date', from_date), '%Y-%m-%d')
+                        earnings_map[ticker] = (earn_date - today).days
+                
+                logger.info(f"Found {len(tickers_to_scan)} stocks with earnings in next 14 days")
+            except Exception as e:
+                logger.warning(f"Earnings calendar error: {e}, falling back to watchlist")
+                tickers_to_scan = DISTRESS_WATCHLIST
+        else:
+            tickers_to_scan = data.get('tickers', DISTRESS_WATCHLIST)
+        
+        # STEP 2: Scan for distress signals
+        scanner = DistressScanner(finnhub_api_key=finnhub_key)
+        results = scanner.scan_multiple(tickers_to_scan[:100], days_back=30)  # Cap at 100
+        
+        # STEP 3: Enrich with earnings data and filter
+        high_conviction = []
+        for r in results:
+            if r.get('error'):
+                continue
+            score = r.get('score', 0)
+            ticker = r.get('ticker')
+            
+            # Add earnings info
+            r['days_until_earnings'] = earnings_map.get(ticker)
+            r['has_earnings'] = ticker in earnings_map
+            
+            # Boost score for imminent earnings (within 5 days)
+            if r['days_until_earnings'] is not None and r['days_until_earnings'] <= 5:
+                r['urgency'] = 'HIGH'
+            elif r['days_until_earnings'] is not None:
+                r['urgency'] = 'MEDIUM'
+            else:
+                r['urgency'] = 'LOW'
+            
+            # High conviction: score >= 60 (lowered from 80 since earnings focus)
+            if score >= 60:
+                high_conviction.append(r)
+        
+        # Sort by: urgency (earnings soon), then score
+        high_conviction.sort(key=lambda x: (
+            0 if x['urgency'] == 'HIGH' else 1 if x['urgency'] == 'MEDIUM' else 2,
+            -x['score']
+        ))
         
         return jsonify({
             'alerts': high_conviction,
-            'total_scanned': len(tickers),
+            'total_scanned': len(tickers_to_scan),
             'high_conviction_count': len(high_conviction),
+            'scan_mode': scan_mode,
             'timestamp': datetime.now().isoformat()
         })
     except Exception as e:
@@ -1046,8 +1111,64 @@ def api_distress_alerts():
 
 @app.route('/api/distress/earnings-calendar')
 def api_distress_earnings_calendar():
-    """Get earnings calendar"""
-    return jsonify({'events': [], 'message': 'Earnings calendar not configured'})
+    """Get upcoming earnings and scan for distress signals"""
+    try:
+        import requests
+        from datetime import datetime, timedelta
+        
+        finnhub_key = os.getenv('FINNHUB_API_KEY')
+        if not finnhub_key:
+            return jsonify({'events': [], 'error': 'FINNHUB_API_KEY not set'})
+        
+        # Get earnings for next 14 days
+        today = datetime.now()
+        from_date = today.strftime('%Y-%m-%d')
+        to_date = (today + timedelta(days=14)).strftime('%Y-%m-%d')
+        
+        url = f"https://finnhub.io/api/v1/calendar/earnings"
+        params = {
+            'from': from_date,
+            'to': to_date,
+            'token': finnhub_key
+        }
+        
+        resp = requests.get(url, params=params, timeout=10)
+        data = resp.json()
+        
+        earnings = data.get('earningsCalendar', [])
+        
+        # Filter to stocks we care about (liquid, optionable)
+        from tech_100 import TECH_100
+        relevant_earnings = [
+            e for e in earnings 
+            if e.get('symbol') in TECH_100
+        ]
+        
+        # Sort by date
+        relevant_earnings.sort(key=lambda x: x.get('date', ''))
+        
+        # Format response
+        events = []
+        for e in relevant_earnings[:30]:  # Top 30 upcoming
+            events.append({
+                'ticker': e.get('symbol'),
+                'date': e.get('date'),
+                'time': e.get('hour', 'bmo'),  # bmo = before market, amc = after
+                'eps_estimate': e.get('epsEstimate'),
+                'eps_actual': e.get('epsActual'),
+                'revenue_estimate': e.get('revenueEstimate'),
+            })
+        
+        return jsonify({
+            'events': events,
+            'count': len(events),
+            'from_date': from_date,
+            'to_date': to_date
+        })
+        
+    except Exception as e:
+        logger.error(f"Earnings calendar error: {e}")
+        return jsonify({'events': [], 'error': str(e)})
 
 # ============================================================================
 # OVERNIGHT GAP ENDPOINTS
