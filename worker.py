@@ -169,9 +169,12 @@ class LaunchControlWorker:
                 
                 # 2. Get historical bars for profile calculation
                 if ticker not in self.equity_profiles:
-                    bars_resp = self.alpaca.get_bars(ticker, timeframe='1Day', limit=30)
+                    from datetime import timedelta
+                    start_date = (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d')
+                    bars_resp = self.alpaca.get_bars(ticker, timeframe='1Day', start=start_date, limit=30)
                     bars = bars_resp.get('bars', []) if bars_resp else []
                     self.equity_profiles[ticker] = self._calculate_equity_profile(ticker, bars)
+                    logger.info(f"   {ticker} profile: ATR={self.equity_profiles[ticker]['atr']:.2f}, VolBase={self.equity_profiles[ticker]['vol_baseline']:.0f}")
                 
                 equity_profile = self.equity_profiles[ticker]
                 
@@ -264,11 +267,14 @@ class LaunchControlWorker:
                 if optimal_option:
                     opt_str = f" | {optimal_option.get('contract', '')} @ ${optimal_option.get('mid', 0):.2f}"
                 
+                pa = lc_result.get('breakdown', {}).get('price_action', {}).get('score', 0)
+                vol = lc_result.get('breakdown', {}).get('volume', {}).get('score', 0)
+                gate = "PASS" if (pa > 17.5 and vol > 15) else "FAIL"
+                
                 logger.info(
                     f"{ticker:5s} ${stock_price:7.2f} ({change_pct:+5.2f}%) | "
                     f"{lc_result.get('grade', 'C'):3s} {int(lc_result.get('score', 0)):3d}/100 | "
-                    f"PA:{lc_result.get('breakdown', {}).get('price_action', {}).get('score', 0):2.0f} "
-                    f"Vol:{lc_result.get('breakdown', {}).get('volume', {}).get('score', 0):2.0f}"
+                    f"PA:{pa:2.0f} Vol:{vol:2.0f} Gate:{gate}"
                     f"{opt_str}"
                 )
                 
