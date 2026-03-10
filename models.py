@@ -61,15 +61,47 @@ class Signal(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     
     def to_dict(self):
+        conv = self.convergence_json or {}
+        opt = self.option_json or {}
+        
+        # Map Launch Control pillars to dashboard expected format
+        breakdown = {
+            'price_action': {'score': conv.get('pa_score', 0)},
+            'volume': {'score': conv.get('vol_score', 0)},
+            'news': {'score': conv.get('news_score', 0)},
+            'market': {'score': conv.get('market_score', 0)},
+            'timing': {'score': conv.get('timing_score', 0)},
+            # Legacy V5 names for backward compat
+            'catalyst': {'score': conv.get('pa_score', 0)},  # PA = Catalyst
+            'range': {'score': conv.get('news_score', 0)},    # News = Range placeholder
+        }
+        
+        # Build trade setup from option data
+        trade_setup = None
+        if opt and opt.get('mid'):
+            entry = opt.get('mid', 0)
+            targets = opt.get('targets', {})
+            trade_setup = {
+                'entry_price': entry,
+                'target_price': targets.get('t1', entry * 1.5),
+                'target_pct': 50,
+                'stop_price': targets.get('stop', entry * 0.5),
+                'stop_pct': -50
+            }
+        
         return {
             'ticker': self.ticker,
             'price': float(self.price) if self.price else None,
+            'current_price': float(self.price) if self.price else None,
             'change_pct': float(self.change_pct) if self.change_pct else None,
             'grade': self.grade,
             'score': self.score,
+            'direction': conv.get('direction', 'CALL'),
+            'intraday_range': abs(float(self.change_pct)) if self.change_pct else 0,
             'convergence_count': self.convergence_count,
             'confidence': self.confidence,
-            'convergence': self.convergence_json,
+            'breakdown': breakdown,
+            'trade_setup': trade_setup,
             'option': self.option_json,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'age_seconds': (datetime.utcnow() - self.updated_at).total_seconds() if self.updated_at else None

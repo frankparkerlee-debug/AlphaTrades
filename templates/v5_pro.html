@@ -833,20 +833,24 @@ function createCard(ticker, data) {
             
             <div class="signals-grid">
                 <div class="signal-item">
-                    <div class="signal-value">${bd.catalyst?.score || 0}</div>
-                    <div class="signal-label">Catalyst</div>
+                    <div class="signal-value">${bd.price_action?.score || 0}</div>
+                    <div class="signal-label">PA (35)</div>
                 </div>
                 <div class="signal-item">
                     <div class="signal-value">${bd.volume?.score || 0}</div>
-                    <div class="signal-label">Volume</div>
+                    <div class="signal-label">Vol (30)</div>
                 </div>
                 <div class="signal-item">
-                    <div class="signal-value">${bd.range?.score || 0}</div>
-                    <div class="signal-label">Range</div>
+                    <div class="signal-value">${bd.news?.score || 0}</div>
+                    <div class="signal-label">News (15)</div>
+                </div>
+                <div class="signal-item">
+                    <div class="signal-value">${bd.market?.score || 0}</div>
+                    <div class="signal-label">Mkt (15)</div>
                 </div>
                 <div class="signal-item">
                     <div class="signal-value">${bd.timing?.score || 0}</div>
-                    <div class="signal-label">Timing</div>
+                    <div class="signal-label">Time (5)</div>
                 </div>
             </div>
             
