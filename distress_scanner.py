@@ -16,6 +16,7 @@ from data_sources import (
     EarningsCalendar
 )
 from scorer_distress import DistressScorer, quick_score
+from sentiment_ai import HybridDistressScorer, AISentimentAnalyzer
 
 
 class DistressScanner:
@@ -137,6 +138,58 @@ class DistressScanner:
             results['error'] = str(e)
             print(f"  ❌ Error scanning {ticker}: {e}")
             return results
+    
+    def scan_ticker_hybrid(self, ticker: str, 
+                          earnings_date: Optional[str] = None,
+                          price_change_30d: Optional[float] = None,
+                          iv_percentile: Optional[float] = None,
+                          use_ai: bool = False,
+                          anthropic_key: Optional[str] = None) -> Dict:
+        """
+        Hybrid scan using AI-enhanced sentiment analysis
+        
+        Args:
+            ticker: Stock symbol
+            earnings_date: Upcoming earnings date (YYYY-MM-DD)
+            price_change_30d: 30-day price change %
+            iv_percentile: Current IV percentile (0-100)
+            use_ai: Whether to use Claude/GPT for deep analysis
+            anthropic_key: Anthropic API key for Claude
+        
+        Returns:
+            Full hybrid scoring result
+        """
+        print(f"\n🔬 Hybrid scan: {ticker}")
+        
+        # Gather data
+        news = self.finnhub_api.get_company_news(ticker, days_back=14)
+        filings_8k = self.sec_api.get_recent_8k_filings(ticker, days_back=30)
+        form4_filings = self.sec_api.get_recent_form4_filings(ticker, days_back=30)
+        
+        # Count insider sells (simplified - would need deeper Form 4 parsing)
+        insider_sells = len(form4_filings)
+        
+        # Initialize hybrid scorer
+        scorer = HybridDistressScorer(
+            finnhub_key=self.finnhub_api.api_key,
+            anthropic_key=anthropic_key
+        )
+        
+        # Run hybrid scoring
+        result = scorer.score_ticker(
+            ticker=ticker,
+            news=news,
+            sec_filings=len(filings_8k),
+            insider_sells=insider_sells,
+            earnings_date=earnings_date,
+            price_change_30d=price_change_30d,
+            iv_percentile=iv_percentile,
+            use_ai=use_ai
+        )
+        
+        print(f"   Score: {result['score']:.1f} | Grade: {result['grade']} | {result['recommendation']}")
+        
+        return result
     
     def scan_multiple(self, tickers: List[str], max_workers: int = 10, **kwargs) -> List[Dict]:
         """

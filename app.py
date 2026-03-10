@@ -1188,6 +1188,75 @@ def api_distress_earnings_calendar():
         logger.error(f"Earnings calendar error: {e}")
         return jsonify({'events': [], 'error': str(e)})
 
+@app.route('/api/distress/analyze', methods=['POST'])
+def api_distress_analyze():
+    """
+    Hybrid AI-enhanced distress analysis for a single ticker
+    Uses keyword filter + optional Claude/GPT deep analysis
+    """
+    try:
+        from distress_scanner import DistressScanner
+        from alpaca_client import AlpacaClient
+        
+        data = request.json or {}
+        ticker = data.get('ticker', '').upper()
+        use_ai = data.get('use_ai', False)
+        earnings_date = data.get('earnings_date')
+        
+        if not ticker:
+            return jsonify({'error': 'ticker required'}), 400
+        
+        finnhub_key = os.getenv('FINNHUB_API_KEY')
+        anthropic_key = os.getenv('ANTHROPIC_API_KEY')
+        
+        if not finnhub_key:
+            return jsonify({'error': 'FINNHUB_API_KEY not configured'}), 500
+        
+        # Get price data for "priced in" analysis
+        alpaca = AlpacaClient()
+        price_change_30d = None
+        iv_percentile = None
+        
+        try:
+            # Get 30-day price change
+            bars = alpaca.get_bars(ticker, timeframe='1Day', limit=30)
+            if bars and 'bars' in bars and len(bars['bars']) >= 2:
+                old_price = bars['bars'][0].get('c', 0)
+                new_price = bars['bars'][-1].get('c', 0)
+                if old_price > 0:
+                    price_change_30d = ((new_price - old_price) / old_price) * 100
+            
+            # Get IV percentile from options (simplified)
+            chain = alpaca.get_options_chain(ticker)
+            if chain and 'snapshots' in chain:
+                ivs = [s.get('greeks', {}).get('iv', 0) for s in chain['snapshots'].values() if s.get('greeks')]
+                if ivs:
+                    current_iv = sum(ivs) / len(ivs)
+                    # Rough percentile estimate (would need historical data for real percentile)
+                    iv_percentile = min(100, current_iv * 200)  # 50% IV = 100th percentile
+        except Exception as e:
+            logger.warning(f"Could not get price/IV data for {ticker}: {e}")
+        
+        # Run hybrid scan
+        scanner = DistressScanner(finnhub_api_key=finnhub_key)
+        result = scanner.scan_ticker_hybrid(
+            ticker=ticker,
+            earnings_date=earnings_date,
+            price_change_30d=price_change_30d,
+            iv_percentile=iv_percentile,
+            use_ai=use_ai,
+            anthropic_key=anthropic_key
+        )
+        
+        result['price_change_30d'] = price_change_30d
+        result['iv_percentile'] = iv_percentile
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Hybrid analysis error: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
 # ============================================================================
 # OVERNIGHT GAP ENDPOINTS
 # ============================================================================

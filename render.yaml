@@ -27,6 +27,8 @@ services:
         value: paper
       - key: FINNHUB_API_KEY
         sync: false  # Set manually in Render dashboard
+      - key: ANTHROPIC_API_KEY
+        sync: false  # Set manually for AI sentiment analysis (optional)
   
   # Background Worker - Market Monitor
   - type: worker
