@@ -40,8 +40,115 @@ logger = logging.getLogger(__name__)
 TICKERS = ['NVDA', 'TSLA', 'AMD', 'AAPL', 'AMZN', 'META', 'MSFT', 'GOOGL', 'NFLX', 'AVGO', 'ORCL', 'ADBE', 'CRM', 'INTC', 'QCOM']
 UPDATE_INTERVAL = 2  # seconds
 
+# ============================================================================
+# NEWS SERVICE - Cached news fetching for momentum scoring
+# ============================================================================
+import requests
+
+# News cache: {ticker: {'data': {...}, 'fetched_at': timestamp}}
+NEWS_CACHE = {}
+NEWS_CACHE_TTL = 300  # 5 minutes cache
+
+# Negative/positive keywords for sentiment
+NEGATIVE_KEYWORDS = [
+    'lawsuit', 'investigation', 'probe', 'fraud', 'scandal', 'decline', 'plunge', 
+    'crash', 'miss', 'disappointing', 'warning', 'loss', 'layoff', 'departure', 
+    'resign', 'downgrade', 'cut', 'lower', 'reduce', 'concern', 'risk', 'trouble',
+    'problem', 'issue', 'fail', 'weak', 'poor', 'bad', 'negative', 'adverse',
+    'recall', 'delay', 'halt', 'suspend', 'terminate', 'bankruptcy', 'default'
+]
+
+POSITIVE_KEYWORDS = [
+    'growth', 'profit', 'gain', 'surge', 'beat', 'upgrade', 'increase', 'strong',
+    'positive', 'success', 'record', 'milestone', 'breakthrough', 'partnership',
+    'contract', 'award', 'launch', 'expand', 'innovation', 'approval'
+]
+
+def analyze_news_sentiment(news_items: list) -> dict:
+    """Analyze news items and return sentiment data for scorer"""
+    if not news_items:
+        return None  # No news = scorer will give neutral 4 pts
+    
+    total_sentiment = 0
+    most_recent_minutes = 9999
+    
+    for item in news_items:
+        text = f"{item.get('headline', '')} {item.get('summary', '')}".lower()
+        
+        neg_count = sum(1 for kw in NEGATIVE_KEYWORDS if kw in text)
+        pos_count = sum(1 for kw in POSITIVE_KEYWORDS if kw in text)
+        
+        # Sentiment per article: -2 to +2 scale
+        if neg_count + pos_count > 0:
+            article_sentiment = (pos_count - neg_count) / (pos_count + neg_count) * 2
+        else:
+            article_sentiment = 0
+        
+        total_sentiment += article_sentiment
+        
+        # Track recency (datetime timestamp from Finnhub)
+        if 'datetime' in item:
+            news_time = datetime.fromtimestamp(item['datetime'])
+            minutes_ago = (datetime.now() - news_time).total_seconds() / 60
+            most_recent_minutes = min(most_recent_minutes, minutes_ago)
+    
+    # Average sentiment scaled to -2 to +2
+    avg_sentiment = total_sentiment / len(news_items) if news_items else 0
+    polarity = max(-2, min(2, avg_sentiment))
+    
+    return {
+        'polarity': polarity,
+        'recency_minutes': most_recent_minutes if most_recent_minutes < 9999 else 1440,
+        'news_sensitivity': 1.0,
+        'social_amplification': 1.0,
+        'news_count': len(news_items)
+    }
+
+def get_ticker_news(ticker: str, finnhub_key: str = None) -> dict:
+    """Get news for ticker with caching"""
+    now = time.time()
+    
+    # Check cache
+    if ticker in NEWS_CACHE:
+        cached = NEWS_CACHE[ticker]
+        if now - cached['fetched_at'] < NEWS_CACHE_TTL:
+            return cached['data']
+    
+    # No Finnhub key = can't fetch
+    if not finnhub_key:
+        return None
+    
+    try:
+        from_date = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')
+        to_date = datetime.now().strftime('%Y-%m-%d')
+        
+        url = "https://finnhub.io/api/v1/company-news"
+        params = {
+            'symbol': ticker.upper(),
+            'from': from_date,
+            'to': to_date,
+            'token': finnhub_key
+        }
+        
+        resp = requests.get(url, params=params, timeout=5)
+        if resp.status_code == 200:
+            news_items = resp.json()
+            sentiment_data = analyze_news_sentiment(news_items[:10])  # Top 10 recent
+            
+            NEWS_CACHE[ticker] = {
+                'data': sentiment_data,
+                'fetched_at': now
+            }
+            
+            return sentiment_data
+    except Exception as e:
+        logger.debug(f"News fetch failed for {ticker}: {e}")
+    
+    return None
+
 ALPACA_API_KEY = os.getenv('ALPACA_API_KEY')
 ALPACA_SECRET_KEY = os.getenv('ALPACA_SECRET_KEY')
+FINNHUB_API_KEY = os.getenv('FINNHUB_API_KEY')  # For news sentiment
 
 
 class LaunchControlWorker:
@@ -247,17 +354,20 @@ class LaunchControlWorker:
                     'timestamp': datetime.now(pytz.timezone('US/Eastern'))
                 }
                 
-                # 4. Calculate Launch Control score (with ticker-specific sector ETF)
+                # 4. Get news sentiment (cached, refreshes every 5 min)
+                news_data = get_ticker_news(ticker, FINNHUB_API_KEY)
+                
+                # 5. Calculate Launch Control score (with ticker-specific sector ETF + news)
                 ticker_market_data = self._get_ticker_market_data(ticker, base_market, sector_data)
                 lc_result = self.scorer.score_ticker(
                     ticker, 
                     bar_data, 
                     equity_profile,
                     ticker_market_data,
-                    None  # news_data - could add later
+                    news_data  # Now includes real sentiment!
                 )
                 
-                # 5. Get optimal option contract
+                # 6. Get optimal option contract
                 direction = lc_result.get('direction', 'CALL')
                 option_type = 'call' if direction == 'CALL' else 'put'
                 
@@ -272,7 +382,7 @@ class LaunchControlWorker:
                 except Exception as e:
                     logger.warning(f"{ticker} options: {e}")
                 
-                # 6. Calculate targets based on option
+                # 7. Calculate targets based on option
                 if optimal_option:
                     entry_price = optimal_option.get('mid', 0)
                     # Target: +50% for T1, +100% for T2, +150% for T3
@@ -285,7 +395,7 @@ class LaunchControlWorker:
                     # Format contract string
                     optimal_option['contract'] = f"{ticker} {optimal_option.get('expiry', '')} ${optimal_option.get('strike', '')} {direction}"
                 
-                # 7. Store in database
+                # 8. Store in database
                 signal = session.query(Signal).filter_by(ticker=ticker).first()
                 if not signal:
                     signal = Signal(ticker=ticker)
@@ -332,12 +442,14 @@ class LaunchControlWorker:
                 
                 pa = lc_result.get('breakdown', {}).get('price_action', {}).get('score', 0)
                 vol = lc_result.get('breakdown', {}).get('volume', {}).get('score', 0)
+                news = lc_result.get('breakdown', {}).get('news_sentiment', {}).get('score', 0)
+                mkt = lc_result.get('breakdown', {}).get('market_alignment', {}).get('score', 0)
                 gate = "PASS" if (pa > 17.5 and vol > 15) else "FAIL"
                 
                 logger.info(
                     f"{ticker:5s} ${stock_price:7.2f} ({change_pct:+5.2f}%) | "
                     f"{lc_result.get('grade', 'C'):3s} {int(lc_result.get('score', 0)):3d}/100 | "
-                    f"PA:{pa:2.0f} Vol:{vol:2.0f} Gate:{gate}"
+                    f"PA:{pa:2.0f} Vol:{vol:2.0f} News:{news:2.0f} Mkt:{mkt:2.0f} Gate:{gate}"
                     f"{opt_str}"
                 )
                 
