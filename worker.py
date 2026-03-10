@@ -266,7 +266,7 @@ class LaunchControlWorker:
                 
                 logger.info(
                     f"{ticker:5s} ${stock_price:7.2f} ({change_pct:+5.2f}%) | "
-                    f"{lc_result.get('grade', 'C'):3s} {lc_result.get('score', 0):3d}/100 | "
+                    f"{lc_result.get('grade', 'C'):3s} {int(lc_result.get('score', 0)):3d}/100 | "
                     f"PA:{lc_result.get('breakdown', {}).get('price_action', {}).get('score', 0):2.0f} "
                     f"Vol:{lc_result.get('breakdown', {}).get('volume', {}).get('score', 0):2.0f}"
                     f"{opt_str}"
