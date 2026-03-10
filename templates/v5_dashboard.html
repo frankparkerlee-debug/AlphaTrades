@@ -213,22 +213,24 @@ function createCard(ticker, data) {
                 </div>
             </div>
             
-            ${isSignal ? `
-            <div class="trade-setup active">
+            <div class="trade-setup ${isSignal ? 'active' : ''}">
+                <div class="setup-row">
+                    <span>Direction:</span>
+                    <strong>${data.trade_setup?.direction || data.direction || '-'}</strong>
+                </div>
                 <div class="setup-row">
                     <span>Entry:</span>
-                    <strong>$${data.trade_setup?.entry_price || '-'}</strong>
+                    <strong>$${data.trade_setup?.entry_price?.toFixed(2) || data.current_price?.toFixed(2) || '-'}</strong>
                 </div>
                 <div class="setup-row">
                     <span>Target:</span>
-                    <strong>$${data.trade_setup?.target_price || '-'}</strong>
+                    <strong>$${data.trade_setup?.target_price?.toFixed(2) || '-'}</strong>
                 </div>
                 <div class="setup-row">
                     <span>Stop:</span>
-                    <strong>$${data.trade_setup?.stop_price || '-'}</strong>
+                    <strong>$${data.trade_setup?.stop_price?.toFixed(2) || '-'}</strong>
                 </div>
             </div>
-            ` : ''}
             
             <div class="decision-badge ${decisionClass}">
                 ${data.decision}

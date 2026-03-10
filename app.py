@@ -1160,26 +1160,24 @@ def api_distress_earnings_calendar():
         
         earnings = data.get('earningsCalendar', [])
         
-        # Filter to stocks we care about (liquid, optionable)
+        # Include ALL earnings (not just TECH_100) for distress scanning
         from tech_100 import TECH_100
-        relevant_earnings = [
-            e for e in earnings 
-            if e.get('symbol') in TECH_100
-        ]
         
         # Sort by date
-        relevant_earnings.sort(key=lambda x: x.get('date', ''))
+        earnings.sort(key=lambda x: x.get('date', ''))
         
-        # Format response
+        # Format response - show ALL with flag for focus list
         events = []
-        for e in relevant_earnings[:30]:  # Top 30 upcoming
+        for e in earnings[:100]:  # Top 100 upcoming
+            ticker = e.get('symbol', '')
             events.append({
-                'ticker': e.get('symbol'),
+                'ticker': ticker,
                 'date': e.get('date'),
                 'time': e.get('hour', 'bmo'),  # bmo = before market, amc = after
                 'eps_estimate': e.get('epsEstimate'),
                 'eps_actual': e.get('epsActual'),
                 'revenue_estimate': e.get('revenueEstimate'),
+                'in_focus_list': ticker in TECH_100,  # Flag if in our watchlist
             })
         
         return jsonify({
