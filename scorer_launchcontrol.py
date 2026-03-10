@@ -211,10 +211,13 @@ class LaunchControlScorer:
     
     def _get_expected_volume_pct(self, timestamp: datetime) -> float:
         """
-        Get expected cumulative volume percentage at given time of day.
+        Get expected CUMULATIVE volume percentage at this time of day.
         Based on typical intraday volume distribution (U-shaped curve).
         
-        Returns: Expected fraction of daily volume (0.0 to 1.0)
+        NOTE: We use cumulative because Alpaca snapshot returns cumulative daily volume.
+        Future improvement: Use bar data for per-bar comparison.
+        
+        Returns: Expected cumulative fraction of daily volume (0.0 to 1.0)
         """
         hour = timestamp.hour
         minute = timestamp.minute
@@ -223,56 +226,36 @@ class LaunchControlScorer:
         minutes_since_open = (hour - 9) * 60 + (minute - 30)
         
         if minutes_since_open <= 0:
-            return 0.05  # Pre-market, minimal expected
+            return 0.02  # Pre-market
         
-        # Total trading minutes in a day
-        total_minutes = 390  # 9:30 AM to 4:00 PM
+        if minutes_since_open >= 390:
+            return 1.0  # After close
         
-        if minutes_since_open >= total_minutes:
-            return 1.0
+        # Cumulative volume by time (U-shaped distribution)
+        # These are CUMULATIVE percentages (what % of daily volume should have traded by now)
+        cumulative_pcts = [
+            (30, 0.12),    # 10:00 AM - 12%
+            (60, 0.20),    # 10:30 AM - 20%
+            (90, 0.27),    # 11:00 AM - 27%
+            (120, 0.33),   # 11:30 AM - 33%
+            (150, 0.40),   # 12:00 PM - 40%
+            (180, 0.46),   # 12:30 PM - 46%
+            (210, 0.52),   # 1:00 PM - 52%
+            (240, 0.58),   # 1:30 PM - 58%
+            (270, 0.65),   # 2:00 PM - 65%
+            (300, 0.74),   # 2:30 PM - 74%
+            (330, 0.84),   # 3:00 PM - 84%
+            (360, 0.94),   # 3:30 PM - 94%
+            (390, 1.00),   # 4:00 PM - 100%
+        ]
         
-        # Cumulative volume distribution (empirical U-curve)
-        # Heavy volume at open and close, lighter midday
-        # Approximate cumulative percentages:
-        #   30 min (10:00): 12%
-        #   60 min (10:30): 20%
-        #   90 min (11:00): 28%
-        #  150 min (12:00): 40%
-        #  210 min (1:00):  50%
-        #  270 min (2:00):  60%
-        #  330 min (3:00):  75%
-        #  390 min (4:00): 100%
-        
-        cumulative_pcts = {
-            30: 0.12,   # 10:00 AM
-            60: 0.20,   # 10:30 AM
-            90: 0.28,   # 11:00 AM
-            120: 0.35,  # 11:30 AM
-            150: 0.42,  # 12:00 PM
-            180: 0.48,  # 12:30 PM
-            210: 0.54,  # 1:00 PM
-            240: 0.60,  # 1:30 PM
-            270: 0.66,  # 2:00 PM
-            300: 0.73,  # 2:30 PM
-            330: 0.82,  # 3:00 PM
-            360: 0.92,  # 3:30 PM
-            390: 1.00,  # 4:00 PM
-        }
-        
-        # Linear interpolation between checkpoints
-        checkpoints = sorted(cumulative_pcts.keys())
-        
-        for i, cp in enumerate(checkpoints):
-            if minutes_since_open <= cp:
-                if i == 0:
-                    return (minutes_since_open / cp) * cumulative_pcts[cp]
-                else:
-                    prev_cp = checkpoints[i-1]
-                    prev_pct = cumulative_pcts[prev_cp]
-                    curr_pct = cumulative_pcts[cp]
-                    # Linear interpolation
-                    progress = (minutes_since_open - prev_cp) / (cp - prev_cp)
-                    return prev_pct + progress * (curr_pct - prev_pct)
+        # Linear interpolation
+        prev_min, prev_pct = 0, 0.0
+        for mins, pct in cumulative_pcts:
+            if minutes_since_open <= mins:
+                progress = (minutes_since_open - prev_min) / (mins - prev_min)
+                return prev_pct + progress * (pct - prev_pct)
+            prev_min, prev_pct = mins, pct
         
         return 1.0
     
