@@ -134,11 +134,14 @@
 </div>
 
 <div class="filter-bar">
-    <button class="scan-btn" id="scanBtn" onclick="runScan()">Scan Now</button>
-    <button class="filter-btn active" data-filter="all">All Signals</button>
-    <button class="filter-btn" data-filter="earnings">Near Earnings</button>
-    <button class="filter-btn" data-filter="insider">Insider Activity</button>
-    <button class="filter-btn" data-filter="news">Negative News</button>
+    <button class="scan-btn" id="scanBtn" onclick="runScan()">Scan Earnings</button>
+    <button class="scan-btn" style="background:#475569" onclick="runScan('all')">Scan All Tech</button>
+    <input type="text" id="manualTicker" placeholder="HPE, ORCL..." style="padding:8px 12px;border:1px solid #334155;border-radius:6px;background:#1e293b;color:#fff;width:120px;">
+    <button class="filter-btn" onclick="scanManual()">Analyze</button>
+    <span style="flex:1"></span>
+    <button class="filter-btn active" data-filter="all">All</button>
+    <button class="filter-btn" data-filter="earnings">Earnings</button>
+    <button class="filter-btn" data-filter="insider">Insider</button>
 </div>
 
 <div class="signal-list" id="signalList">
@@ -171,20 +174,21 @@
 // Pass empty to use server default
 const WATCHLIST = null;  // Server uses TECH_100 (100 stocks)
 
-async function runScan() {
+async function runScan(mode = 'earnings') {
     const btn = document.getElementById('scanBtn');
     const list = document.getElementById('signalList');
     
     btn.disabled = true;
     btn.textContent = 'Scanning...';
     document.getElementById('scanStatus').textContent = 'Running';
-    list.innerHTML = '<div class="loading">Scanning 100 tech stocks for distress signals...</div>';
+    const modeText = mode === 'all' ? 'all 100 tech stocks' : 'stocks with upcoming earnings';
+    list.innerHTML = `<div class="loading">Scanning ${modeText} for distress signals...</div>`;
     
     try {
         const resp = await fetch('/api/distress/scan', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({})  // Use server's 100-stock default
+            body: JSON.stringify({mode: mode})  // 'earnings' or 'all'
         });
         const data = await resp.json();
         
@@ -217,7 +221,7 @@ async function runScan() {
     }
     
     btn.disabled = false;
-    btn.textContent = 'Scan Now';
+    btn.textContent = 'Scan Earnings';
 }
 
 function formatSignals(details) {
@@ -250,16 +254,74 @@ async function loadEarnings() {
     }
 }
 
-function scanTicker(ticker) {
-    // Quick scan single ticker
+function scanManual() {
+    const input = document.getElementById('manualTicker');
+    const tickers = input.value.toUpperCase().split(',').map(t => t.trim()).filter(t => t);
+    if (!tickers.length) {
+        alert('Enter ticker(s) to analyze');
+        return;
+    }
+    
+    const list = document.getElementById('signalList');
+    list.innerHTML = `<div class="loading">Analyzing ${tickers.join(', ')}...</div>`;
+    
     fetch('/api/distress/scan', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({tickers: [ticker]})
-    }).then(r => r.json()).then(d => {
-        if (d.alerts && d.alerts.length) {
-            alert(`${ticker}: Score ${d.alerts[0].score}/100`);
+        body: JSON.stringify({tickers: tickers, mode: 'single'})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.alerts && data.alerts.length > 0) {
+            document.getElementById('alertCount').textContent = data.alerts.length;
+            list.innerHTML = data.alerts.map(a => `
+                <div class="distress-signal ${a.score >= 80 ? 'high-conviction' : ''}">
+                    <div>
+                        <div class="signal-ticker">${a.ticker}</div>
+                        <div class="signal-reason">${a.signals_triggered || 0} signals triggered</div>
+                    </div>
+                    <div class="signal-reason">${formatSignals(a.signal_details)}</div>
+                    <div class="signal-score ${a.score >= 80 ? 'critical' : 'warning'}">${a.score}</div>
+                </div>
+            `).join('');
+        } else {
+            list.innerHTML = `<div class="empty-state"><h3>No Distress Signals</h3><p>${tickers.join(', ')}: Score below 60 threshold</p></div>`;
         }
+    })
+    .catch(e => {
+        list.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${e.message}</p></div>`;
+    });
+}
+
+function scanTicker(ticker) {
+    // Quick scan single ticker with feedback
+    const btn = event.target;
+    btn.textContent = '...';
+    btn.disabled = true;
+    
+    fetch('/api/distress/scan', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({tickers: [ticker], mode: 'single'})
+    })
+    .then(r => r.json())
+    .then(d => {
+        btn.textContent = 'Analyze';
+        btn.disabled = false;
+        
+        if (d.error) {
+            alert(`Error: ${d.error}`);
+        } else if (d.alerts && d.alerts.length) {
+            const a = d.alerts[0];
+            alert(`${ticker} Distress Score: ${a.score}/100\n\nSignals:\n- SEC Filings: ${a.data?.filings_8k || 0}\n- News Sentiment: ${(a.data?.news_sentiment?.average_sentiment || 0).toFixed(2)}\n- Insider Sales: ${a.data?.form4_filings || 0}`);
+        } else {
+            alert(`${ticker}: No distress signals detected (Score < 60)`);
+        }
+    })
+    .catch(e => {
+        btn.textContent = 'Analyze';
+        btn.disabled = false;
+        alert(`Error scanning ${ticker}: ${e.message}`);
     });
 }
 

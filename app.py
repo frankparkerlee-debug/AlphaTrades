@@ -1025,18 +1025,22 @@ def api_distress_scan():
         from datetime import timedelta
         
         data = request.json or {}
-        scan_mode = data.get('mode', 'earnings')  # 'earnings' or 'all'
+        scan_mode = data.get('mode', 'earnings')  # 'earnings', 'all', or 'single'
         
         finnhub_key = os.getenv('FINNHUB_API_KEY')
         
-        # STEP 1: Get stocks with upcoming earnings (next 14 days)
+        # STEP 1: Get stocks to scan based on mode
         tickers_to_scan = []
         earnings_map = {}  # ticker -> days until earnings
         
-        if scan_mode == 'earnings' and finnhub_key:
+        # Single ticker mode - just scan what was requested
+        if scan_mode == 'single':
+            tickers_to_scan = data.get('tickers', [])
+        elif scan_mode == 'earnings' and finnhub_key:
             try:
                 today = datetime.now()
-                from_date = today.strftime('%Y-%m-%d')
+                # Include past 2 days to catch recent reports (pre/post market plays)
+                from_date = (today - timedelta(days=2)).strftime('%Y-%m-%d')
                 to_date = (today + timedelta(days=14)).strftime('%Y-%m-%d')
                 
                 url = "https://finnhub.io/api/v1/calendar/earnings"
