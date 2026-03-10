@@ -12,6 +12,7 @@ from models import Alert, Trade, DailyPerformance, ModelConfig, AccountState, ge
 from alpaca_client import AlpacaClient
 from options_selector import get_selector
 from scorer_convergence import get_convergence_scorer
+from typing import Optional, Dict
 # DISABLED: Stream causing worker timeouts even without monkey patching
 # from alpaca_stream_gevent import get_stream
 from datetime import datetime, timedelta
