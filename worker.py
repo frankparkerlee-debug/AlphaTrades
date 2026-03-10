@@ -241,20 +241,23 @@ class LaunchControlWorker:
                 signal.confidence = lc_result.get('signal_type', 'REJECTED')
                 
                 # Store full breakdown for dashboard
+                lc_breakdown = lc_result.get('breakdown', {})
                 signal.convergence_json = {
                     'score': lc_result.get('score', 0),
                     'grade': lc_result.get('grade', 'C'),
                     'direction': direction,
-                    'pillars': lc_result.get('breakdown', {}),
+                    'breakdown': lc_breakdown,  # For V5 dashboard compatibility
+                    'pillars': lc_breakdown,    # For Launch Control dashboard
                     'filters': lc_result.get('filters', {}),
                     'position_size': lc_result.get('position_size', 0),
                     'exit_strategy': lc_result.get('exit_strategy', {}),
+                    'trade_setup': lc_result.get('trade_setup', {}),
                     # Pillar scores for dashboard display
-                    'pa_score': lc_result.get('breakdown', {}).get('price_action', {}).get('score', 0),
-                    'vol_score': lc_result.get('breakdown', {}).get('volume', {}).get('score', 0),
-                    'news_score': lc_result.get('breakdown', {}).get('news', {}).get('score', 0),
-                    'market_score': lc_result.get('breakdown', {}).get('market', {}).get('score', 0),
-                    'timing_score': lc_result.get('breakdown', {}).get('timing', {}).get('score', 0)
+                    'pa_score': lc_breakdown.get('price_action', {}).get('score', 0),
+                    'vol_score': lc_breakdown.get('volume', {}).get('score', 0),
+                    'news_score': lc_breakdown.get('news_sentiment', {}).get('score', 0),
+                    'market_score': lc_breakdown.get('market_alignment', {}).get('score', 0),
+                    'timing_score': lc_breakdown.get('timing', {}).get('score', 0)
                 }
                 
                 signal.option_json = optimal_option

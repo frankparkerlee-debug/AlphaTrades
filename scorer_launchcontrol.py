@@ -130,8 +130,8 @@ class LaunchControlScorer:
         # POST-ANNOUNCEMENT BONUS (+10 pts)
         announcement_bonus = self._check_announcement_bonus(timestamp)
         
-        # COMPOSITE SCORE (before caps)
-        raw_score = timing_score + pa_score + vol_score + news_score + market_score + announcement_bonus
+        # COMPOSITE SCORE (before caps) - floor at 0
+        raw_score = max(0, timing_score + pa_score + vol_score + news_score + market_score + announcement_bonus)
         
         # APPLY ASYMMETRY GATE (CRITICAL!)
         asymmetry_gate_passed = pa_score > 17.5 and vol_score > 15.0
