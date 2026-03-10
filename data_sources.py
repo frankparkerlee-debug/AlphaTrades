@@ -18,19 +18,41 @@ class SECEdgarAPI:
         "User-Agent": "AlphaTrades DistressScanner parker@ideaworx.co"
     }
     
+    # Class-level cache for company tickers (loaded once)
+    _company_tickers_cache = None
+    _cache_loaded_at = None
+    
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update(self.HEADERS)
     
-    def get_company_cik(self, ticker: str) -> Optional[str]:
-        """Get CIK number for a ticker symbol"""
+    def _load_company_tickers(self) -> dict:
+        """Load company tickers JSON with caching (refreshes every 24h)"""
+        import time as time_module
+        
+        # Check if cache is valid (less than 24 hours old)
+        if (SECEdgarAPI._company_tickers_cache is not None and 
+            SECEdgarAPI._cache_loaded_at is not None and
+            time_module.time() - SECEdgarAPI._cache_loaded_at < 86400):
+            return SECEdgarAPI._company_tickers_cache
+        
         try:
-            # Use SEC's company tickers JSON
             url = f"{self.BASE_URL}/files/company_tickers.json"
-            resp = self.session.get(url, timeout=10)
+            time.sleep(0.5)  # Rate limit
+            resp = self.session.get(url, timeout=30)
             resp.raise_for_status()
             
-            tickers = resp.json()
+            SECEdgarAPI._company_tickers_cache = resp.json()
+            SECEdgarAPI._cache_loaded_at = time_module.time()
+            return SECEdgarAPI._company_tickers_cache
+        except Exception as e:
+            print(f"Error loading company tickers: {e}")
+            return SECEdgarAPI._company_tickers_cache or {}
+    
+    def get_company_cik(self, ticker: str) -> Optional[str]:
+        """Get CIK number for a ticker symbol (cached)"""
+        try:
+            tickers = self._load_company_tickers()
             ticker_upper = ticker.upper()
             
             for entry in tickers.values():
@@ -62,7 +84,7 @@ class SECEdgarAPI:
                 'output': 'atom'
             }
             
-            time.sleep(0.1)  # Rate limiting - be nice to SEC
+            time.sleep(0.5)  # Rate limiting - be nice to SEC
             resp = self.session.get(url, params=params, timeout=10)
             resp.raise_for_status()
             
@@ -111,7 +133,7 @@ class SECEdgarAPI:
                 'output': 'atom'
             }
             
-            time.sleep(0.1)
+            time.sleep(0.5)
             resp = self.session.get(url, params=params, timeout=10)
             resp.raise_for_status()
             

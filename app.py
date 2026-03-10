@@ -1079,7 +1079,7 @@ def api_distress_scan():
             sorted_tickers = sorted(tickers_to_scan, key=lambda t: earnings_map.get(t, 999))
         else:
             sorted_tickers = tickers_to_scan
-        results = scanner.scan_multiple(sorted_tickers[:30], max_workers=10, days_back=30)
+        results = scanner.scan_multiple(sorted_tickers[:20], max_workers=3, days_back=30)  # Reduced to prevent OOM/429
         
         # STEP 3: Enrich with earnings data and filter
         high_conviction = []
