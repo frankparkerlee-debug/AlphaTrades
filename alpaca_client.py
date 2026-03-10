@@ -269,6 +269,59 @@ class AlpacaClient:
         response.raise_for_status()
         return response.json()
     
+    def get_news(self, symbol, limit=10):
+        """
+        Get recent news for a symbol using Alpaca News API
+        
+        Args:
+            symbol: Stock ticker
+            limit: Max articles to return (default 10)
+            
+        Returns:
+            List of news articles with headline, summary, sentiment
+        """
+        url = f"{self.data_url}/v1beta1/news"
+        params = {
+            'symbols': symbol,
+            'limit': limit,
+            'sort': 'desc'  # Most recent first
+        }
+        
+        try:
+            response = requests.get(url, headers=self.headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+            
+            articles = []
+            for article in data.get('news', []):
+                # Calculate recency in minutes
+                created_at = article.get('created_at', '')
+                recency_minutes = 1440  # Default: 1 day old
+                if created_at:
+                    try:
+                        from dateutil import parser
+                        article_time = parser.parse(created_at)
+                        now = datetime.now(article_time.tzinfo) if article_time.tzinfo else datetime.now()
+                        recency_minutes = (now - article_time).total_seconds() / 60
+                    except:
+                        pass
+                
+                articles.append({
+                    'headline': article.get('headline', ''),
+                    'summary': article.get('summary', ''),
+                    'source': article.get('source', ''),
+                    'url': article.get('url', ''),
+                    'created_at': created_at,
+                    'recency_minutes': recency_minutes,
+                    'symbols': article.get('symbols', [])
+                })
+            
+            return articles
+            
+        except Exception as e:
+            print(f"News API error for {symbol}: {e}")
+            return []
+    
     def get_orders(self, status='all', limit=50):
         """Get orders (all, open, closed)"""
         url = f"{self.base_url}/v2/orders"

@@ -86,11 +86,9 @@ def analyze_news_sentiment(news_items: list) -> dict:
         
         total_sentiment += article_sentiment
         
-        # Track recency (datetime timestamp from Finnhub)
-        if 'datetime' in item:
-            news_time = datetime.fromtimestamp(item['datetime'])
-            minutes_ago = (datetime.now() - news_time).total_seconds() / 60
-            most_recent_minutes = min(most_recent_minutes, minutes_ago)
+        # Track recency - Alpaca uses recency_minutes from get_news()
+        if 'recency_minutes' in item:
+            most_recent_minutes = min(most_recent_minutes, item['recency_minutes'])
     
     # Average sentiment scaled to -2 to +2
     avg_sentiment = total_sentiment / len(news_items) if news_items else 0
@@ -104,8 +102,8 @@ def analyze_news_sentiment(news_items: list) -> dict:
         'news_count': len(news_items)
     }
 
-def get_ticker_news(ticker: str, finnhub_key: str = None) -> dict:
-    """Get news for ticker with caching"""
+def get_ticker_news(ticker: str, alpaca_client=None) -> dict:
+    """Get news for ticker using Alpaca News API with caching"""
     now = time.time()
     
     # Check cache
@@ -114,26 +112,16 @@ def get_ticker_news(ticker: str, finnhub_key: str = None) -> dict:
         if now - cached['fetched_at'] < NEWS_CACHE_TTL:
             return cached['data']
     
-    # No Finnhub key = can't fetch
-    if not finnhub_key:
+    # Need alpaca client
+    if not alpaca_client:
         return None
     
     try:
-        from_date = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')
-        to_date = datetime.now().strftime('%Y-%m-%d')
+        # Use Alpaca's news API
+        news_items = alpaca_client.get_news(ticker, limit=10)
         
-        url = "https://finnhub.io/api/v1/company-news"
-        params = {
-            'symbol': ticker.upper(),
-            'from': from_date,
-            'to': to_date,
-            'token': finnhub_key
-        }
-        
-        resp = requests.get(url, params=params, timeout=5)
-        if resp.status_code == 200:
-            news_items = resp.json()
-            sentiment_data = analyze_news_sentiment(news_items[:10])  # Top 10 recent
+        if news_items:
+            sentiment_data = analyze_news_sentiment(news_items)
             
             NEWS_CACHE[ticker] = {
                 'data': sentiment_data,
@@ -148,7 +136,6 @@ def get_ticker_news(ticker: str, finnhub_key: str = None) -> dict:
 
 ALPACA_API_KEY = os.getenv('ALPACA_API_KEY')
 ALPACA_SECRET_KEY = os.getenv('ALPACA_SECRET_KEY')
-FINNHUB_API_KEY = os.getenv('FINNHUB_API_KEY')  # For news sentiment
 
 
 class LaunchControlWorker:
@@ -354,8 +341,8 @@ class LaunchControlWorker:
                     'timestamp': datetime.now(pytz.timezone('US/Eastern'))
                 }
                 
-                # 4. Get news sentiment (cached, refreshes every 5 min)
-                news_data = get_ticker_news(ticker, FINNHUB_API_KEY)
+                # 4. Get news sentiment using Alpaca (cached, refreshes every 5 min)
+                news_data = get_ticker_news(ticker, self.alpaca)
                 
                 # 5. Calculate Launch Control score (with ticker-specific sector ETF + news)
                 ticker_market_data = self._get_ticker_market_data(ticker, base_market, sector_data)
