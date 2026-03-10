@@ -1029,6 +1029,15 @@ def api_distress_scan():
         
         finnhub_key = os.getenv('FINNHUB_API_KEY')
         
+        # Check if Finnhub key is configured
+        if not finnhub_key:
+            return jsonify({
+                'alerts': [],
+                'high_conviction_count': 0,
+                'error': 'FINNHUB_API_KEY not configured. Set it in Render dashboard.',
+                'help': 'Go to Render > alphatrades-web > Environment > Add FINNHUB_API_KEY'
+            })
+        
         # STEP 1: Get stocks to scan based on mode
         tickers_to_scan = []
         earnings_map = {}  # ticker -> days until earnings
@@ -1063,9 +1072,14 @@ def api_distress_scan():
         else:
             tickers_to_scan = data.get('tickers', DISTRESS_WATCHLIST)
         
-        # STEP 2: Scan for distress signals
+        # STEP 2: Scan for distress signals (limit to 30 to avoid timeout)
         scanner = DistressScanner(finnhub_api_key=finnhub_key)
-        results = scanner.scan_multiple(tickers_to_scan[:100], days_back=30)  # Cap at 100
+        # Prioritize stocks with earnings soon
+        if earnings_map:
+            sorted_tickers = sorted(tickers_to_scan, key=lambda t: earnings_map.get(t, 999))
+        else:
+            sorted_tickers = tickers_to_scan
+        results = scanner.scan_multiple(sorted_tickers[:30], max_workers=10, days_back=30)
         
         # STEP 3: Enrich with earnings data and filter
         high_conviction = []

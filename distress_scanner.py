@@ -138,26 +138,36 @@ class DistressScanner:
             print(f"  ❌ Error scanning {ticker}: {e}")
             return results
     
-    def scan_multiple(self, tickers: List[str], **kwargs) -> List[Dict]:
+    def scan_multiple(self, tickers: List[str], max_workers: int = 10, **kwargs) -> List[Dict]:
         """
-        Scan multiple tickers
+        Scan multiple tickers in parallel
         
         Args:
             tickers: List of ticker symbols
+            max_workers: Max concurrent scans (default 10)
             **kwargs: Additional arguments passed to scan_ticker
         
         Returns:
             List of scan results
         """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
         results = []
         
         print(f"\n{'='*60}")
-        print(f"📡 Starting batch scan of {len(tickers)} tickers")
+        print(f"📡 Starting parallel scan of {len(tickers)} tickers ({max_workers} workers)")
         print(f"{'='*60}")
         
-        for ticker in tickers:
-            result = self.scan_ticker(ticker, **kwargs)
-            results.append(result)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(self.scan_ticker, ticker, **kwargs): ticker for ticker in tickers}
+            for future in as_completed(futures):
+                try:
+                    result = future.result(timeout=30)  # 30s timeout per ticker
+                    results.append(result)
+                except Exception as e:
+                    ticker = futures[future]
+                    print(f"  ⚠️ {ticker}: {e}")
+                    results.append({'ticker': ticker, 'error': str(e), 'score': 0})
         
         return results
     
