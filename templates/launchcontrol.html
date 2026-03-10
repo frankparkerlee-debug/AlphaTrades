@@ -1,150 +1,337 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Launch Control v2.0 - AlphaTrades</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: #0a0e27;
-            color: #e0e6ed;
-            min-height: 100vh;
-        }
-        .top-nav {
-            background: #0f1629;
-            border-bottom: 1px solid #1a1f3a;
-            padding: 12px 24px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .logo { font-size: 18px; font-weight: 700; color: #fff; }
-        .logo-accent { color: #f59e0b; }
-        .nav-links { display: flex; gap: 8px; }
-        .nav-link {
-            color: #94a3b8;
-            text-decoration: none;
-            padding: 8px 16px;
-            border-radius: 6px;
-            font-size: 14px;
-            transition: all 0.2s;
-        }
-        .nav-link:hover { background: #1e293b; color: #fff; }
-        .nav-link.active { background: #f59e0b; color: #000; }
-        
-        .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
-        
-        .hero {
-            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-            border: 1px solid #334155;
-            border-radius: 16px;
-            padding: 48px;
-            margin-bottom: 32px;
-            text-align: center;
-        }
-        .hero h1 {
-            font-size: 48px;
-            font-weight: 800;
-            margin-bottom: 16px;
-        }
-        .hero h1 span { color: #f59e0b; }
-        .hero p { color: #94a3b8; font-size: 18px; max-width: 600px; margin: 0 auto 32px; }
-        
-        .pillars {
-            display: grid;
-            grid-template-columns: repeat(5, 1fr);
-            gap: 16px;
-            margin-bottom: 32px;
-        }
-        .pillar {
-            background: #1e293b;
-            border: 1px solid #334155;
-            border-radius: 12px;
-            padding: 24px;
-            text-align: center;
-        }
-        .pillar-icon { font-size: 32px; margin-bottom: 12px; }
-        .pillar-name { font-weight: 600; margin-bottom: 8px; }
-        .pillar-pts { color: #f59e0b; font-size: 24px; font-weight: 700; }
-        
-        .status-box {
-            background: #1e293b;
-            border: 1px solid #334155;
-            border-radius: 12px;
-            padding: 32px;
-            text-align: center;
-        }
-        .status-badge {
-            display: inline-block;
-            background: #f59e0b;
-            color: #000;
-            padding: 8px 24px;
-            border-radius: 24px;
-            font-weight: 700;
-            font-size: 14px;
-            margin-bottom: 16px;
-        }
-        .status-text { color: #94a3b8; font-size: 16px; }
-        
-        @media (max-width: 768px) {
-            .pillars { grid-template-columns: repeat(2, 1fr); }
-        }
-    </style>
-</head>
-<body>
-    <div class="top-nav">
-        <div class="logo">
-            LAUNCH<span class="logo-accent">CONTROL</span> <span style="font-size:12px; color:#64748b;">v2.0</span>
-        </div>
-        <div class="nav-links">
-            <a href="/" class="nav-link">Dashboard</a>
-            <a href="/launchcontrol" class="nav-link active">🚀 Launch Control</a>
-            <a href="/overnight-gap" class="nav-link">🌙 Overnight Gap</a>
-            <a href="/distress" class="nav-link">⚠️ Distress</a>
-        </div>
+{% extends "unified_base.html" %}
+
+{% block title %}Launch Control v2.0 - AlphaTrades{% endblock %}
+
+{% block extra_styles %}
+.pillar-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+    margin-bottom: 24px;
+}
+.pillar {
+    background: #0f1629;
+    border: 1px solid #1a1f3a;
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+}
+.pillar-name {
+    font-size: 12px;
+    color: #64748b;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+}
+.pillar-pts {
+    font-size: 24px;
+    font-weight: 700;
+    color: #3b82f6;
+}
+.pillar-desc {
+    font-size: 11px;
+    color: #475569;
+    margin-top: 4px;
+}
+
+.gate-warning {
+    background: linear-gradient(90deg, rgba(59,130,246,0.1) 0%, #0f1629 50%);
+    border: 1px solid #3b82f6;
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+.gate-icon {
+    font-size: 24px;
+    color: #3b82f6;
+}
+.gate-text {
+    font-size: 14px;
+    color: #94a3b8;
+}
+.gate-text strong { color: #fff; }
+
+.signal-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: 16px;
+}
+
+.lc-signal {
+    background: #0f1629;
+    border: 1px solid #1a1f3a;
+    border-radius: 12px;
+    padding: 20px;
+}
+.lc-signal.a-plus { border-color: #22c55e; }
+.lc-signal.a { border-color: #22c55e; }
+.lc-signal.a-minus { border-color: #4ade80; }
+.lc-signal.b-plus { border-color: #f59e0b; }
+
+.lc-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 16px;
+}
+.lc-ticker {
+    font-size: 22px;
+    font-weight: 700;
+    color: #fff;
+}
+.lc-price {
+    font-size: 14px;
+    color: #64748b;
+}
+.lc-grade {
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 16px;
+    font-weight: 700;
+}
+.lc-grade.a-plus { background: #22c55e; color: #000; }
+.lc-grade.a { background: #22c55e; color: #000; }
+.lc-grade.a-minus { background: #4ade80; color: #000; }
+.lc-grade.b-plus { background: #f59e0b; color: #000; }
+
+.lc-score-bar {
+    height: 8px;
+    background: #1e293b;
+    border-radius: 4px;
+    margin-bottom: 16px;
+    overflow: hidden;
+}
+.lc-score-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #3b82f6 0%, #22c55e 100%);
+    border-radius: 4px;
+    transition: width 0.3s;
+}
+
+.lc-pillars {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+    margin-bottom: 16px;
+}
+.lc-pillar {
+    text-align: center;
+    padding: 8px 4px;
+    background: #1e293b;
+    border-radius: 4px;
+}
+.lc-pillar-score {
+    font-size: 14px;
+    font-weight: 700;
+    color: #fff;
+}
+.lc-pillar-name {
+    font-size: 9px;
+    color: #64748b;
+    text-transform: uppercase;
+}
+
+.lc-contract {
+    background: #1e293b;
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.lc-contract-info {
+    font-family: 'SF Mono', monospace;
+    font-size: 13px;
+}
+.lc-contract-type { font-weight: 600; }
+.lc-contract-type.call { color: #22c55e; }
+.lc-contract-type.put { color: #ef4444; }
+.lc-position-size {
+    font-size: 13px;
+    color: #94a3b8;
+}
+
+.lc-countdown {
+    text-align: center;
+    padding: 8px;
+    background: #ef4444;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: 6px;
+    margin-bottom: 12px;
+}
+
+.lc-actions {
+    display: flex;
+    gap: 8px;
+}
+.lc-btn {
+    flex: 1;
+    padding: 12px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.lc-btn.take { background: #22c55e; color: #000; }
+.lc-btn.skip { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
+
+@media (max-width: 768px) {
+    .pillar-grid { grid-template-columns: repeat(3, 1fr); }
+    .lc-pillars { grid-template-columns: repeat(3, 1fr); }
+}
+{% endblock %}
+
+{% block nav_stats %}
+<div>
+    <span class="nav-stat-label">SIGNALS</span>
+    <span class="nav-stat-value" id="signalCount">0</span>
+</div>
+<div>
+    <span class="nav-stat-label">AVG SCORE</span>
+    <span class="nav-stat-value" id="avgScore">--</span>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">Launch Control v2.0</h1>
+    <p class="page-subtitle">5-pillar momentum scoring engine - Machine screens, human decides</p>
+</div>
+
+<div class="pillar-grid">
+    <div class="pillar">
+        <div class="pillar-name">Price Action</div>
+        <div class="pillar-pts">35</div>
+        <div class="pillar-desc">ATR normalized</div>
     </div>
-    
-    <div class="container">
-        <div class="hero">
-            <h1>🚀 Launch <span>Control</span> v2.0</h1>
-            <p>Co-pilot momentum scoring engine. Machine screens and sizes, human makes the final call. Validated through 6 synthetic backtests.</p>
-        </div>
-        
-        <h2 style="margin-bottom: 16px; color: #f59e0b;">5-Pillar Scoring System (100 pts)</h2>
-        <div class="pillars">
-            <div class="pillar">
-                <div class="pillar-icon">📈</div>
-                <div class="pillar-name">Price Action</div>
-                <div class="pillar-pts">35 pts</div>
-            </div>
-            <div class="pillar">
-                <div class="pillar-icon">📊</div>
-                <div class="pillar-name">Volume</div>
-                <div class="pillar-pts">30 pts</div>
-            </div>
-            <div class="pillar">
-                <div class="pillar-icon">📰</div>
-                <div class="pillar-name">News</div>
-                <div class="pillar-pts">15 pts</div>
-            </div>
-            <div class="pillar">
-                <div class="pillar-icon">🌍</div>
-                <div class="pillar-name">Market</div>
-                <div class="pillar-pts">15 pts</div>
-            </div>
-            <div class="pillar">
-                <div class="pillar-icon">⏰</div>
-                <div class="pillar-name">Timing</div>
-                <div class="pillar-pts">5 pts</div>
-            </div>
-        </div>
-        
-        <div class="status-box">
-            <div class="status-badge">COMING SOON</div>
-            <p class="status-text">Live scoring dashboard under development. Scorer engine is built and ready.</p>
-        </div>
+    <div class="pillar">
+        <div class="pillar-name">Volume</div>
+        <div class="pillar-pts">30</div>
+        <div class="pillar-desc">Relative volume</div>
     </div>
-</body>
-</html>
+    <div class="pillar">
+        <div class="pillar-name">News</div>
+        <div class="pillar-pts">15</div>
+        <div class="pillar-desc">Sentiment</div>
+    </div>
+    <div class="pillar">
+        <div class="pillar-name">Market</div>
+        <div class="pillar-pts">15</div>
+        <div class="pillar-desc">QQQ + Sector</div>
+    </div>
+    <div class="pillar">
+        <div class="pillar-name">Timing</div>
+        <div class="pillar-pts">5</div>
+        <div class="pillar-desc">Entry window</div>
+    </div>
+</div>
+
+<div class="gate-warning">
+    <div class="gate-icon">GATE</div>
+    <div class="gate-text">
+        <strong>Asymmetry Gate:</strong> Price Action must score &gt;17.5 AND Volume must score &gt;15.0 for any primary signal.
+        If either fails, signal is rejected regardless of total score.
+    </div>
+</div>
+
+<div class="signal-grid" id="signalGrid">
+    <div class="empty-state">
+        <h3>No Active Signals</h3>
+        <p>Launch Control is monitoring 15 tickers. Signals appear when scoring thresholds are met.</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadSignals() {
+    try {
+        const resp = await fetch('/api/launchcontrol/signals');
+        const data = await resp.json();
+        
+        const signals = data.signals || [];
+        document.getElementById('signalCount').textContent = signals.length;
+        
+        if (signals.length > 0) {
+            const avgScore = signals.reduce((a,b) => a + b.score, 0) / signals.length;
+            document.getElementById('avgScore').textContent = avgScore.toFixed(0);
+            
+            document.getElementById('signalGrid').innerHTML = signals.map(s => `
+                <div class="lc-signal ${s.grade.toLowerCase().replace('+','-plus').replace('-','-minus')}">
+                    <div class="lc-header">
+                        <div>
+                            <div class="lc-ticker">${s.ticker}</div>
+                            <div class="lc-price">$${s.price?.toFixed(2) || '--'}</div>
+                        </div>
+                        <span class="lc-grade ${s.grade.toLowerCase().replace('+','-plus')}">${s.grade}</span>
+                    </div>
+                    
+                    <div class="lc-score-bar">
+                        <div class="lc-score-fill" style="width: ${Math.min(s.score, 100)}%"></div>
+                    </div>
+                    
+                    <div class="lc-pillars">
+                        <div class="lc-pillar">
+                            <div class="lc-pillar-score">${s.pillars?.pa || '--'}</div>
+                            <div class="lc-pillar-name">PA</div>
+                        </div>
+                        <div class="lc-pillar">
+                            <div class="lc-pillar-score">${s.pillars?.vol || '--'}</div>
+                            <div class="lc-pillar-name">Vol</div>
+                        </div>
+                        <div class="lc-pillar">
+                            <div class="lc-pillar-score">${s.pillars?.news || '--'}</div>
+                            <div class="lc-pillar-name">News</div>
+                        </div>
+                        <div class="lc-pillar">
+                            <div class="lc-pillar-score">${s.pillars?.market || '--'}</div>
+                            <div class="lc-pillar-name">Mkt</div>
+                        </div>
+                        <div class="lc-pillar">
+                            <div class="lc-pillar-score">${s.pillars?.timing || '--'}</div>
+                            <div class="lc-pillar-name">Time</div>
+                        </div>
+                    </div>
+                    
+                    <div class="lc-contract">
+                        <div class="lc-contract-info">
+                            <span class="lc-contract-type ${s.direction?.toLowerCase() || 'call'}">${s.direction || 'CALL'}</span>
+                            ${s.contract || 'Calculating...'}
+                        </div>
+                        <div class="lc-position-size">${s.position_size || '20%'}</div>
+                    </div>
+                    
+                    <div class="lc-countdown" id="countdown-${s.ticker}">Signal expires in 60s</div>
+                    
+                    <div class="lc-actions">
+                        <button class="lc-btn take">TAKE</button>
+                        <button class="lc-btn skip">SKIP</button>
+                    </div>
+                </div>
+            `).join('');
+        } else {
+            document.getElementById('signalGrid').innerHTML = `
+                <div class="empty-state">
+                    <h3>No Active Signals</h3>
+                    <p>Launch Control is monitoring 15 tickers. Signals appear when scoring thresholds are met.</p>
+                </div>
+            `;
+        }
+    } catch(e) {
+        console.error('Error loading signals:', e);
+    }
+}
+
+// Initial load
+document.addEventListener('DOMContentLoaded', loadSignals);
+
+// Refresh every 10s
+setInterval(loadSignals, 10000);
+</script>
+{% endblock %}

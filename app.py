@@ -1060,6 +1060,41 @@ def launchcontrol_page():
     """Launch Control v2.0 Momentum Strategy Page"""
     return render_template('launchcontrol.html')
 
+@app.route('/api/launchcontrol/signals')
+def api_launchcontrol_signals():
+    """Get Launch Control v2.0 signals - uses V5 scorer for now"""
+    try:
+        # Use existing V5 signals as base until LC scorer is fully integrated
+        from models import Signal, get_session
+        session = get_session()
+        signals = session.query(Signal).filter(Signal.score >= 63).all()  # A- threshold
+        
+        result = []
+        for s in signals:
+            conv = s.convergence_json or {}
+            result.append({
+                'ticker': s.ticker,
+                'score': s.score or 0,
+                'grade': s.grade or 'B',
+                'price': float(s.price) if s.price else 0,
+                'direction': 'CALL' if (s.change_pct or 0) >= 0 else 'PUT',
+                'pillars': {
+                    'pa': conv.get('momentum_score', 0),
+                    'vol': conv.get('volume_score', 0),
+                    'news': conv.get('catalyst_score', 0),
+                    'market': conv.get('market_score', 0),
+                    'timing': conv.get('timing_score', 0)
+                },
+                'contract': s.option_json.get('contract') if s.option_json else None,
+                'position_size': '20%' if s.grade in ['A+', 'A'] else '15%' if s.grade == 'A-' else '10%'
+            })
+        
+        session.close()
+        return jsonify({'signals': result, 'count': len(result)})
+    except Exception as e:
+        logger.error(f"Error fetching LC signals: {e}")
+        return jsonify({'signals': [], 'error': str(e)})
+
 @app.route('/overnight-gap')
 def overnight_gap_page():
     """Overnight Gap Momentum Page"""

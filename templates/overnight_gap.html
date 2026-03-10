@@ -1,451 +1,269 @@
-{% extends "base.html" %}
+{% extends "unified_base.html" %}
 
-{% block title %}Overnight Gap Scanner - AlphaTrades{% endblock %}
+{% block title %}Overnight Gap - AlphaTrades{% endblock %}
 
 {% block extra_styles %}
-<style>
-    .scanner-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 20px;
-        flex-wrap: wrap;
-        gap: 15px;
-    }
-    
-    .scanner-controls {
-        display: flex;
-        gap: 10px;
-        align-items: center;
-        flex-wrap: wrap;
-    }
-    
-    .btn {
-        padding: 10px 20px;
-        border: none;
-        border-radius: 6px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.3s;
-        font-size: 14px;
-    }
-    
-    .btn-primary {
-        background: #667eea;
-        color: white;
-    }
-    
-    .btn-primary:hover {
-        background: #5568d3;
-        transform: translateY(-1px);
-    }
-    
-    .btn-primary:disabled {
-        background: #ccc;
-        cursor: not-allowed;
-        transform: none;
-    }
-    
-    .filter-group {
-        display: flex;
-        gap: 10px;
-        align-items: center;
-    }
-    
-    .filter-group label {
-        font-weight: 600;
-        color: #495057;
-    }
-    
-    .filter-group select, .filter-group input {
-        padding: 8px 12px;
-        border: 1px solid #ddd;
-        border-radius: 6px;
-        font-size: 14px;
-    }
-    
-    .last-scan {
-        color: #6c757d;
-        font-size: 14px;
-    }
-    
-    .results-table {
-        width: 100%;
-        border-collapse: collapse;
-        margin-top: 20px;
-    }
-    
-    .results-table th {
-        background: #f8f9fa;
-        padding: 12px;
-        text-align: left;
-        font-weight: 600;
-        border-bottom: 2px solid #dee2e6;
-        color: #495057;
-    }
-    
-    .results-table td {
-        padding: 12px;
-        border-bottom: 1px solid #dee2e6;
-    }
-    
-    .results-table tr:hover {
-        background: #f8f9fa;
-        cursor: pointer;
-    }
-    
-    .score-badge {
-        display: inline-block;
-        padding: 6px 12px;
-        border-radius: 20px;
-        font-weight: bold;
-        font-size: 14px;
-    }
-    
-    .score-high { background: #28a745; color: white; }
-    .score-med { background: #ffc107; color: #856404; }
-    .score-low { background: #fd7e14; color: white; }
-    
-    .direction-call { color: #28a745; font-weight: bold; }
-    .direction-put { color: #dc3545; font-weight: bold; }
-    
-    .ticker-link {
-        color: #667eea;
-        font-weight: bold;
-        text-decoration: none;
-        font-size: 16px;
-    }
-    
-    .ticker-link:hover {
-        text-decoration: underline;
-    }
-    
-    .no-results {
-        text-align: center;
-        padding: 40px;
-        color: #6c757d;
-    }
-    
-    .loading {
-        text-align: center;
-        padding: 40px;
-        color: #667eea;
-        font-weight: 600;
-    }
-    
-    /* Modal Styles */
-    .modal {
-        display: none;
-        position: fixed;
-        z-index: 1000;
-        left: 0;
-        top: 0;
-        width: 100%;
-        height: 100%;
-        background: rgba(0,0,0,0.5);
-    }
-    
-    .modal-content {
-        background: white;
-        margin: 5% auto;
-        padding: 30px;
-        border-radius: 12px;
-        width: 90%;
-        max-width: 600px;
-        max-height: 80vh;
-        overflow-y: auto;
-    }
-    
-    .modal-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 20px;
-    }
-    
-    .modal-close {
-        font-size: 28px;
-        font-weight: bold;
-        color: #aaa;
-        cursor: pointer;
-    }
-    
-    .modal-close:hover {
-        color: #000;
-    }
-    
-    .detail-row {
-        display: flex;
-        justify-content: space-between;
-        padding: 10px 0;
-        border-bottom: 1px solid #eee;
-    }
-    
-    .detail-label {
-        font-weight: 600;
-        color: #495057;
-    }
-    
-    .detail-value {
-        color: #212529;
-    }
-    
-    .breakdown-section {
-        margin-top: 20px;
-        padding: 15px;
-        background: #f8f9fa;
-        border-radius: 8px;
-    }
-    
-    .breakdown-section h3 {
-        color: #495057;
-        margin-bottom: 10px;
-        font-size: 16px;
-    }
-    
-    .auto-refresh-checkbox {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-    
-    .auto-refresh-checkbox input {
-        width: 18px;
-        height: 18px;
-        cursor: pointer;
-    }
-    
-    @media (max-width: 768px) {
-        .results-table {
-            font-size: 12px;
-        }
-        
-        .results-table th, .results-table td {
-            padding: 8px 4px;
-        }
-        
-        .scanner-header {
-            flex-direction: column;
-            align-items: flex-start;
-        }
-    }
-</style>
+.strategy-info {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.strategy-desc {
+    font-size: 14px;
+    color: #94a3b8;
+}
+.strategy-stat {
+    text-align: right;
+}
+.strategy-stat-value {
+    font-size: 24px;
+    font-weight: 700;
+    color: #22c55e;
+}
+.strategy-stat-label {
+    font-size: 12px;
+    color: #64748b;
+}
+
+.scan-controls {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 24px;
+}
+.scan-btn {
+    padding: 10px 24px;
+    background: #22c55e;
+    border: none;
+    border-radius: 6px;
+    color: #000;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.scan-btn:hover { background: #16a34a; }
+.scan-btn:disabled { background: #64748b; color: #fff; cursor: not-allowed; }
+
+.setup-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+    gap: 16px;
+}
+
+.setup-card {
+    background: #0f1629;
+    border: 1px solid #1a1f3a;
+    border-radius: 12px;
+    padding: 20px;
+}
+.setup-card.bullish { border-left: 4px solid #22c55e; }
+.setup-card.bearish { border-left: 4px solid #ef4444; }
+
+.setup-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 16px;
+}
+.setup-ticker {
+    font-size: 20px;
+    font-weight: 700;
+    color: #fff;
+}
+.setup-direction {
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 700;
+}
+.setup-direction.call { background: #22c55e; color: #000; }
+.setup-direction.put { background: #ef4444; color: #fff; }
+
+.setup-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 16px;
+}
+.metric {
+    text-align: center;
+    padding: 12px;
+    background: #1e293b;
+    border-radius: 6px;
+}
+.metric-value {
+    font-size: 18px;
+    font-weight: 700;
+    color: #fff;
+}
+.metric-value.positive { color: #22c55e; }
+.metric-value.negative { color: #ef4444; }
+.metric-label {
+    font-size: 11px;
+    color: #64748b;
+    margin-top: 4px;
+    text-transform: uppercase;
+}
+
+.setup-contract {
+    background: #1e293b;
+    border-radius: 6px;
+    padding: 12px;
+    font-family: 'SF Mono', monospace;
+    font-size: 13px;
+    margin-bottom: 12px;
+}
+.contract-label { color: #64748b; }
+.contract-value { color: #fff; font-weight: 600; }
+
+.setup-action {
+    display: flex;
+    gap: 8px;
+}
+.setup-btn {
+    flex: 1;
+    padding: 10px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.setup-btn.primary { background: #3b82f6; color: #fff; }
+.setup-btn.secondary { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
+{% endblock %}
+
+{% block nav_stats %}
+<div>
+    <span class="nav-stat-label">SETUPS</span>
+    <span class="nav-stat-value" id="setupCount">0</span>
+</div>
+<div>
+    <span class="nav-stat-label">TOP SCORE</span>
+    <span class="nav-stat-value" id="topScore">--</span>
+</div>
 {% endblock %}
 
 {% block content %}
-<div class="container">
-    <div class="scanner-header">
-        <div>
-            <h1>🌙 Overnight Gap Momentum Scanner</h1>
-            <p style="color: #6c757d; margin-top: 5px;">
-                Midday setups likely to gap overnight • Enter midday, exit on gap at open
-            </p>
-        </div>
-        
-        <div class="scanner-controls">
-            <button id="scanBtn" class="btn btn-primary">🔍 Scan Now</button>
-            
-            <div class="auto-refresh-checkbox">
-                <input type="checkbox" id="autoRefresh">
-                <label for="autoRefresh" style="cursor: pointer;">Auto-refresh (5 min)</label>
-            </div>
-        </div>
+<div class="page-header">
+    <h1 class="page-title">Overnight Gap Momentum</h1>
+    <p class="page-subtitle">Enter midday, hold overnight, exit on gap move</p>
+</div>
+
+<div class="strategy-info">
+    <div class="strategy-desc">
+        Strategy targets 80%+ of profits captured within 24 hours. Scan identifies stocks with catalyst + volume setup for overnight gap potential.
     </div>
-    
-    <div class="filter-group">
-        <label>Direction:</label>
-        <select id="directionFilter">
-            <option value="ALL">All</option>
-            <option value="CALL">Calls Only</option>
-            <option value="PUT">Puts Only</option>
-        </select>
-        
-        <label>Min Score:</label>
-        <input type="number" id="minScoreFilter" value="60" min="0" max="100" style="width: 80px;">
-        
-        <span class="last-scan" id="lastScanTime">Click "Scan Now" to start</span>
-    </div>
-    
-    <div id="resultsContainer">
-        <div class="no-results">
-            <p>Click "Scan Now" to find overnight gap setups</p>
-        </div>
+    <div class="strategy-stat">
+        <div class="strategy-stat-value">24hr</div>
+        <div class="strategy-stat-label">Avg Hold Time</div>
     </div>
 </div>
 
-<!-- Detail Modal -->
-<div id="detailModal" class="modal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h2 id="modalTitle">Setup Details</h2>
-            <span class="modal-close" onclick="closeModal()">&times;</span>
-        </div>
-        <div id="modalBody"></div>
-    </div>
+<div class="scan-controls">
+    <button class="scan-btn" id="scanBtn" onclick="runScan()">Scan for Setups</button>
+    <select id="filterDirection" style="padding: 10px; background: #1e293b; border: 1px solid #334155; border-radius: 6px; color: #fff;">
+        <option value="all">All Directions</option>
+        <option value="call">Bullish Only</option>
+        <option value="put">Bearish Only</option>
+    </select>
+</div>
+
+<div class="setup-grid" id="setupGrid">
+    <div class="loading">Scanning for overnight gap setups...</div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-let autoRefreshInterval = null;
-let cachedResults = [];
-
-document.getElementById('scanBtn').addEventListener('click', runScan);
-document.getElementById('autoRefresh').addEventListener('change', handleAutoRefresh);
-document.getElementById('directionFilter').addEventListener('change', applyFilters);
-document.getElementById('minScoreFilter').addEventListener('change', applyFilters);
-
-function runScan() {
-    const scanBtn = document.getElementById('scanBtn');
-    const resultsContainer = document.getElementById('resultsContainer');
+async function runScan() {
+    const btn = document.getElementById('scanBtn');
+    const grid = document.getElementById('setupGrid');
     
-    scanBtn.disabled = true;
-    scanBtn.textContent = '⏳ Scanning...';
+    btn.disabled = true;
+    btn.textContent = 'Scanning...';
+    grid.innerHTML = '<div class="loading">Scanning 100 tech stocks...</div>';
     
-    resultsContainer.innerHTML = '<div class="loading">Scanning 100 tech stocks for overnight setups...</div>';
-    
-    fetch('/api/overnight-gap/scan')
-        .then(response => response.json())
-        .then(data => {
-            cachedResults = data.results || [];
-            displayResults(cachedResults);
-            
-            const lastScan = new Date().toLocaleTimeString();
-            document.getElementById('lastScanTime').textContent = `Last scan: ${lastScan}`;
-            
-            scanBtn.disabled = false;
-            scanBtn.textContent = '🔍 Scan Now';
-        })
-        .catch(error => {
-            console.error('Scan error:', error);
-            resultsContainer.innerHTML = '<div class="no-results"><p>Error running scan. Please try again.</p></div>';
-            scanBtn.disabled = false;
-            scanBtn.textContent = '🔍 Scan Now';
-        });
-}
-
-function displayResults(results) {
-    const resultsContainer = document.getElementById('resultsContainer');
-    
-    if (!results || results.length === 0) {
-        resultsContainer.innerHTML = '<div class="no-results"><p>No setups found matching criteria. Try adjusting filters or scan later.</p></div>';
-        return;
-    }
-    
-    let html = '<table class="results-table"><thead><tr>';
-    html += '<th>Ticker</th>';
-    html += '<th>Score</th>';
-    html += '<th>Direction</th>';
-    html += '<th>Current Price</th>';
-    html += '<th>Strike</th>';
-    html += '<th>Expiry</th>';
-    html += '<th>Entry Range</th>';
-    html += '<th>Target</th>';
-    html += '</tr></thead><tbody>';
-    
-    results.forEach(setup => {
-        const scoreClass = setup.score >= 75 ? 'score-high' : (setup.score >= 60 ? 'score-med' : 'score-low');
-        const directionClass = setup.direction === 'CALL' ? 'direction-call' : 'direction-put';
+    try {
+        const resp = await fetch('/api/overnight-gap/scan');
+        const data = await resp.json();
         
-        html += '<tr onclick="showDetail(\'' + setup.ticker + '\')">';
-        html += '<td><a class="ticker-link" href="#" onclick="event.stopPropagation(); showDetail(\'' + setup.ticker + '\'); return false;">' + setup.ticker + '</a></td>';
-        html += '<td><span class="score-badge ' + scoreClass + '">' + setup.score + '</span></td>';
-        html += '<td><span class="' + directionClass + '">' + setup.direction + '</span></td>';
-        html += '<td>$' + setup.current_price.toFixed(2) + '</td>';
-        html += '<td>$' + setup.suggested_strike.toFixed(2) + '</td>';
-        html += '<td>' + setup.suggested_expiry + '</td>';
-        html += '<td>' + setup.entry_range + '</td>';
-        html += '<td>$' + setup.target_level.toFixed(2) + '</td>';
-        html += '</tr>';
-    });
-    
-    html += '</tbody></table>';
-    resultsContainer.innerHTML = html;
-}
-
-function applyFilters() {
-    const direction = document.getElementById('directionFilter').value;
-    const minScore = parseFloat(document.getElementById('minScoreFilter').value) || 0;
-    
-    let filtered = cachedResults.filter(setup => {
-        if (direction !== 'ALL' && setup.direction !== direction) return false;
-        if (setup.score < minScore) return false;
-        return true;
-    });
-    
-    displayResults(filtered);
-}
-
-function showDetail(ticker) {
-    const setup = cachedResults.find(s => s.ticker === ticker);
-    if (!setup) return;
-    
-    const modal = document.getElementById('detailModal');
-    const modalTitle = document.getElementById('modalTitle');
-    const modalBody = document.getElementById('modalBody');
-    
-    modalTitle.textContent = `${ticker} - ${setup.direction} Setup`;
-    
-    let html = '';
-    html += '<div class="detail-row"><span class="detail-label">Score:</span><span class="detail-value"><strong>' + setup.score + '</strong></span></div>';
-    html += '<div class="detail-row"><span class="detail-label">Direction:</span><span class="detail-value">' + setup.direction + '</span></div>';
-    html += '<div class="detail-row"><span class="detail-label">Current Price:</span><span class="detail-value">$' + setup.current_price.toFixed(2) + '</span></div>';
-    html += '<div class="detail-row"><span class="detail-label">Suggested Strike:</span><span class="detail-value">$' + setup.suggested_strike.toFixed(2) + '</span></div>';
-    html += '<div class="detail-row"><span class="detail-label">Suggested Expiry:</span><span class="detail-value">' + setup.suggested_expiry + '</span></div>';
-    html += '<div class="detail-row"><span class="detail-label">Entry Range:</span><span class="detail-value">' + setup.entry_range + '</span></div>';
-    html += '<div class="detail-row"><span class="detail-label">Target Level:</span><span class="detail-value">$' + setup.target_level.toFixed(2) + '</span></div>';
-    html += '<div class="detail-row"><span class="detail-label">Intraday Change:</span><span class="detail-value">' + setup.intraday_change.toFixed(2) + '%</span></div>';
-    html += '<div class="detail-row"><span class="detail-label">RSI:</span><span class="detail-value">' + setup.rsi.toFixed(1) + '</span></div>';
-    html += '<div class="detail-row"><span class="detail-label">VWAP:</span><span class="detail-value">$' + setup.vwap.toFixed(2) + '</span></div>';
-    html += '<div class="detail-row"><span class="detail-label">Volume Increase:</span><span class="detail-value">' + setup.volume_increase.toFixed(1) + '%</span></div>';
-    
-    html += '<div class="breakdown-section">';
-    html += '<h3>Score Breakdown</h3>';
-    html += '<div class="detail-row"><span class="detail-label">Momentum Strength:</span><span class="detail-value">' + setup.breakdown.momentum + ' / 30</span></div>';
-    html += '<div class="detail-row"><span class="detail-label">Volume Confirmation:</span><span class="detail-value">' + setup.breakdown.volume + ' / 20</span></div>';
-    html += '<div class="detail-row"><span class="detail-label">Technical Quality:</span><span class="detail-value">' + setup.breakdown.technical + ' / 20</span></div>';
-    html += '<div class="detail-row"><span class="detail-label">Key Level Distance:</span><span class="detail-value">' + setup.breakdown.key_level + ' / 15</span></div>';
-    html += '<div class="detail-row"><span class="detail-label">Time of Day:</span><span class="detail-value">' + setup.breakdown.time_of_day + ' / 15</span></div>';
-    html += '</div>';
-    
-    modalBody.innerHTML = html;
-    modal.style.display = 'block';
-}
-
-function closeModal() {
-    document.getElementById('detailModal').style.display = 'none';
-}
-
-function handleAutoRefresh(e) {
-    if (e.target.checked) {
-        // Run initial scan
-        runScan();
+        const setups = data.setups || [];
+        document.getElementById('setupCount').textContent = setups.length;
+        document.getElementById('topScore').textContent = setups.length ? setups[0].score : '--';
         
-        // Set up 5-minute auto-refresh (only during market hours)
-        autoRefreshInterval = setInterval(() => {
-            const now = new Date();
-            const hours = now.getHours();
-            const day = now.getDay();
-            
-            // Market hours: Mon-Fri, 9:30 AM - 4:00 PM ET (approx)
-            if (day >= 1 && day <= 5 && hours >= 9 && hours < 16) {
-                runScan();
-            }
-        }, 5 * 60 * 1000); // 5 minutes
-    } else {
-        if (autoRefreshInterval) {
-            clearInterval(autoRefreshInterval);
-            autoRefreshInterval = null;
+        if (setups.length > 0) {
+            grid.innerHTML = setups.map(s => `
+                <div class="setup-card ${s.direction === 'CALL' ? 'bullish' : 'bearish'}">
+                    <div class="setup-header">
+                        <div>
+                            <div class="setup-ticker">${s.ticker}</div>
+                            <div style="color: #64748b; font-size: 13px;">Score: ${s.score}/100</div>
+                        </div>
+                        <span class="setup-direction ${s.direction.toLowerCase()}">${s.direction}</span>
+                    </div>
+                    
+                    <div class="setup-metrics">
+                        <div class="metric">
+                            <div class="metric-value ${s.gap_potential > 0 ? 'positive' : 'negative'}">
+                                ${s.gap_potential > 0 ? '+' : ''}${s.gap_potential?.toFixed(1) || '--'}%
+                            </div>
+                            <div class="metric-label">Gap Potential</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-value">${s.rel_volume?.toFixed(1) || '--'}x</div>
+                            <div class="metric-label">Rel Volume</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-value">$${s.price?.toFixed(2) || '--'}</div>
+                            <div class="metric-label">Price</div>
+                        </div>
+                    </div>
+                    
+                    ${s.contract ? `
+                    <div class="setup-contract">
+                        <span class="contract-label">Contract: </span>
+                        <span class="contract-value">${s.contract}</span>
+                    </div>
+                    ` : ''}
+                    
+                    <div class="setup-action">
+                        <button class="setup-btn primary">Add to Watchlist</button>
+                        <button class="setup-btn secondary">Details</button>
+                    </div>
+                </div>
+            `).join('');
+        } else {
+            grid.innerHTML = '<div class="empty-state"><h3>No Setups Found</h3><p>No qualifying overnight gap setups at this time</p></div>';
         }
+    } catch(e) {
+        grid.innerHTML = '<div class="empty-state"><h3>Scan Error</h3><p>' + e.message + '</p></div>';
     }
+    
+    btn.disabled = false;
+    btn.textContent = 'Scan for Setups';
 }
 
-// Close modal when clicking outside
-window.onclick = function(event) {
-    const modal = document.getElementById('detailModal');
-    if (event.target === modal) {
-        closeModal();
-    }
-}
+// Filter by direction
+document.getElementById('filterDirection').addEventListener('change', function() {
+    const filter = this.value;
+    document.querySelectorAll('.setup-card').forEach(card => {
+        if (filter === 'all') {
+            card.style.display = 'block';
+        } else {
+            card.style.display = card.classList.contains(filter === 'call' ? 'bullish' : 'bearish') ? 'block' : 'none';
+        }
+    });
+});
+
+// Initial scan
+document.addEventListener('DOMContentLoaded', runScan);
+
+// Auto-refresh every 30s
+setInterval(runScan, 30000);
 </script>
 {% endblock %}
