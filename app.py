@@ -1054,7 +1054,7 @@ def api_distress_scan():
                 
                 url = "https://finnhub.io/api/v1/calendar/earnings"
                 params = {'from': from_date, 'to': to_date, 'token': finnhub_key}
-                resp = requests.get(url, params=params, timeout=10)
+                resp = requests.get(url, params=params, timeout=30)
                 earnings_data = resp.json().get('earningsCalendar', [])
                 
                 for e in earnings_data:
@@ -1155,7 +1155,7 @@ def api_distress_earnings_calendar():
             'token': finnhub_key
         }
         
-        resp = requests.get(url, params=params, timeout=10)
+        resp = requests.get(url, params=params, timeout=30)
         data = resp.json()
         
         earnings = data.get('earningsCalendar', [])
