@@ -845,6 +845,7 @@ def api_v5_score(symbol):
                 return jsonify({
                     'ticker': signal.ticker,
                     'current_price': float(signal.price) if signal.price else None,
+                    'change_pct': float(signal.change_pct) if signal.change_pct else None,
                     'score': signal.score,
                     'grade': signal.grade,
                     'decision': signal.confidence,
@@ -902,6 +903,14 @@ def api_v5_score(symbol):
         scorer = get_v5_scorer()
         result = scorer.score_ticker(symbol.upper(), quote_data, market_data)
         result['source'] = 'calculated'
+        
+        # Add price change %
+        open_price = snapshot.get('o', 0)
+        current_price = snapshot.get('c', 0)
+        if open_price > 0:
+            result['change_pct'] = round(((current_price - open_price) / open_price) * 100, 2)
+        else:
+            result['change_pct'] = None
         
         # Add real options data if available
         try:
