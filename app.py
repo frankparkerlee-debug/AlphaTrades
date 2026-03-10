@@ -1003,11 +1003,10 @@ def health():
 # DISTRESS SCANNER ENDPOINTS
 # ============================================================================
 
-# Same 15 tickers as Launch Control for consistency
-DISTRESS_WATCHLIST = [
-    'NVDA', 'TSLA', 'AMD', 'AAPL', 'AMZN', 'META', 'MSFT', 'GOOGL', 
-    'NFLX', 'AVGO', 'ORCL', 'ADBE', 'CRM', 'INTC', 'QCOM'
-]
+# Distress Scanner - Broader universe for earnings plays
+# 100 tech/growth stocks prone to volatility around earnings
+from tech_100 import TECH_100
+DISTRESS_WATCHLIST = TECH_100  # 100 stocks for 5+ trade opportunities per week
 
 @app.route('/distress')
 def distress_scanner_page():

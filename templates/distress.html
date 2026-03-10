@@ -164,8 +164,9 @@
 
 {% block scripts %}
 <script>
-// Same 15 tickers as Launch Control
-const WATCHLIST = ['NVDA','TSLA','AMD','AAPL','AMZN','META','MSFT','GOOGL','NFLX','AVGO','ORCL','ADBE','CRM','INTC','QCOM'];
+// Use backend's full 100-stock watchlist (tech_100)
+// Pass empty to use server default
+const WATCHLIST = null;  // Server uses TECH_100 (100 stocks)
 
 async function runScan() {
     const btn = document.getElementById('scanBtn');
@@ -174,13 +175,13 @@ async function runScan() {
     btn.disabled = true;
     btn.textContent = 'Scanning...';
     document.getElementById('scanStatus').textContent = 'Running';
-    list.innerHTML = '<div class="loading">Scanning ' + WATCHLIST.length + ' tickers...</div>';
+    list.innerHTML = '<div class="loading">Scanning 100 tech stocks for distress signals...</div>';
     
     try {
         const resp = await fetch('/api/distress/scan', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({tickers: WATCHLIST})
+            body: JSON.stringify({})  // Use server's 100-stock default
         });
         const data = await resp.json();
         
