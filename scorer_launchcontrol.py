@@ -16,6 +16,7 @@ CRITICAL: Asymmetry Gate - PA > 17.5 AND Vol > 15 required for primary signals
 from datetime import datetime, time as dt_time, timedelta
 from typing import Dict, Optional, List, Tuple
 import os
+import json
 
 
 class LaunchControlScorer:
@@ -54,6 +55,16 @@ class LaunchControlScorer:
         self.alpaca_api_key = alpaca_api_key or os.getenv('ALPACA_API_KEY')
         self.alpaca_secret_key = alpaca_secret_key or os.getenv('ALPACA_SECRET_KEY')
         self.data_url = 'https://data.alpaca.markets'
+        
+        # Load volume window profiles (per-bar averages by time window)
+        self.volume_profiles = {}
+        try:
+            profile_path = os.path.join(os.path.dirname(__file__), 'volume_profiles.json')
+            if os.path.exists(profile_path):
+                with open(profile_path, 'r') as f:
+                    self.volume_profiles = json.load(f)
+        except Exception as e:
+            print(f"Warning: Could not load volume profiles: {e}")
         
     def score_ticker(self, ticker: str, bar_data: Dict, equity_profile: Dict, 
                     market_data: Optional[Dict] = None, news_data: Optional[Dict] = None) -> Dict:
@@ -99,10 +110,10 @@ class LaunchControlScorer:
         price_change = abs(close - open_price)
         atr_multiple = price_change / atr if atr > 0 else 0
         
-        # TIME-WEIGHTED volume comparison (not raw daily comparison)
-        expected_vol_pct = self._get_expected_volume_pct(timestamp)
-        expected_volume = vol_baseline * expected_vol_pct
-        rel_volume = volume / expected_volume if expected_volume > 0 else 1.0
+        # PER-WINDOW volume comparison (compare bar volume to historical window avg)
+        window_key = self._get_window_key(timestamp)
+        window_avg = self._get_window_baseline(ticker, window_key, vol_baseline)
+        rel_volume = volume / window_avg if window_avg > 0 else 1.0
         
         intraday_range = high - low
         body_ratio = price_change / intraday_range if intraday_range > 0 else 0
@@ -208,6 +219,51 @@ class LaunchControlScorer:
             'atr_multiple': round(atr_multiple, 2),
             'rel_volume': round(rel_volume, 2)
         }
+    
+    def _get_window_key(self, timestamp: datetime) -> str:
+        """
+        Convert timestamp to 15-min window key.
+        E.g., 10:23 AM → "10:15"
+        """
+        hour = timestamp.hour
+        minute = timestamp.minute
+        
+        # Floor to nearest 15 minutes
+        floored_minute = (minute // 15) * 15
+        return f"{hour:02d}:{floored_minute:02d}"
+    
+    def _get_window_baseline(self, ticker: str, window_key: str, fallback_daily: float) -> float:
+        """
+        Get historical average volume for this ticker at this time window.
+        Falls back to estimated daily fraction if no window data available.
+        """
+        # Check if we have window-specific data for this ticker
+        if ticker in self.volume_profiles:
+            window_avgs = self.volume_profiles[ticker].get('avg_vol_by_window', {})
+            if window_key in window_avgs:
+                return window_avgs[window_key]
+        
+        # Fallback: estimate from daily using time curve
+        # (less accurate but better than nothing)
+        pct = self._get_expected_volume_pct_fallback(window_key)
+        return fallback_daily * pct
+    
+    def _get_expected_volume_pct_fallback(self, window_key: str) -> float:
+        """
+        Fallback: estimate expected volume for a 15-min window as % of daily.
+        Used when we don't have historical window data for a ticker.
+        """
+        # Approximate % of daily volume per 15-min window (U-curve)
+        window_pcts = {
+            '09:30': 0.045, '09:45': 0.040, '10:00': 0.035, '10:15': 0.030,
+            '10:30': 0.028, '10:45': 0.026, '11:00': 0.024, '11:15': 0.023,
+            '11:30': 0.022, '11:45': 0.021, '12:00': 0.020, '12:15': 0.019,
+            '12:30': 0.019, '12:45': 0.020, '13:00': 0.021, '13:15': 0.022,
+            '13:30': 0.024, '13:45': 0.026, '14:00': 0.028, '14:15': 0.030,
+            '14:30': 0.035, '14:45': 0.040, '15:00': 0.050, '15:15': 0.055,
+            '15:30': 0.060, '15:45': 0.065
+        }
+        return window_pcts.get(window_key, 0.03)  # Default ~3% per 15-min
     
     def _get_expected_volume_pct(self, timestamp: datetime) -> float:
         """
