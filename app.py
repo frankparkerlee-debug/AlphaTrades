@@ -1055,6 +1055,11 @@ def api_distress_earnings_calendar():
 # OVERNIGHT GAP ENDPOINTS
 # ============================================================================
 
+@app.route('/launchcontrol')
+def launchcontrol_page():
+    """Launch Control v2.0 Momentum Strategy Page"""
+    return render_template('launchcontrol.html')
+
 @app.route('/overnight-gap')
 def overnight_gap_page():
     """Overnight Gap Momentum Page"""
