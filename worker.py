@@ -114,19 +114,39 @@ class LaunchControlWorker:
             'news_sensitivity': 1.0
         }
     
-    def _get_market_data(self) -> dict:
-        """Get market context (QQQ, VIX)"""
+    # Sector ETF mapping for each ticker
+    SECTOR_ETFS = {
+        'NVDA': 'SMH', 'AMD': 'SMH', 'INTC': 'SMH', 'AVGO': 'SMH', 'QCOM': 'SMH',
+        'META': 'XLK', 'AAPL': 'XLK', 'MSFT': 'XLK', 'GOOGL': 'XLK', 'CRM': 'XLK', 'ORCL': 'XLK', 'ADBE': 'XLK',
+        'TSLA': 'XLY', 'AMZN': 'XLY',
+        'NFLX': 'XLC'
+    }
+    
+    def _get_market_data(self, ticker: str = None) -> dict:
+        """Get market context using actual sector ETF for the ticker"""
         try:
+            # Get QQQ (broad tech market)
             qqq = self.alpaca.get_snapshot('QQQ')
             qqq_current = qqq.get('c', 0)
             qqq_prev = qqq.get('pc', qqq_current)
             qqq_change = ((qqq_current - qqq_prev) / qqq_prev * 100) if qqq_prev else 0
             
+            # Get sector ETF for this specific ticker
+            sector_etf = self.SECTOR_ETFS.get(ticker, 'XLK')  # Default to XLK
+            try:
+                sector = self.alpaca.get_snapshot(sector_etf)
+                sector_current = sector.get('c', 0)
+                sector_prev = sector.get('pc', sector_current)
+                sector_change = ((sector_current - sector_prev) / sector_prev * 100) if sector_prev else 0
+            except:
+                sector_change = qqq_change  # Fallback to QQQ
+            
             return {
                 'qqq_direction': 'UP' if qqq_change >= 0 else 'DOWN',
                 'qqq_change': qqq_change,
-                'sector_direction': 'UP' if qqq_change >= 0 else 'DOWN',
-                'sector_change': qqq_change,
+                'sector_etf': sector_etf,
+                'sector_direction': 'UP' if sector_change >= 0 else 'DOWN',
+                'sector_change': sector_change,
                 'vix': 18.0  # Would need VIX quote for accurate value
             }
         except Exception as e:
@@ -134,10 +154,46 @@ class LaunchControlWorker:
             return {
                 'qqq_direction': 'UP',
                 'qqq_change': 0.0,
-                'sector_direction': 'up',
+                'sector_etf': 'XLK',
+                'sector_direction': 'UP',
                 'sector_change': 0.0,
                 'vix': 18.0
             }
+    
+    def _get_all_sector_data(self) -> dict:
+        """Fetch all sector ETFs at once for efficiency"""
+        sector_etfs = ['SMH', 'XLK', 'XLY', 'XLC']
+        result = {}
+        
+        for etf in sector_etfs:
+            try:
+                snapshot = self.alpaca.get_snapshot(etf)
+                current = snapshot.get('c', 0)
+                prev = snapshot.get('pc', current)
+                change = ((current - prev) / prev * 100) if prev else 0
+                result[etf] = {
+                    'direction': 'UP' if change >= 0 else 'DOWN',
+                    'change': change
+                }
+            except Exception as e:
+                logger.warning(f"Could not fetch {etf}: {e}")
+                result[etf] = {'direction': 'UP', 'change': 0.0}
+        
+        return result
+    
+    def _get_ticker_market_data(self, ticker: str, base_market: dict, sector_data: dict) -> dict:
+        """Get market data for a specific ticker using its sector ETF"""
+        sector_etf = self.SECTOR_ETFS.get(ticker, 'XLK')
+        sector = sector_data.get(sector_etf, {'direction': 'UP', 'change': 0.0})
+        
+        return {
+            'qqq_direction': base_market.get('qqq_direction', 'UP'),
+            'qqq_change': base_market.get('qqq_change', 0.0),
+            'sector_etf': sector_etf,
+            'sector_direction': sector['direction'],
+            'sector_change': sector['change'],
+            'vix': base_market.get('vix', 18.0)
+        }
     
     def update_all_signals(self):
         """Pre-compute and cache all Launch Control signals"""
@@ -146,9 +202,12 @@ class LaunchControlWorker:
         print(f"{'='*60}", flush=True)
         
         session = self._get_fresh_session()
-        market_data = self._get_market_data()
         
-        logger.info(f"Market: QQQ {market_data['qqq_change']:+.2f}%")
+        # Get base market data (QQQ + all sector ETFs)
+        base_market = self._get_market_data()
+        sector_data = self._get_all_sector_data()
+        
+        logger.info(f"Market: QQQ {base_market['qqq_change']:+.2f}% | SMH {sector_data.get('SMH', {}).get('change', 0):+.2f}% | XLK {sector_data.get('XLK', {}).get('change', 0):+.2f}%")
         
         updated_count = 0
         error_count = 0
@@ -188,12 +247,13 @@ class LaunchControlWorker:
                     'timestamp': datetime.now(pytz.timezone('US/Eastern'))
                 }
                 
-                # 4. Calculate Launch Control score
+                # 4. Calculate Launch Control score (with ticker-specific sector ETF)
+                ticker_market_data = self._get_ticker_market_data(ticker, base_market, sector_data)
                 lc_result = self.scorer.score_ticker(
                     ticker, 
                     bar_data, 
                     equity_profile,
-                    market_data,
+                    ticker_market_data,
                     None  # news_data - could add later
                 )
                 
