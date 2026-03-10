@@ -718,12 +718,13 @@ function updateCardValues(card, data) {
         }
     }
     
-    // Update direction/range
+    // Update % change from open
     const changeEl = card.querySelector('.price-change');
     if (changeEl) {
-        const newChange = `${data.direction} · ${data.intraday_range || 0}% range`;
+        const pctStr = data.change_pct ? (data.change_pct >= 0 ? '+' : '') + data.change_pct.toFixed(2) + '%' : '-';
+        const newChange = `${pctStr} · ${data.direction}`;
         changeEl.textContent = newChange;
-        changeEl.className = `price-change ${data.direction === 'CALL' ? 'positive' : 'negative'}`;
+        changeEl.className = `price-change ${data.change_pct >= 0 ? 'positive' : 'negative'}`;
     }
     
     // Update score with animation
@@ -811,8 +812,8 @@ function createCard(ticker, data) {
                 <div class="ticker-info">
                     <div class="ticker">${ticker}</div>
                     <div class="price">$${data.current_price ? data.current_price.toFixed(2) : '-'}</div>
-                    <div class="price-change ${data.direction === 'CALL' ? 'positive' : 'negative'}">
-                        ${data.direction} · ${data.intraday_range || 0}% range
+                    <div class="price-change ${data.change_pct >= 0 ? 'positive' : 'negative'}">
+                        ${data.change_pct ? (data.change_pct >= 0 ? '+' : '') + data.change_pct.toFixed(2) + '%' : '-'} · ${data.direction}
                     </div>
                 </div>
                 <div class="grade-badge ${gradeClass}">${data.grade}</div>
@@ -833,23 +834,23 @@ function createCard(ticker, data) {
             
             <div class="signals-grid">
                 <div class="signal-item">
-                    <div class="signal-value">${bd.price_action?.score || 0}</div>
+                    <div class="signal-value">${Math.round(bd.price_action?.score || 0)}</div>
                     <div class="signal-label">PA (35)</div>
                 </div>
                 <div class="signal-item">
-                    <div class="signal-value">${bd.volume?.score || 0}</div>
+                    <div class="signal-value">${Math.round(bd.volume?.score || 0)}</div>
                     <div class="signal-label">Vol (30)</div>
                 </div>
                 <div class="signal-item">
-                    <div class="signal-value">${bd.news?.score || 0}</div>
+                    <div class="signal-value">${Math.round(bd.news_sentiment?.score || 0)}</div>
                     <div class="signal-label">News (15)</div>
                 </div>
                 <div class="signal-item">
-                    <div class="signal-value">${bd.market?.score || 0}</div>
+                    <div class="signal-value">${Math.round(bd.market_alignment?.score || 0)}</div>
                     <div class="signal-label">Mkt (15)</div>
                 </div>
                 <div class="signal-item">
-                    <div class="signal-value">${bd.timing?.score || 0}</div>
+                    <div class="signal-value">${Math.round(bd.timing?.score || 0)}</div>
                     <div class="signal-label">Time (5)</div>
                 </div>
             </div>
