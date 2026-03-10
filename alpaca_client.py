@@ -59,7 +59,8 @@ class AlpacaClient:
         
         params = {
             'timeframe': timeframe,
-            'limit': limit
+            'limit': limit,
+            'feed': 'sip'  # SIP feed for full market data
         }
         
         if start:
@@ -96,9 +97,11 @@ class AlpacaClient:
         """
         Get snapshot (latest quote, trade, bars) for a symbol
         Returns format compatible with our scorer
+        Uses SIP feed for extended hours data
         """
         url = f"{self.data_url}/v2/stocks/{symbol}/snapshot"
-        response = requests.get(url, headers=self.headers)
+        params = {'feed': 'sip'}  # SIP feed includes pre/post market
+        response = requests.get(url, headers=self.headers, params=params)
         response.raise_for_status()
         data = response.json()
         
