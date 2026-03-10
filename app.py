@@ -998,5 +998,258 @@ def health():
     """Health check endpoint"""
     return jsonify({'status': 'ok', 'timestamp': datetime.now().isoformat()})
 
+# ============================================================================
+# DISTRESS SCANNER ENDPOINTS
+# ============================================================================
+
+# Default watchlist for distress scanner
+DISTRESS_WATCHLIST = [
+    # Large caps prone to volatility
+    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NFLX', 'TSLA', 'NVDA',
+    # Retail
+    'LULU', 'NKE', 'TGT', 'WMT', 'COST',
+    # Tech growth
+    'SNAP', 'PINS', 'ROKU', 'SHOP', 'SQ', 'PYPL',
+    # Others
+    'DIS', 'SBUX', 'MCD', 'BA', 'UAL', 'DAL'
+]
+
+@app.route('/distress')
+def distress_scanner_page():
+    """Distress Signal Scanner Page"""
+    return render_template('distress.html')
+
+@app.route('/api/distress/scan', methods=['POST'])
+def api_distress_scan():
+    """
+    Scan tickers for distress signals (HIGH CONVICTION ONLY: score >= 80)
+    POST body: { "tickers": ["AAPL", "TSLA"] } or empty for default watchlist
+    """
+    try:
+        from distress_scanner import DistressScanner
+        
+        data = request.json or {}
+        tickers = data.get('tickers', DISTRESS_WATCHLIST)
+        
+        if not tickers:
+            tickers = DISTRESS_WATCHLIST
+        
+        logger.info(f"🔍 Distress scan requested for {len(tickers)} tickers")
+        
+        # Get Finnhub API key from environment
+        finnhub_key = os.getenv('FINNHUB_API_KEY')
+        
+        # Initialize scanner
+        scanner = DistressScanner(finnhub_api_key=finnhub_key)
+        
+        # Scan all tickers
+        results = scanner.scan_multiple(tickers, days_back=30)
+        
+        # Filter to HIGH CONVICTION ONLY (score >= 80)
+        high_conviction_alerts = [
+            r for r in results 
+            if r.get('score', 0) >= 80 and not r.get('error')
+        ]
+        
+        # Get PUT recommendations for each alert
+        for alert in high_conviction_alerts:
+            ticker = alert['ticker']
+            days_until = alert['data'].get('days_until_earnings')
+            
+            # Generate PUT recommendation
+            recommendation = _generate_put_recommendation(
+                ticker=ticker,
+                distress_score=alert['score'],
+                days_until_earnings=days_until
+            )
+            
+            alert['put_recommendation'] = recommendation
+        
+        # Sort by score (highest first)
+        high_conviction_alerts.sort(key=lambda x: x['score'], reverse=True)
+        
+        logger.info(f"✅ Found {len(high_conviction_alerts)} HIGH CONVICTION alerts (score >= 80)")
+        
+        return jsonify({
+            'alerts': high_conviction_alerts,
+            'total_scanned': len(tickers),
+            'high_conviction_count': len(high_conviction_alerts),
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in distress scan: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/distress/alerts')
+def api_distress_alerts():
+    """
+    Get recent high-conviction distress alerts
+    Query params: min_score (default 80), days_back (default 7)
+    """
+    try:
+        min_score = request.args.get('min_score', 80, type=int)
+        days_back = request.args.get('days_back', 7, type=int)
+        
+        # In production, this would query a database of historical alerts
+        # For now, return structure for frontend development
+        
+        # Mock data for demonstration
+        historical_alerts = [
+            {
+                'ticker': 'LULU',
+                'timestamp': (datetime.now() - timedelta(days=2)).isoformat(),
+                'score': 85,
+                'signals_triggered': 4,
+                'outcome': 'PENDING',
+                'put_recommendation': {
+                    'strike': 380,
+                    'expiry': '2026-03-21',
+                    'confidence': 'HIGH'
+                }
+            }
+        ]
+        
+        return jsonify({
+            'alerts': historical_alerts,
+            'count': len(historical_alerts),
+            'min_score': min_score,
+            'days_back': days_back
+        })
+        
+    except Exception as e:
+        logger.error(f"Error fetching historical alerts: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/distress/earnings-calendar')
+def api_distress_earnings_calendar():
+    """Get upcoming earnings for watchlist tickers"""
+    try:
+        from data_sources import EarningsCalendar, FinnhubAPI
+        
+        finnhub_key = os.getenv('FINNHUB_API_KEY')
+        finnhub = FinnhubAPI(finnhub_key)
+        
+        # Get earnings dates for watchlist
+        upcoming_earnings = []
+        
+        for ticker in DISTRESS_WATCHLIST[:10]:  # Limit to first 10 for demo
+            try:
+                days_until = EarningsCalendar.days_until_earnings(ticker, finnhub)
+                
+                if days_until is not None and days_until <= 30:
+                    upcoming_earnings.append({
+                        'ticker': ticker,
+                        'days_until': days_until,
+                        'date': (datetime.now() + timedelta(days=days_until)).strftime('%Y-%m-%d')
+                    })
+            except:
+                continue
+        
+        # Sort by days_until
+        upcoming_earnings.sort(key=lambda x: x['days_until'])
+        
+        return jsonify({
+            'earnings': upcoming_earnings,
+            'count': len(upcoming_earnings)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error fetching earnings calendar: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+def _generate_put_recommendation(ticker: str, distress_score: int, 
+                                 days_until_earnings: Optional[int]) -> Dict:
+    """Generate PUT option recommendation based on distress score"""
+    
+    # Get current stock price
+    try:
+        alpaca = AlpacaClient()
+        quote = alpaca.get_snapshot(ticker)
+        stock_price = quote.get('c', 0)
+    except:
+        stock_price = 0
+    
+    # Calculate strike (5-10% OTM based on conviction)
+    if distress_score >= 90:
+        strike_otm = 0.05  # 5% OTM for extreme conviction
+        confidence = 'EXTREME'
+    elif distress_score >= 85:
+        strike_otm = 0.07
+        confidence = 'VERY HIGH'
+    else:
+        strike_otm = 0.10
+        confidence = 'HIGH'
+    
+    strike = round(stock_price * (1 - strike_otm), 0)
+    
+    # Calculate expiry based on earnings
+    if days_until_earnings and days_until_earnings <= 7:
+        # Earnings imminent - use weekly expiry right after earnings
+        dte = days_until_earnings + 2
+        expiry_desc = "Weekly (post-earnings)"
+    elif days_until_earnings and days_until_earnings <= 21:
+        # Earnings soon - use monthly
+        dte = 21
+        expiry_desc = "Monthly"
+    else:
+        # No imminent earnings - use 30-45 DTE
+        dte = 30
+        expiry_desc = "30 DTE"
+    
+    expiry_date = datetime.now() + timedelta(days=dte)
+    
+    return {
+        'strike': strike,
+        'expiry': expiry_date.strftime('%Y-%m-%d'),
+        'expiry_desc': expiry_desc,
+        'dte': dte,
+        'confidence': confidence,
+        'rationale': f"{confidence} conviction PUT play - {distress_score}/100 distress score"
+    }
+
+# ============================================================================
+# OVERNIGHT GAP MOMENTUM SCANNER ENDPOINTS
+# ============================================================================
+
+@app.route('/overnight-gap')
+def overnight_gap_page():
+    """Overnight Gap Momentum Scanner Page"""
+    return render_template('overnight_gap.html')
+
+# Cache for scan results (1 minute TTL to avoid rate limits)
+_scan_cache = {'results': None, 'timestamp': None}
+
+@app.route('/api/overnight-gap/scan')
+@cache.cached(timeout=60)  # Cache for 1 minute
+def api_overnight_gap_scan():
+    """
+    Scan top 100 tech stocks for overnight gap momentum setups
+    Returns top 10-20 setups sorted by score (60+ minimum)
+    """
+    try:
+        from overnight_gap_scanner import OvernightGapScanner
+        
+        logger.info("🌙 Overnight Gap scan requested")
+        
+        # Initialize scanner
+        scanner = OvernightGapScanner()
+        
+        # Scan all tech stocks (min score 60)
+        results = scanner.scan_all(min_score=60)
+        
+        logger.info(f"✅ Found {len(results)} overnight gap setups")
+        
+        return jsonify({
+            'results': results,
+            'count': len(results),
+            'timestamp': datetime.now().isoformat(),
+            'scanned': 100  # Tech 100 stocks
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in overnight gap scan: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
