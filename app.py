@@ -1198,9 +1198,9 @@ def api_launchcontrol_signals():
                 'price': float(s.price) if s.price else 0,
                 'direction': 'CALL' if (s.change_pct or 0) >= 0 else 'PUT',
                 'pillars': {
-                    'pa': conv.get('momentum_score', 0),
-                    'vol': conv.get('volume_score', 0),
-                    'news': conv.get('catalyst_score', 0),
+                    'pa': conv.get('pa_score', 0),
+                    'vol': conv.get('vol_score', 0),
+                    'news': conv.get('news_score', 0),
                     'market': conv.get('market_score', 0),
                     'timing': conv.get('timing_score', 0)
                 },
