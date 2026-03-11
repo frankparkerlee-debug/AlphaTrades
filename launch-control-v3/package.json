@@ -1,0 +1,31 @@
+{
+  "name": "launch-control-v3",
+  "version": "3.0.0",
+  "description": "Nasdaq 100 Options Intelligence System",
+  "type": "module",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "node src/main.js",
+    "dev": "nodemon src/main.js",
+    "migrate": "node scripts/migrate.js",
+    "seed": "node scripts/seed.js",
+    "verify-db": "node scripts/verify-db.js",
+    "update-profiles": "node -e \"import('./src/jobs/nightly-profiles.js').then(m => m.run())\"",
+    "premarket": "node -e \"import('./src/jobs/premarket-scan.js').then(m => m.run())\"",
+    "test": "node --test tests/"
+  },
+  "dependencies": {
+    "@alpacahq/alpaca-trade-api": "^3.1.1",
+    "axios": "^1.6.0",
+    "dotenv": "^16.3.1",
+    "node-cron": "^3.0.3",
+    "pg": "^8.11.3",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
