@@ -1334,45 +1334,173 @@ def api_distress_analyze():
 # OVERNIGHT GAP ENDPOINTS
 # ============================================================================
 
+# ── LAUNCH CONTROL v3 ROUTES ──────────────────────────────────────────────────
+
 @app.route('/launchcontrol')
 def launchcontrol_page():
-    """Launch Control v2.0 Momentum Strategy Page"""
+    """Launch Control v3.0"""
     return render_template('launchcontrol.html')
+
 
 @app.route('/api/launchcontrol/signals')
 def api_launchcontrol_signals():
-    """Get Launch Control v2.0 signals - uses V5 scorer for now"""
+    """Signals from lc_v3 schema — written by the v3 Node.js worker"""
     try:
-        # Use existing V5 signals as base until LC scorer is fully integrated
-        from models import Signal, get_session
+        from models import get_session
+        from sqlalchemy import text
         session = get_session()
-        signals = session.query(Signal).filter(Signal.score >= 63).all()  # A- threshold
-        
-        result = []
+
+        rows = session.execute(text("""
+            SELECT
+                signal_id, ticker, direction, grade, status,
+                composite_raw, signal_tier,
+                score_price_action, score_volume, score_news,
+                score_market, score_timing,
+                position_size_pct, position_size_dollars,
+                confluence_score, news_headline,
+                leader_ticker, propagation_lag_min,
+                spy_change_pct, qqq_change_pct, sector_change_pct,
+                relative_volume, atr_multiple,
+                human_taken, human_pnl_pct,
+                score_note, expires_at, created_at
+            FROM lc_v3.signals
+            WHERE DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
+            ORDER BY created_at DESC
+            LIMIT 200
+        """)).fetchall()
+
+        signals = [dict(r._mapping) for r in rows]
+
+        # Serialize datetimes for JSON
         for s in signals:
-            conv = s.convergence_json or {}
-            result.append({
-                'ticker': s.ticker,
-                'score': s.score or 0,
-                'grade': s.grade or 'B',
-                'price': float(s.price) if s.price else 0,
-                'direction': 'CALL' if (s.change_pct or 0) >= 0 else 'PUT',
-                'pillars': {
-                    'pa': conv.get('pa_score', 0),
-                    'vol': conv.get('vol_score', 0),
-                    'news': conv.get('news_score', 0),
-                    'market': conv.get('market_score', 0),
-                    'timing': conv.get('timing_score', 0)
-                },
-                'contract': s.option_json.get('contract') if s.option_json else None,
-                'position_size': '20%' if s.grade in ['A+', 'A'] else '15%' if s.grade == 'A-' else '10%'
-            })
-        
+            if s.get('created_at'):
+                s['created_at'] = s['created_at'].isoformat()
+            if s.get('expires_at'):
+                s['expires_at'] = s['expires_at'].isoformat()
+            if s.get('signal_id'):
+                s['signal_id'] = str(s['signal_id'])
+
         session.close()
-        return jsonify({'signals': result, 'count': len(result)})
+        return jsonify({'signals': signals, 'count': len(signals)})
+
     except Exception as e:
-        logger.error(f"Error fetching LC signals: {e}")
+        logger.error(f"Error fetching LC v3 signals: {e}")
         return jsonify({'signals': [], 'error': str(e)})
+
+
+@app.route('/api/launchcontrol/status')
+def api_launchcontrol_status():
+    """System status — session, stream health, open propagation windows"""
+    try:
+        from models import get_session
+        from sqlalchemy import text
+        session = get_session()
+
+        # Open propagation windows
+        windows = session.execute(text("""
+            SELECT
+                event_id, leader_ticker, leader_grade,
+                leader_direction, followers_alerted,
+                window_close_at
+            FROM lc_v3.propagation_events
+            WHERE status = 'OPEN'
+            AND window_close_at > NOW()
+        """)).fetchall()
+
+        prop = []
+        for w in windows:
+            mins_left = max(0, int((w.window_close_at - __import__('datetime').datetime.utcnow()).total_seconds() / 60))
+            prop.append({
+                'eventId':          str(w.event_id),
+                'leaderTicker':     w.leader_ticker,
+                'leaderGrade':      w.leader_grade,
+                'leaderDirection':  w.leader_direction,
+                'followersAlerted': w.followers_alerted or [],
+                'minutesRemaining': mins_left,
+            })
+
+        session.close()
+
+        # Determine market session
+        from datetime import datetime, timezone, timedelta
+        ET = timezone(timedelta(hours=-4))  # EDT; adjust to -5 for EST in winter
+        now_et = datetime.now(ET)
+        day  = now_et.weekday()  # 0=Mon, 6=Sun
+        mins = now_et.hour * 60 + now_et.minute
+
+        if day >= 5:
+            session_name = 'WEEKEND'
+        elif 240 <= mins < 570:
+            session_name = 'PRE_MARKET'
+        elif 570 <= mins < 960:
+            session_name = 'REGULAR'
+        elif 960 <= mins < 1200:
+            session_name = 'POST_MARKET'
+        else:
+            session_name = 'OVERNIGHT'
+
+        return jsonify({
+            'session':     session_name,
+            'propagation': prop,
+            'time':        datetime.now(ET).isoformat(),
+        })
+
+    except Exception as e:
+        logger.error(f"Error fetching LC status: {e}")
+        return jsonify({'session': 'UNKNOWN', 'propagation': [], 'error': str(e)})
+
+
+@app.route('/api/launchcontrol/premarket')
+def api_launchcontrol_premarket():
+    """Today's pre-market briefing"""
+    try:
+        from models import get_session
+        from sqlalchemy import text
+        session = get_session()
+
+        row = session.execute(text("""
+            SELECT date, flagged_tickers, macro_events, market_bias, notes
+            FROM lc_v3.premarket_briefing
+            WHERE date = CURRENT_DATE
+        """)).fetchone()
+
+        session.close()
+        briefing = dict(row._mapping) if row else None
+        if briefing and briefing.get('date'):
+            briefing['date'] = briefing['date'].isoformat()
+
+        return jsonify({'briefing': briefing})
+
+    except Exception as e:
+        logger.error(f"Error fetching premarket briefing: {e}")
+        return jsonify({'briefing': None, 'error': str(e)})
+
+
+@app.route('/api/launchcontrol/outcome', methods=['POST'])
+def api_launchcontrol_outcome():
+    """Record human take/skip decision"""
+    try:
+        from models import get_session
+        from sqlalchemy import text
+        data    = request.get_json()
+        sig_id  = data.get('signal_id')
+        taken   = data.get('taken', False)
+
+        session = get_session()
+        session.execute(text("""
+            UPDATE lc_v3.signals
+            SET human_taken = :taken,
+                status = CASE WHEN :taken THEN 'TAKEN' ELSE 'SKIPPED' END
+            WHERE signal_id = :sig_id
+        """), {'taken': taken, 'sig_id': sig_id})
+        session.commit()
+        session.close()
+
+        return jsonify({'ok': True})
+
+    except Exception as e:
+        logger.error(f"Error recording outcome: {e}")
+        return jsonify({'ok': False, 'error': str(e)})
 
 @app.route('/overnight-gap')
 def overnight_gap_page():

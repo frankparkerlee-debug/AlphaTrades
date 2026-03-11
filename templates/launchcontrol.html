@@ -1,190 +1,425 @@
 {% extends "unified_base.html" %}
 
-{% block title %}Launch Control v2.0 - AlphaTrades{% endblock %}
+{% block title %}Launch Control v3.0 - AlphaTrades{% endblock %}
 
 {% block extra_styles %}
-.pillar-grid {
+/* ── LAYOUT ─────────────────────────────────────────── */
+.lc-layout {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 12px;
-    margin-bottom: 24px;
+    grid-template-columns: 1fr 260px;
+    gap: 16px;
+    align-items: start;
 }
-.pillar {
+@media (max-width: 900px) {
+    .lc-layout { grid-template-columns: 1fr; }
+}
+
+/* ── HEADER STATS ────────────────────────────────────── */
+.lc-stat-row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+}
+.lc-stat {
     background: #0f1629;
     border: 1px solid #1a1f3a;
     border-radius: 8px;
-    padding: 16px;
-    text-align: center;
+    padding: 10px 16px;
+    min-width: 100px;
 }
-.pillar-name {
-    font-size: 12px;
+.lc-stat-label {
+    font-size: 9px;
     color: #64748b;
     text-transform: uppercase;
-    margin-bottom: 8px;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
 }
-.pillar-pts {
-    font-size: 24px;
+.lc-stat-value {
+    font-size: 20px;
     font-weight: 700;
-    color: #3b82f6;
+    font-family: 'SF Mono', monospace;
+    color: #f59e0b;
 }
-.pillar-desc {
-    font-size: 11px;
-    color: #475569;
-    margin-top: 4px;
-}
+.lc-stat-value.green { color: #10b981; }
+.lc-stat-value.red   { color: #ef4444; }
+.lc-stat-value.blue  { color: #3b82f6; }
 
-.gate-warning {
-    background: linear-gradient(90deg, rgba(59,130,246,0.1) 0%, #0f1629 50%);
-    border: 1px solid #3b82f6;
-    border-radius: 8px;
-    padding: 16px 20px;
-    margin-bottom: 24px;
-    display: flex;
+/* ── SESSION BADGE ───────────────────────────────────── */
+.session-badge {
+    display: inline-flex;
     align-items: center;
-    gap: 16px;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    font-family: 'SF Mono', monospace;
+    margin-bottom: 16px;
 }
-.gate-icon {
-    font-size: 24px;
-    color: #3b82f6;
+.session-badge.regular    { background: #065f46; color: #10b981; border: 1px solid #10b981; }
+.session-badge.pre-market { background: #1e3a5f; color: #3b82f6; border: 1px solid #3b82f6; }
+.session-badge.post-market{ background: #1e3a5f; color: #3b82f6; border: 1px solid #3b82f6; }
+.session-badge.closed     { background: #1e293b; color: #64748b; border: 1px solid #334155; }
+.session-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: pulse-dot 2s ease-in-out infinite;
 }
-.gate-text {
-    font-size: 14px;
-    color: #94a3b8;
+@keyframes pulse-dot {
+    0%,100% { opacity: 1; }
+    50%      { opacity: 0.3; }
 }
-.gate-text strong { color: #fff; }
 
+/* ── FILTER BAR ──────────────────────────────────────── */
+.filter-bar {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+.filter-btn {
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid #1a1f3a;
+    background: #0f1629;
+    color: #64748b;
+    font-size: 10px;
+    font-weight: 700;
+    font-family: 'SF Mono', monospace;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.filter-btn.active {
+    background: #f59e0b;
+    color: #000;
+    border-color: #f59e0b;
+}
+.filter-divider {
+    width: 1px; height: 16px;
+    background: #1a1f3a;
+    margin: 0 2px;
+}
+
+/* ── SIGNAL GRID ─────────────────────────────────────── */
 .signal-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-    gap: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 12px;
 }
 
+/* ── SIGNAL CARD ─────────────────────────────────────── */
 .lc-signal {
     background: #0f1629;
     border: 1px solid #1a1f3a;
-    border-radius: 12px;
-    padding: 20px;
+    border-left: 3px solid #1a1f3a;
+    border-radius: 8px;
+    padding: 16px;
+    animation: slide-in 0.2s ease;
+    position: relative;
+    overflow: hidden;
 }
-.lc-signal.a-plus { border-color: #22c55e; }
-.lc-signal.a { border-color: #22c55e; }
-.lc-signal.a-minus { border-color: #4ade80; }
-.lc-signal.b-plus { border-color: #f59e0b; }
+@keyframes slide-in {
+    from { transform: translateY(-6px); opacity: 0; }
+    to   { transform: translateY(0);    opacity: 1; }
+}
+.lc-signal.grade-aplus  { border-left-color: #fbbf24; }
+.lc-signal.grade-a      { border-left-color: #f59e0b; }
+.lc-signal.grade-aminus { border-left-color: #10b981; }
+.lc-signal.grade-bplus  { border-left-color: #3b82f6; }
+.lc-signal.grade-b      { border-left-color: #8b5cf6; }
+.lc-signal.stale        { opacity: 0.55; }
 
+/* Card header */
 .lc-header {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-    margin-bottom: 16px;
+    margin-bottom: 12px;
 }
 .lc-ticker {
-    font-size: 22px;
+    font-size: 18px;
     font-weight: 700;
     color: #fff;
+    font-family: 'SF Mono', monospace;
 }
-.lc-price {
-    font-size: 14px;
+.lc-meta {
+    font-size: 10px;
     color: #64748b;
+    margin-top: 2px;
 }
-.lc-grade {
-    padding: 6px 14px;
-    border-radius: 6px;
-    font-size: 16px;
-    font-weight: 700;
-}
-.lc-grade.a-plus { background: #22c55e; color: #000; }
-.lc-grade.a { background: #22c55e; color: #000; }
-.lc-grade.a-minus { background: #4ade80; color: #000; }
-.lc-grade.b-plus { background: #f59e0b; color: #000; }
-
-.lc-score-bar {
-    height: 8px;
-    background: #1e293b;
+.lc-grade-badge {
+    padding: 4px 12px;
     border-radius: 4px;
-    margin-bottom: 16px;
+    font-size: 15px;
+    font-weight: 700;
+    font-family: 'SF Mono', monospace;
+}
+.lc-grade-badge.grade-aplus  { background: #92400e; color: #fbbf24; border: 1px solid #fbbf24; }
+.lc-grade-badge.grade-a      { background: #92400e; color: #f59e0b; border: 1px solid #f59e0b; }
+.lc-grade-badge.grade-aminus { background: #065f46; color: #10b981; border: 1px solid #10b981; }
+.lc-grade-badge.grade-bplus  { background: #1e3a5f; color: #3b82f6; border: 1px solid #3b82f6; }
+.lc-grade-badge.grade-b      { background: #2e1065; color: #8b5cf6; border: 1px solid #8b5cf6; }
+
+/* Direction */
+.lc-direction {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    font-family: 'SF Mono', monospace;
+    margin-left: 6px;
+}
+.lc-direction.call { background: #065f46; color: #10b981; }
+.lc-direction.put  { background: #7f1d1d; color: #ef4444; }
+
+/* Composite score bar */
+.lc-score-bar {
+    height: 4px;
+    background: #1e293b;
+    border-radius: 2px;
+    margin-bottom: 12px;
     overflow: hidden;
 }
 .lc-score-fill {
     height: 100%;
-    background: linear-gradient(90deg, #3b82f6 0%, #22c55e 100%);
-    border-radius: 4px;
+    border-radius: 2px;
     transition: width 0.3s;
 }
+.grade-aplus  .lc-score-fill { background: #fbbf24; }
+.grade-a      .lc-score-fill { background: #f59e0b; }
+.grade-aminus .lc-score-fill { background: #10b981; }
+.grade-bplus  .lc-score-fill { background: #3b82f6; }
+.grade-b      .lc-score-fill { background: #8b5cf6; }
 
+/* Pillars */
 .lc-pillars {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
-    gap: 8px;
-    margin-bottom: 16px;
+    gap: 6px;
+    margin-bottom: 12px;
 }
 .lc-pillar {
     text-align: center;
-    padding: 8px 4px;
+    padding: 6px 4px;
     background: #1e293b;
     border-radius: 4px;
 }
 .lc-pillar-score {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 700;
     color: #fff;
+    font-family: 'SF Mono', monospace;
 }
 .lc-pillar-name {
-    font-size: 9px;
+    font-size: 8px;
     color: #64748b;
     text-transform: uppercase;
+    margin-top: 1px;
 }
 
-.lc-contract {
+/* Tier / context tags */
+.lc-tags {
+    display: flex;
+    gap: 5px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+}
+.lc-tag {
+    font-size: 9px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: 'SF Mono', monospace;
+    letter-spacing: 0.5px;
+}
+.lc-tag.primary     { background: #065f46; color: #10b981; }
+.lc-tag.propagation { background: #1e3a5f; color: #3b82f6; }
+.lc-tag.base        { background: #2e1065; color: #8b5cf6; }
+.lc-tag.confluence  { background: #92400e; color: #fbbf24; border: 1px solid #fbbf24; }
+.lc-tag.ext-hours   { background: #1e293b; color: #94a3b8; }
+
+/* News headline */
+.lc-news {
+    font-size: 10px;
+    color: #94a3b8;
     background: #1e293b;
-    border-radius: 6px;
-    padding: 12px;
-    margin-bottom: 12px;
+    border-left: 2px solid #3b82f6;
+    padding: 4px 8px;
+    border-radius: 0 3px 3px 0;
+    margin-bottom: 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Position size row */
+.lc-position {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    background: #1e293b;
+    border-radius: 4px;
+    padding: 8px 10px;
+    margin-bottom: 10px;
 }
-.lc-contract-info {
+.lc-position-label { font-size: 10px; color: #64748b; }
+.lc-position-value {
+    font-size: 14px;
+    font-weight: 700;
     font-family: 'SF Mono', monospace;
-    font-size: 13px;
 }
-.lc-contract-type { font-weight: 600; }
-.lc-contract-type.call { color: #22c55e; }
-.lc-contract-type.put { color: #ef4444; }
-.lc-position-size {
-    font-size: 13px;
+
+/* Countdown bar */
+.lc-countdown-bar {
+    height: 2px;
+    background: #1e293b;
+    border-radius: 1px;
+    margin-bottom: 4px;
+    overflow: hidden;
+}
+.lc-countdown-fill {
+    height: 100%;
+    background: #f59e0b;
+    border-radius: 1px;
+    transition: width 1s linear, background 0.3s;
+}
+.lc-countdown-fill.urgent { background: #ef4444; }
+.lc-countdown-label {
+    font-size: 9px;
+    color: #64748b;
+    text-align: right;
+    font-family: 'SF Mono', monospace;
+    margin-bottom: 8px;
+}
+
+/* Actions */
+.lc-actions { display: flex; gap: 8px; }
+.lc-btn {
+    flex: 1;
+    padding: 10px;
+    border: none;
+    border-radius: 5px;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: 'SF Mono', monospace;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+    transition: opacity 0.15s;
+}
+.lc-btn:hover { opacity: 0.85; }
+.lc-btn.take  { background: #10b981; color: #000; }
+.lc-btn.skip  { background: #1e293b; color: #64748b; border: 1px solid #334155; }
+.lc-btn.taken { background: #065f46; color: #10b981; cursor: default; }
+
+/* ── RIGHT PANEL ─────────────────────────────────────── */
+.side-panel { display: flex; flex-direction: column; gap: 12px; }
+
+.panel-card {
+    background: #0f1629;
+    border: 1px solid #1a1f3a;
+    border-radius: 8px;
+    padding: 12px;
+}
+.panel-title {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    color: #64748b;
+    font-family: 'SF Mono', monospace;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+}
+
+/* P&L panel */
+.pnl-value {
+    font-size: 26px;
+    font-weight: 700;
+    font-family: 'SF Mono', monospace;
+    line-height: 1;
+    margin-bottom: 2px;
+}
+.pnl-sub { font-size: 11px; color: #64748b; margin-bottom: 10px; }
+.pnl-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+}
+.pnl-cell {
+    background: #1e293b;
+    border-radius: 4px;
+    padding: 6px 8px;
+}
+.pnl-cell-label { font-size: 9px; color: #64748b; margin-bottom: 2px; }
+.pnl-cell-value { font-size: 13px; font-weight: 700; font-family: 'SF Mono', monospace; }
+
+/* Cluster map */
+.cluster-row {
+    padding: 6px 8px;
+    border-radius: 4px;
+    background: #1e293b;
+    margin-bottom: 5px;
+    transition: all 0.3s;
+}
+.cluster-row.active {
+    background: #1e3a5f;
+    border: 1px solid #3b82f6;
+}
+.cluster-leader {
+    font-size: 11px;
+    font-weight: 700;
+    font-family: 'SF Mono', monospace;
+    color: #94a3b8;
+}
+.cluster-row.active .cluster-leader { color: #3b82f6; }
+.cluster-name { font-size: 9px; color: #475569; margin-top: 1px; }
+.cluster-followers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    margin-top: 5px;
+}
+.cluster-follower {
+    font-size: 8px;
+    font-family: 'SF Mono', monospace;
+    font-weight: 700;
+    padding: 1px 4px;
+    border-radius: 2px;
+    background: #0f1629;
+    color: #475569;
+}
+.cluster-follower.alerted { background: #065f46; color: #10b981; }
+
+/* Pre-market panel */
+.premarket-ticker {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: #1e293b;
+    border-radius: 3px;
+    padding: 2px 7px;
+    margin: 2px;
+    font-size: 10px;
+    font-weight: 700;
+    font-family: 'SF Mono', monospace;
     color: #94a3b8;
 }
 
-.lc-countdown {
+/* Empty state */
+.empty-state {
     text-align: center;
-    padding: 8px;
-    background: #ef4444;
-    color: #fff;
-    font-size: 13px;
-    font-weight: 600;
-    border-radius: 6px;
-    margin-bottom: 12px;
+    padding: 48px 20px;
+    color: #475569;
+    border: 1px dashed #1a1f3a;
+    border-radius: 8px;
+    grid-column: 1 / -1;
 }
-
-.lc-actions {
-    display: flex;
-    gap: 8px;
-}
-.lc-btn {
-    flex: 1;
-    padding: 12px;
-    border: none;
-    border-radius: 6px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-}
-.lc-btn.take { background: #22c55e; color: #000; }
-.lc-btn.skip { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
-
-@media (max-width: 768px) {
-    .pillar-grid { grid-template-columns: repeat(3, 1fr); }
-    .lc-pillars { grid-template-columns: repeat(3, 1fr); }
-}
+.empty-state h3 { font-size: 16px; margin-bottom: 8px; color: #64748b; }
+.empty-state p  { font-size: 12px; }
 {% endblock %}
 
 {% block nav_stats %}
@@ -196,142 +431,488 @@
     <span class="nav-stat-label">AVG SCORE</span>
     <span class="nav-stat-value" id="avgScore">--</span>
 </div>
+<div>
+    <span class="nav-stat-label">UPDATED</span>
+    <span class="nav-stat-value" id="lastUpdate" style="font-size:11px">--:--:--</span>
+</div>
+<div>
+    <span class="nav-stat-label">LIVE</span>
+    <span class="nav-stat-value" id="liveIndicator" style="font-size:16px; color:#10b981">●</span>
+</div>
 {% endblock %}
 
 {% block content %}
 <div class="page-header">
-    <h1 class="page-title">Launch Control v2.0</h1>
-    <p class="page-subtitle">5-pillar momentum scoring engine - Machine screens, human decides</p>
+    <h1 class="page-title">Launch Control v3.0</h1>
+    <p class="page-subtitle">Nasdaq 100 · 5-pillar momentum engine · Cluster propagation · Extended hours</p>
 </div>
 
-<div class="pillar-grid">
-    <div class="pillar">
-        <div class="pillar-name">Price Action</div>
-        <div class="pillar-pts">35</div>
-        <div class="pillar-desc">ATR normalized</div>
-    </div>
-    <div class="pillar">
-        <div class="pillar-name">Volume</div>
-        <div class="pillar-pts">30</div>
-        <div class="pillar-desc">Relative volume</div>
-    </div>
-    <div class="pillar">
-        <div class="pillar-name">News</div>
-        <div class="pillar-pts">15</div>
-        <div class="pillar-desc">Sentiment</div>
-    </div>
-    <div class="pillar">
-        <div class="pillar-name">Market</div>
-        <div class="pillar-pts">15</div>
-        <div class="pillar-desc">QQQ + Sector</div>
-    </div>
-    <div class="pillar">
-        <div class="pillar-name">Timing</div>
-        <div class="pillar-pts">5</div>
-        <div class="pillar-desc">Entry window</div>
-    </div>
+<!-- Session badge -->
+<div id="sessionBadge" class="session-badge closed">
+    <span class="session-dot"></span>
+    <span id="sessionLabel">LOADING...</span>
 </div>
 
-<div class="gate-warning">
-    <div class="gate-icon">GATE</div>
-    <div class="gate-text">
-        <strong>Asymmetry Gate:</strong> Price Action must score &gt;17.5 AND Volume must score &gt;15.0 for any primary signal.
-        If either fails, signal is rejected regardless of total score.
+<!-- Stats row -->
+<div class="lc-stat-row">
+    <div class="lc-stat">
+        <div class="lc-stat-label">Active</div>
+        <div class="lc-stat-value" id="statActive">0</div>
+    </div>
+    <div class="lc-stat">
+        <div class="lc-stat-label">Today</div>
+        <div class="lc-stat-value blue" id="statToday">0</div>
+    </div>
+    <div class="lc-stat">
+        <div class="lc-stat-label">Taken</div>
+        <div class="lc-stat-value green" id="statTaken">0</div>
+    </div>
+    <div class="lc-stat">
+        <div class="lc-stat-label">Win Rate</div>
+        <div class="lc-stat-value" id="statWinRate">--</div>
+    </div>
+    <div class="lc-stat">
+        <div class="lc-stat-label">Day P&L</div>
+        <div class="lc-stat-value" id="statPnl">--</div>
     </div>
 </div>
 
-<div class="signal-grid" id="signalGrid">
-    <div class="empty-state">
-        <h3>No Active Signals</h3>
-        <p>Launch Control is monitoring 15 tickers. Signals appear when scoring thresholds are met.</p>
+<!-- Filter bar -->
+<div class="filter-bar">
+    <button class="filter-btn active" onclick="setGradeFilter('all', this)">ALL</button>
+    <button class="filter-btn" onclick="setGradeFilter('A+', this)">A+</button>
+    <button class="filter-btn" onclick="setGradeFilter('A', this)">A</button>
+    <button class="filter-btn" onclick="setGradeFilter('A-', this)">A-</button>
+    <button class="filter-btn" onclick="setGradeFilter('B+', this)">B+</button>
+    <button class="filter-btn" onclick="setGradeFilter('B', this)">B</button>
+    <div class="filter-divider"></div>
+    <button class="filter-btn active" onclick="setTierFilter('all', this)" id="tierAll">ALL TIERS</button>
+    <button class="filter-btn" onclick="setTierFilter('primary', this)">PRIMARY</button>
+    <button class="filter-btn" onclick="setTierFilter('propagation', this)">PROP</button>
+    <button class="filter-btn" onclick="setTierFilter('base_layer', this)">BASE</button>
+    <div class="filter-divider"></div>
+    <button class="filter-btn" onclick="toggleHistory(this)" id="historyBtn">+ HISTORY</button>
+</div>
+
+<!-- Main layout -->
+<div class="lc-layout">
+
+    <!-- Signal feed -->
+    <div>
+        <div class="signal-grid" id="signalGrid">
+            <div class="empty-state">
+                <h3>◎</h3>
+                <p>No active signals — system is scanning Nasdaq 100</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right panel -->
+    <div class="side-panel">
+
+        <!-- Daily P&L -->
+        <div class="panel-card">
+            <div class="panel-title">Today's Performance</div>
+            <div class="pnl-value" id="pnlValue" style="color: #64748b">--</div>
+            <div class="pnl-sub" id="pnlDollars">Waiting for trades</div>
+            <div class="pnl-grid">
+                <div class="pnl-cell">
+                    <div class="pnl-cell-label">Signals</div>
+                    <div class="pnl-cell-value" id="pnlSignals">0</div>
+                </div>
+                <div class="pnl-cell">
+                    <div class="pnl-cell-label">Taken</div>
+                    <div class="pnl-cell-value" id="pnlTaken">0</div>
+                </div>
+                <div class="pnl-cell">
+                    <div class="pnl-cell-label">Wins</div>
+                    <div class="pnl-cell-value" style="color:#10b981" id="pnlWins">0</div>
+                </div>
+                <div class="pnl-cell">
+                    <div class="pnl-cell-label">Losses</div>
+                    <div class="pnl-cell-value" style="color:#ef4444" id="pnlLosses">0</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Cluster map -->
+        <div class="panel-card">
+            <div class="panel-title">Cluster Map</div>
+            <div id="clusterMap">
+                {% set clusters = [
+                    ('NVDA', 'AI Infrastructure',  ['AMD','MRVL','ARM','AVGO']),
+                    ('MU',   'Memory Cycle',        ['WDC','STX','MRVL']),
+                    ('MSFT', 'Hyperscaler Capex',   ['NVDA','AVGO','AMZN','GOOGL']),
+                    ('AAPL', 'Consumer Platform',   ['MSFT','GOOGL','META']),
+                    ('TSLA', 'High Beta',           ['PLTR','APP']),
+                    ('AMAT', 'Semi Equipment',      ['LRCX','KLAC']),
+                    ('NOW',  'Software Cloud',      ['CRM','ADBE','WDAY']),
+                ] %}
+                {% for leader, name, followers in clusters %}
+                <div class="cluster-row" id="cluster-{{ leader }}">
+                    <div style="display:flex; justify-content:space-between; align-items:center">
+                        <span class="cluster-leader">{{ leader }}</span>
+                        <span class="cluster-name">{{ name }}</span>
+                    </div>
+                    <div class="cluster-followers" id="followers-{{ leader }}">
+                        {% for f in followers %}
+                        <span class="cluster-follower" id="cf-{{ leader }}-{{ f }}">{{ f }}</span>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Pre-market briefing -->
+        <div class="panel-card" id="premarketPanel" style="display:none">
+            <div class="panel-title">Pre-Market Briefing</div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px">
+                <span style="font-size:10px; color:#64748b">Market Bias</span>
+                <span style="font-size:11px; font-weight:700; font-family:'SF Mono',monospace"
+                      id="marketBias">—</span>
+            </div>
+            <div id="premarketTickers" style="display:flex; flex-wrap:wrap; gap:4px"></div>
+        </div>
+
     </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-async function loadSignals() {
-    try {
-        const resp = await fetch('/api/launchcontrol/signals');
-        const data = await resp.json();
-        
-        const signals = data.signals || [];
-        document.getElementById('signalCount').textContent = signals.length;
-        
-        if (signals.length > 0) {
-            const avgScore = signals.reduce((a,b) => a + b.score, 0) / signals.length;
-            document.getElementById('avgScore').textContent = avgScore.toFixed(0);
-            
-            document.getElementById('signalGrid').innerHTML = signals.map(s => `
-                <div class="lc-signal ${s.grade.toLowerCase().replace('+','-plus').replace('-','-minus')}">
-                    <div class="lc-header">
-                        <div>
-                            <div class="lc-ticker">${s.ticker}</div>
-                            <div class="lc-price">$${s.price?.toFixed(2) || '--'}</div>
-                        </div>
-                        <span class="lc-grade ${s.grade.toLowerCase().replace('+','-plus')}">${s.grade}</span>
-                    </div>
-                    
-                    <div class="lc-score-bar">
-                        <div class="lc-score-fill" style="width: ${Math.min(s.score, 100)}%"></div>
-                    </div>
-                    
-                    <div class="lc-pillars">
-                        <div class="lc-pillar">
-                            <div class="lc-pillar-score">${s.pillars?.pa || '--'}</div>
-                            <div class="lc-pillar-name">PA</div>
-                        </div>
-                        <div class="lc-pillar">
-                            <div class="lc-pillar-score">${s.pillars?.vol || '--'}</div>
-                            <div class="lc-pillar-name">Vol</div>
-                        </div>
-                        <div class="lc-pillar">
-                            <div class="lc-pillar-score">${s.pillars?.news || '--'}</div>
-                            <div class="lc-pillar-name">News</div>
-                        </div>
-                        <div class="lc-pillar">
-                            <div class="lc-pillar-score">${s.pillars?.market || '--'}</div>
-                            <div class="lc-pillar-name">Mkt</div>
-                        </div>
-                        <div class="lc-pillar">
-                            <div class="lc-pillar-score">${s.pillars?.timing || '--'}</div>
-                            <div class="lc-pillar-name">Time</div>
-                        </div>
-                    </div>
-                    
-                    <div class="lc-contract">
-                        <div class="lc-contract-info">
-                            <span class="lc-contract-type ${s.direction?.toLowerCase() || 'call'}">${s.direction || 'CALL'}</span>
-                            ${s.contract || 'Calculating...'}
-                        </div>
-                        <div class="lc-position-size">${s.position_size || '20%'}</div>
-                    </div>
-                    
-                    <div class="lc-countdown" id="countdown-${s.ticker}">Signal expires in 60s</div>
-                    
-                    <div class="lc-actions">
-                        <button class="lc-btn take">TAKE</button>
-                        <button class="lc-btn skip">SKIP</button>
-                    </div>
-                </div>
-            `).join('');
-        } else {
-            document.getElementById('signalGrid').innerHTML = `
-                <div class="empty-state">
-                    <h3>No Active Signals</h3>
-                    <p>Launch Control is monitoring 15 tickers. Signals appear when scoring thresholds are met.</p>
-                </div>
-            `;
+// ── STATE ───────────────────────────────────────────────
+let allSignals    = [];
+let gradeFilter   = 'all';
+let tierFilter    = 'all';
+let showHistory   = false;
+let countdowns    = {};
+const ACCOUNT     = 7500;
+
+// ── FILTERS ─────────────────────────────────────────────
+function setGradeFilter(val, btn) {
+    gradeFilter = val;
+    document.querySelectorAll('.filter-bar .filter-btn').forEach(b => {
+        if (['ALL','A+','A','A-','B+','B'].includes(b.textContent)) b.classList.remove('active');
+    });
+    btn.classList.add('active');
+    renderSignals();
+}
+function setTierFilter(val, btn) {
+    tierFilter = val;
+    ['tierAll'].concat([]).forEach(() => {});
+    document.querySelectorAll('.filter-bar .filter-btn').forEach(b => {
+        if (['ALL TIERS','PRIMARY','PROP','BASE'].includes(b.textContent)) b.classList.remove('active');
+    });
+    btn.classList.add('active');
+    renderSignals();
+}
+function toggleHistory(btn) {
+    showHistory = !showHistory;
+    btn.textContent = showHistory ? '- HISTORY' : '+ HISTORY';
+    btn.classList.toggle('active', showHistory);
+    renderSignals();
+}
+
+// ── GRADE HELPERS ────────────────────────────────────────
+function gradeClass(grade) {
+    return { 'A+':'grade-aplus','A':'grade-a','A-':'grade-aminus','B+':'grade-bplus','B':'grade-b' }[grade] || 'grade-b';
+}
+function gradeColor(grade) {
+    return { 'A+':'#fbbf24','A':'#f59e0b','A-':'#10b981','B+':'#3b82f6','B':'#8b5cf6' }[grade] || '#64748b';
+}
+
+// ── RENDER SIGNALS ───────────────────────────────────────
+function renderSignals() {
+    const displayed = allSignals.filter(s => {
+        if (!showHistory && s.status !== 'ACTIVE') return false;
+        if (gradeFilter !== 'all' && s.grade !== gradeFilter) return false;
+        if (tierFilter  !== 'all' && s.signal_tier !== tierFilter) return false;
+        return true;
+    });
+
+    if (displayed.length === 0) {
+        document.getElementById('signalGrid').innerHTML = `
+            <div class="empty-state">
+                <h3>◎</h3>
+                <p>${allSignals.length === 0
+                    ? 'No active signals — system is scanning Nasdaq 100'
+                    : 'No signals match current filter'}</p>
+                ${allSignals.length > 0 ? `<p style="margin-top:6px;font-size:11px;color:#334155">${allSignals.length} total signals today</p>` : ''}
+            </div>`;
+        return;
+    }
+
+    document.getElementById('signalGrid').innerHTML = displayed.map(s => buildCard(s)).join('');
+
+    // Restart countdowns
+    displayed.forEach(s => {
+        if (s.status === 'ACTIVE' && s.expires_at) startCountdown(s);
+    });
+}
+
+function buildCard(s) {
+    const gc   = gradeClass(s.grade);
+    const col  = gradeColor(s.grade);
+    const dir  = (s.direction || 'CALL').toLowerCase();
+    const pct  = Math.min(((s.composite_raw || s.score || 0) / 110) * 100, 100);
+    const stale = s.status !== 'ACTIVE';
+
+    // Tags
+    const tags = [];
+    if (s.signal_tier === 'propagation') tags.push(`<span class="lc-tag propagation">🔗 PROP</span>`);
+    else if (s.signal_tier === 'base_layer') tags.push(`<span class="lc-tag base">BASE</span>`);
+    else tags.push(`<span class="lc-tag primary">PRIMARY</span>`);
+    if ((s.confluence_score || 0) >= 3) tags.push(`<span class="lc-tag confluence">⚡ CONFLUENCE ${s.confluence_score}</span>`);
+    if (s.score_note) tags.push(`<span class="lc-tag ext-hours">${s.score_note}</span>`);
+
+    // Propagation context
+    const propCtx = s.signal_tier === 'propagation' && s.leader_ticker
+        ? `<div style="font-size:10px;color:#3b82f6;background:#1e3a5f;border-radius:3px;padding:3px 8px;margin-bottom:8px">
+               🔗 Propagation from ${s.leader_ticker} · lag ${s.propagation_lag_min || '?'}min
+           </div>`
+        : '';
+
+    // News headline
+    const newsEl = s.news_headline
+        ? `<div class="lc-news">📰 ${s.news_headline}</div>`
+        : '';
+
+    // Position size
+    const posDollars = s.position_size_dollars
+        ? `$${Number(s.position_size_dollars).toLocaleString()}`
+        : '$—';
+    const posPct = s.position_size_pct
+        ? `(${(s.position_size_pct * 100).toFixed(1)}%)`
+        : '';
+
+    // Market context
+    const mkCtx = [
+        s.spy_change_pct  != null ? `SPY ${s.spy_change_pct  >= 0 ? '+' : ''}${(s.spy_change_pct  * 100).toFixed(2)}%` : null,
+        s.qqq_change_pct  != null ? `QQQ ${s.qqq_change_pct  >= 0 ? '+' : ''}${(s.qqq_change_pct  * 100).toFixed(2)}%` : null,
+        s.relative_volume != null ? `${s.relative_volume.toFixed(1)}x vol` : null,
+    ].filter(Boolean).join(' · ');
+
+    // Action buttons
+    const actionBtns = stale
+        ? `<button class="lc-btn taken" disabled>RECORDED</button>`
+        : s.human_taken === true
+            ? `<button class="lc-btn taken" disabled>✓ TAKEN</button>`
+            : `<button class="lc-btn take"  onclick="takeSignal('${s.signal_id}', this)">TAKE</button>
+               <button class="lc-btn skip"  onclick="skipSignal('${s.signal_id}', this)">SKIP</button>`;
+
+    return `
+    <div class="lc-signal ${gc}${stale ? ' stale' : ''}" id="card-${s.signal_id}">
+        <div class="lc-header">
+            <div>
+                <span class="lc-ticker">${s.ticker}</span>
+                <span class="lc-direction ${dir}">${s.direction || 'CALL'}</span>
+                <div class="lc-meta">${new Date(s.created_at).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:'America/New_York'})} ET</div>
+            </div>
+            <div style="text-align:right">
+                <span class="lc-grade-badge ${gc}">${s.grade}</span>
+                <div style="font-size:18px;font-weight:700;font-family:'SF Mono',monospace;color:${col};margin-top:4px">${s.composite_raw || s.score || 0}</div>
+            </div>
+        </div>
+
+        <div class="lc-score-bar">
+            <div class="lc-score-fill" style="width:${pct}%"></div>
+        </div>
+
+        <div class="lc-pillars">
+            <div class="lc-pillar"><div class="lc-pillar-score">${s.score_price_action ?? '--'}</div><div class="lc-pillar-name">PA</div></div>
+            <div class="lc-pillar"><div class="lc-pillar-score">${s.score_volume       ?? '--'}</div><div class="lc-pillar-name">VOL</div></div>
+            <div class="lc-pillar"><div class="lc-pillar-score">${s.score_news         ?? '--'}</div><div class="lc-pillar-name">NEWS</div></div>
+            <div class="lc-pillar"><div class="lc-pillar-score">${s.score_market       ?? '--'}</div><div class="lc-pillar-name">MKT</div></div>
+            <div class="lc-pillar"><div class="lc-pillar-score">${s.score_timing       ?? '--'}</div><div class="lc-pillar-name">TIME</div></div>
+        </div>
+
+        <div class="lc-tags">${tags.join('')}</div>
+        ${propCtx}
+        ${newsEl}
+
+        ${mkCtx ? `<div style="font-size:10px;color:#475569;margin-bottom:8px;font-family:'SF Mono',monospace">${mkCtx}</div>` : ''}
+
+        <div class="lc-position">
+            <span class="lc-position-label">Position Size</span>
+            <span class="lc-position-value" style="color:${col}">${posDollars} <span style="font-size:10px;color:#64748b;font-weight:400">${posPct}</span></span>
+        </div>
+
+        ${s.status === 'ACTIVE' && s.expires_at ? `
+        <div class="lc-countdown-bar">
+            <div class="lc-countdown-fill" id="cdbar-${s.signal_id}" style="width:100%"></div>
+        </div>
+        <div class="lc-countdown-label" id="cdlabel-${s.signal_id}">—</div>
+        ` : ''}
+
+        <div class="lc-actions">${actionBtns}</div>
+    </div>`;
+}
+
+// ── COUNTDOWNS ───────────────────────────────────────────
+function startCountdown(s) {
+    const id = s.signal_id;
+    if (countdowns[id]) clearInterval(countdowns[id]);
+    const bar   = document.getElementById(`cdbar-${id}`);
+    const label = document.getElementById(`cdlabel-${id}`);
+    if (!bar || !label) return;
+
+    const total = new Date(s.expires_at) - new Date(s.created_at);
+
+    countdowns[id] = setInterval(() => {
+        const left = new Date(s.expires_at) - Date.now();
+        if (left <= 0) {
+            clearInterval(countdowns[id]);
+            bar.style.width   = '0%';
+            label.textContent = 'EXPIRED';
+            return;
         }
+        const pct    = (left / total) * 100;
+        const secs   = Math.round(left / 1000);
+        const urgent = secs < 15;
+        bar.style.width = `${pct}%`;
+        bar.classList.toggle('urgent', urgent);
+        label.textContent = `${secs}s`;
+    }, 1000);
+}
+
+// ── TAKE / SKIP ──────────────────────────────────────────
+async function takeSignal(signalId, btn) {
+    btn.textContent = 'RECORDING...';
+    btn.disabled = true;
+    try {
+        await fetch('/api/launchcontrol/outcome', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ signal_id: signalId, taken: true }),
+        });
+        btn.textContent = '✓ TAKEN';
+        btn.className = 'lc-btn taken';
+    } catch(e) { btn.textContent = 'TAKE'; btn.disabled = false; }
+}
+async function skipSignal(signalId, btn) {
+    btn.textContent = 'SKIPPING...';
+    btn.disabled = true;
+    try {
+        await fetch('/api/launchcontrol/outcome', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ signal_id: signalId, taken: false }),
+        });
+        btn.textContent = 'SKIPPED';
+    } catch(e) { btn.textContent = 'SKIP'; btn.disabled = false; }
+}
+
+// ── UPDATE SESSION BADGE ─────────────────────────────────
+function updateSessionBadge(session) {
+    const badge = document.getElementById('sessionBadge');
+    const label = document.getElementById('sessionLabel');
+    const map = {
+        'REGULAR':     ['regular',     'MARKET OPEN'],
+        'PRE_MARKET':  ['pre-market',  '🌅 PRE-MARKET'],
+        'POST_MARKET': ['post-market', '🌆 POST-MARKET'],
+        'OVERNIGHT':   ['closed',      'OVERNIGHT'],
+        'WEEKEND':     ['closed',      'WEEKEND'],
+    };
+    const [cls, text] = map[session] || ['closed', 'CLOSED'];
+    badge.className = `session-badge ${cls}`;
+    label.textContent = text;
+}
+
+// ── UPDATE CLUSTER MAP ───────────────────────────────────
+function updateClusterMap(propagation) {
+    const leaders = ['NVDA','MU','MSFT','AAPL','TSLA','AMAT','NOW'];
+    leaders.forEach(leader => {
+        const row = document.getElementById(`cluster-${leader}`);
+        if (!row) return;
+        const win = (propagation || []).find(w => w.leaderTicker === leader);
+        row.classList.toggle('active', !!win);
+        if (win) {
+            row.querySelector('.cluster-leader').textContent =
+                `${leader} ▲ ${win.leaderDirection} · ${win.minutesRemaining}min`;
+            (win.followersAlerted || []).forEach(f => {
+                const el = document.getElementById(`cf-${leader}-${f}`);
+                if (el) el.classList.add('alerted');
+            });
+        }
+    });
+}
+
+// ── MAIN LOAD ────────────────────────────────────────────
+async function loadAll() {
+    try {
+        const [sigRes, statusRes, preRes] = await Promise.all([
+            fetch('/api/launchcontrol/signals').then(r => r.json()),
+            fetch('/api/launchcontrol/status').then(r => r.json()),
+            fetch('/api/launchcontrol/premarket').then(r => r.json()),
+        ]);
+
+        allSignals = sigRes.signals || [];
+
+        // Nav stats
+        const active = allSignals.filter(s => s.status === 'ACTIVE');
+        document.getElementById('signalCount').textContent = active.length;
+        const avg = active.length > 0
+            ? (active.reduce((a,b) => a + (b.composite_raw || b.score || 0), 0) / active.length).toFixed(0)
+            : '--';
+        document.getElementById('avgScore').textContent = avg;
+        document.getElementById('lastUpdate').textContent =
+            new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+
+        // Stat row
+        const taken  = allSignals.filter(s => s.human_taken === true);
+        const wins   = taken.filter(s => (s.human_pnl_pct || 0) > 0);
+        const losses = taken.filter(s => (s.human_pnl_pct || 0) < 0);
+        const totalPnl = taken.reduce((a,b) => a + (b.human_pnl_pct || 0), 0);
+        const winRate = taken.length > 0 ? Math.round((wins.length / taken.length) * 100) : null;
+
+        document.getElementById('statActive').textContent  = active.length;
+        document.getElementById('statToday').textContent   = allSignals.length;
+        document.getElementById('statTaken').textContent   = taken.length;
+        document.getElementById('statWinRate').textContent = winRate != null ? `${winRate}%` : '--';
+        document.getElementById('statWinRate').className   = `lc-stat-value ${winRate >= 55 ? 'green' : winRate != null ? 'red' : ''}`;
+
+        const pnlEl = document.getElementById('statPnl');
+        pnlEl.textContent = totalPnl !== 0 ? `${totalPnl >= 0 ? '+' : ''}${(totalPnl*100).toFixed(2)}%` : '--';
+        pnlEl.className   = `lc-stat-value ${totalPnl > 0 ? 'green' : totalPnl < 0 ? 'red' : ''}`;
+
+        // P&L panel
+        document.getElementById('pnlValue').textContent  = totalPnl !== 0 ? `${totalPnl >= 0 ? '+' : ''}${(totalPnl*100).toFixed(2)}%` : '--';
+        document.getElementById('pnlValue').style.color  = totalPnl > 0 ? '#10b981' : totalPnl < 0 ? '#ef4444' : '#64748b';
+        document.getElementById('pnlDollars').textContent= totalPnl !== 0 ? `${totalPnl >= 0 ? '+' : ''}$${(ACCOUNT * totalPnl).toFixed(0)} on day` : 'Waiting for trades';
+        document.getElementById('pnlSignals').textContent = allSignals.length;
+        document.getElementById('pnlTaken').textContent   = taken.length;
+        document.getElementById('pnlWins').textContent    = wins.length;
+        document.getElementById('pnlLosses').textContent  = losses.length;
+
+        // Session + cluster
+        updateSessionBadge(statusRes.session || 'CLOSED');
+        updateClusterMap(statusRes.propagation || []);
+
+        // Pre-market panel
+        const pm = preRes.briefing;
+        if (pm) {
+            document.getElementById('premarketPanel').style.display = 'block';
+            document.getElementById('marketBias').textContent = pm.market_bias || '—';
+            document.getElementById('marketBias').style.color =
+                pm.market_bias === 'BULLISH' ? '#10b981' :
+                pm.market_bias === 'BEARISH' ? '#ef4444' : '#94a3b8';
+            const flagged = pm.flagged_tickers || [];
+            document.getElementById('premarketTickers').innerHTML =
+                flagged.slice(0,8).map(t =>
+                    `<span class="premarket-ticker">${t.ticker}<span style="font-size:8px;color:#475569;margin-left:3px">${(t.topCatalyst||'').replace(/_/g,' ')}</span></span>`
+                ).join('');
+        }
+
+        renderSignals();
+
     } catch(e) {
-        console.error('Error loading signals:', e);
+        console.error('Error loading LC data:', e);
+        document.getElementById('liveIndicator').style.color = '#ef4444';
     }
 }
 
-// Initial load
-document.addEventListener('DOMContentLoaded', loadSignals);
-
-// Refresh every 10s
-setInterval(loadSignals, 10000);
+document.addEventListener('DOMContentLoaded', loadAll);
+setInterval(loadAll, 10000);
 </script>
 {% endblock %}
