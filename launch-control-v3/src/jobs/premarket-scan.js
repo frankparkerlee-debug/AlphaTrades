@@ -120,7 +120,7 @@ export async function run() {
 }
 
 // Run directly if called as script
-if (process.argv[1] && process.argv[1].includes('premarket-scan')) {
+if (process.argv[1].includes('premarket-scan')) {
   run().catch(err => {
     logger.error('Pre-market scan failed:', err);
     process.exit(1);

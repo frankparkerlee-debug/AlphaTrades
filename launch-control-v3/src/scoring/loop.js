@@ -4,8 +4,9 @@ import {
   getAnnouncementContext,
 } from '../data/state.js';
 import { computeComposite, writeSignal } from '../scoring/composite.js';
+import { getMarketSession, getSessionModifiers, isScoreable } from '../utils/session.js';
 import logger from '../utils/logger.js';
-import { isMarketOpen, todayStr } from '../utils/time.js';
+import { todayStr } from '../utils/time.js';
 
 // Circuit breaker state
 const circuitBreakers = {
@@ -88,7 +89,9 @@ export function resetDailyCircuitBreakers() {
  * Score a single ticker — called when a new bar arrives
  */
 export async function scoreTicker(ticker) {
-  if (!isMarketOpen()) return;
+  const session = getMarketSession();
+  if (!isScoreable(session)) return;
+  const sessionMods = getSessionModifiers(session);
 
   // Reset daily tracking on new day
   const today = todayStr();
@@ -153,6 +156,21 @@ export async function scoreTicker(ticker) {
 
   if (!signal) return;
 
+  // Apply session modifiers — extended hours grade cap + half sizing
+  if (sessionMods.gradeCapOverride) {
+    const GRADE_ORDER = ['A+','A','A-','B+','B','B-','C'];
+    const capIdx = GRADE_ORDER.indexOf(sessionMods.gradeCapOverride);
+    const gradeIdx = GRADE_ORDER.indexOf(signal.grade);
+    if (gradeIdx < capIdx) {
+      signal.grade = sessionMods.gradeCapOverride;
+      signal.gradeCapped = true;
+      signal.flags.push(`SESSION_CAP_${sessionMods.gradeCapOverride}`);
+    }
+    signal.positionSizePct    *= sessionMods.positionSizeMultiplier;
+    signal.positionSizeDollars = Math.round(accountBalance * signal.positionSizePct);
+    if (sessionMods.signalLabel) signal.flags.push(sessionMods.signalLabel);
+  }
+
   // Apply size reduction if circuit breaker active
   if (cbCheck.sizeReduction) {
     signal.positionSizePct    *= 0.5;
@@ -193,7 +211,8 @@ function computeConfluence(signal, newsEvents, marketData) {
  * Base layer scan — runs at 10:30am if no primary signals today
  */
 export async function runBaseLayerScan() {
-  if (!isMarketOpen()) return;
+  const session = getMarketSession();
+  if (session !== 'REGULAR') return; // base layer only during regular hours
 
   const today = todayStr();
   const primaryToday = await query(`

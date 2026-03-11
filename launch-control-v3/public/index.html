@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Launch Control v3</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg0:     #060a0f;
+  --bg1:     #0b1118;
+  --bg2:     #111a24;
+  --bg3:     #182030;
+  --border:  #1e2d3d;
+  --border2: #243547;
+  --amber:   #f59e0b;
+  --amber2:  #fbbf24;
+  --green:   #10b981;
+  --green2:  #34d399;
+  --red:     #ef4444;
+  --blue:    #3b82f6;
+  --purple:  #8b5cf6;
+  --text1:   #e2e8f0;
+  --text2:   #94a3b8;
+  --text3:   #475569;
+  --text4:   #2d3f52;
+  --mono:    'IBM Plex Mono', monospace;
+  --sans:    'IBM Plex Sans', sans-serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; background: var(--bg0); color: var(--text1); font-family: var(--sans); font-size: 13px; }
+
+/* Scanlines */
+body::after {
+  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 9999;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.025) 2px, rgba(0,0,0,0.025) 4px);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 3px; } ::-webkit-scrollbar-track { background: var(--bg0); } ::-webkit-scrollbar-thumb { background: var(--border2); }
+
+/* ── HEADER ── */
+#header {
+  position: sticky; top: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 16px; height: 44px;
+  background: var(--bg1); border-bottom: 1px solid var(--border);
+}
+.logo {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--mono); font-size: 13px; font-weight: 700;
+  letter-spacing: 3px; color: var(--amber);
+}
+.logo-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--amber);
+  animation: glow 2s ease-in-out infinite;
+}
+@keyframes glow { 0%,100%{box-shadow:0 0 4px var(--amber)}50%{box-shadow:0 0 14px var(--amber),0 0 28px #92400e} }
+
+.header-right { display: flex; align-items: center; gap: 12px; }
+.badge {
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  padding: 3px 8px; border-radius: 3px; letter-spacing: 1px;
+}
+.badge-amber  { background: #92400e40; color: var(--amber);  border: 1px solid var(--amber); }
+.badge-gold   { background: #78350f40; color: var(--amber2); border: 1px solid var(--amber2); animation: pulse 1.5s ease-in-out infinite; }
+.badge-green  { background: #065f4640; color: var(--green);  border: 1px solid var(--green); }
+.badge-red    { background: #7f1d1d40; color: var(--red);    border: 1px solid var(--red); }
+.badge-muted  { background: var(--bg2); color: var(--text3); border: 1px solid var(--border); }
+@keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.5} }
+
+.clock { font-family: var(--mono); font-size: 10px; color: var(--text3); }
+
+/* ── SESSION BAR ── */
+#sessionBar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 16px; font-family: var(--mono); font-size: 10px; font-weight: 700;
+  letter-spacing: 1.5px; border-bottom: 1px solid var(--border);
+  background: var(--bg1);
+}
+.session-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 2s ease-in-out infinite; }
+
+/* ── LAYOUT ── */
+#main { display: grid; grid-template-columns: 1fr 256px; gap: 12px; padding: 12px; min-height: calc(100vh - 90px); }
+@media(max-width:900px){ #main{grid-template-columns:1fr} #sidebar{display:none} }
+
+/* ── STAT ROW ── */
+#statRow { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.stat { background: var(--bg2); border: 1px solid var(--border); border-radius: 5px; padding: 8px 14px; min-width: 90px; }
+.stat-label { font-size: 8px; font-weight: 700; letter-spacing: 1.5px; color: var(--text3); text-transform: uppercase; margin-bottom: 3px; }
+.stat-value { font-family: var(--mono); font-size: 18px; font-weight: 700; color: var(--amber); }
+
+/* ── FILTER BAR ── */
+#filterBar { display: flex; gap: 5px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
+.filter-btn {
+  font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: 0.5px;
+  padding: 4px 9px; border-radius: 3px; border: 1px solid var(--border);
+  background: transparent; color: var(--text3); cursor: pointer; transition: all 0.1s;
+}
+.filter-btn:hover { color: var(--text2); border-color: var(--border2); }
+.filter-btn.on { background: var(--amber); color: #000; border-color: var(--amber); }
+.filter-btn.on-blue { background: var(--blue); color: #fff; border-color: var(--blue); }
+.filter-divider { width: 1px; height: 14px; background: var(--border); margin: 0 2px; }
+
+/* ── SIGNAL GRID ── */
+#signalGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+
+/* ── SIGNAL CARD ── */
+.card {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 6px; padding: 14px;
+  animation: slideIn 0.2s ease; position: relative; overflow: hidden;
+}
+@keyframes slideIn { from{transform:translateY(-6px);opacity:0} to{transform:translateY(0);opacity:1} }
+.card.grade-ap  { border-left-color: #fbbf24; }
+.card.grade-a   { border-left-color: #f59e0b; }
+.card.grade-am  { border-left-color: #10b981; }
+.card.grade-bp  { border-left-color: #3b82f6; }
+.card.grade-b   { border-left-color: #8b5cf6; }
+.card.stale     { opacity: 0.5; }
+
+.card-glow { position: absolute; inset: 0; pointer-events: none; }
+.grade-ap .card-glow { background: radial-gradient(ellipse at 0 0, #fbbf2408 0%, transparent 60%); }
+.grade-a  .card-glow { background: radial-gradient(ellipse at 0 0, #f59e0b08 0%, transparent 60%); }
+.grade-am .card-glow { background: radial-gradient(ellipse at 0 0, #10b98108 0%, transparent 60%); }
+
+/* Card header */
+.card-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
+.card-left {}
+.ticker-row { display: flex; align-items: center; gap: 7px; margin-bottom: 2px; }
+.ticker { font-family: var(--mono); font-size: 17px; font-weight: 700; color: var(--text1); }
+.dir-badge {
+  font-family: var(--mono); font-size: 9px; font-weight: 700;
+  padding: 2px 6px; border-radius: 2px;
+}
+.dir-call { background: #065f4640; color: var(--green); border: 1px solid var(--green); }
+.dir-put  { background: #7f1d1d40; color: var(--red);   border: 1px solid var(--red); }
+.card-time { font-size: 9px; color: var(--text3); font-family: var(--mono); }
+
+.card-right { text-align: right; }
+.grade-badge {
+  font-family: var(--mono); font-size: 15px; font-weight: 700;
+  padding: 3px 10px; border-radius: 3px; display: inline-block;
+}
+.grade-ap .grade-badge { background: #78350f40; color: #fbbf24; border: 1px solid #fbbf24; }
+.grade-a  .grade-badge { background: #92400e40; color: #f59e0b; border: 1px solid #f59e0b; }
+.grade-am .grade-badge { background: #065f4640; color: #10b981; border: 1px solid #10b981; }
+.grade-bp .grade-badge { background: #1e3a5f40; color: #3b82f6; border: 1px solid #3b82f6; }
+.grade-b  .grade-badge { background: #2e106540; color: #8b5cf6; border: 1px solid #8b5cf6; }
+.composite { font-family: var(--mono); font-size: 20px; font-weight: 700; line-height: 1; margin-top: 3px; }
+
+/* Score bar */
+.score-bar { height: 3px; background: var(--border); border-radius: 2px; margin-bottom: 10px; overflow: hidden; }
+.score-fill { height: 100%; border-radius: 2px; transition: width 0.4s; }
+.grade-ap .score-fill { background: #fbbf24; }
+.grade-a  .score-fill { background: #f59e0b; }
+.grade-am .score-fill { background: #10b981; }
+.grade-bp .score-fill { background: #3b82f6; }
+.grade-b  .score-fill { background: #8b5cf6; }
+
+/* Pillars */
+.pillars { display: grid; grid-template-columns: repeat(5,1fr); gap: 5px; margin-bottom: 10px; }
+.pillar { text-align: center; background: var(--bg3); border-radius: 3px; padding: 5px 3px; }
+.pillar-score { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--text1); }
+.pillar-label { font-size: 7px; letter-spacing: 0.5px; color: var(--text3); text-transform: uppercase; margin-top: 1px; }
+
+/* Tags */
+.tags { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+.tag {
+  font-family: var(--mono); font-size: 8px; font-weight: 700;
+  padding: 2px 5px; border-radius: 2px; letter-spacing: 0.5px;
+}
+.tag-primary  { background: #065f4630; color: var(--green); }
+.tag-prop     { background: #1e3a5f30; color: var(--blue); }
+.tag-base     { background: #2e106530; color: var(--purple); }
+.tag-conf     { background: #78350f40; color: var(--amber2); border: 1px solid var(--amber2); }
+.tag-ext      { background: var(--bg3); color: var(--text3); }
+
+/* News */
+.news-line {
+  font-size: 10px; color: var(--text2);
+  background: var(--bg3); border-left: 2px solid var(--blue);
+  padding: 4px 8px; border-radius: 0 3px 3px 0; margin-bottom: 8px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Context */
+.ctx-line { font-size: 9px; color: var(--text3); font-family: var(--mono); margin-bottom: 6px; }
+
+/* Position */
+.position-row {
+  display: flex; justify-content: space-between; align-items: center;
+  background: var(--bg3); border-radius: 4px; padding: 7px 10px; margin-bottom: 8px;
+}
+.pos-label { font-size: 9px; color: var(--text3); }
+.pos-value { font-family: var(--mono); font-size: 13px; font-weight: 700; }
+
+/* Contract */
+.contract-row {
+  background: var(--bg3); border-radius: 4px; padding: 7px 10px; margin-bottom: 8px;
+  font-family: var(--mono); font-size: 11px;
+}
+.contract-label { font-size: 8px; color: var(--text3); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 3px; }
+.contract-details { color: var(--text1); font-weight: 600; }
+.contract-targets { font-size: 9px; color: var(--text3); margin-top: 3px; }
+
+/* Countdown */
+.cd-bar { height: 2px; background: var(--border); border-radius: 1px; margin-bottom: 3px; overflow: hidden; }
+.cd-fill { height: 100%; background: var(--amber); border-radius: 1px; transition: width 1s linear, background 0.3s; }
+.cd-fill.urgent { background: var(--red); animation: pulse 0.5s ease-in-out infinite; }
+.cd-label { font-size: 9px; color: var(--text3); text-align: right; font-family: var(--mono); margin-bottom: 7px; }
+
+/* Actions */
+.actions { display: flex; gap: 6px; }
+.btn {
+  flex: 1; padding: 9px; border: none; border-radius: 4px;
+  font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 1px;
+  cursor: pointer; transition: opacity 0.15s;
+}
+.btn:hover { opacity: 0.85; }
+.btn-take   { background: var(--green); color: #000; }
+.btn-skip   { background: var(--bg3); color: var(--text3); border: 1px solid var(--border); }
+.btn-taken  { background: #065f4640; color: var(--green); border: 1px solid var(--green); cursor: default; }
+.btn-skipped{ background: var(--bg3); color: var(--text4); cursor: default; }
+
+/* Record form */
+.record-form { margin-top: 8px; padding: 8px; background: var(--bg3); border-radius: 4px; border: 1px solid var(--border); }
+.record-inputs { display: flex; gap: 6px; margin-bottom: 6px; }
+.record-input {
+  flex: 1; padding: 5px 8px; background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 3px; color: var(--text1); font-family: var(--mono); font-size: 11px;
+}
+.record-input::placeholder { color: var(--text4); }
+.btn-confirm { width: 100%; padding: 6px; background: var(--amber); color: #000; border: none; border-radius: 3px; font-family: var(--mono); font-size: 10px; font-weight: 700; cursor: pointer; }
+
+/* Empty state */
+.empty {
+  grid-column: 1/-1; text-align: center; padding: 60px 20px;
+  border: 1px dashed var(--border); border-radius: 6px;
+  color: var(--text3); font-family: var(--mono);
+}
+.empty-icon { font-size: 28px; margin-bottom: 10px; }
+.empty-text { font-size: 12px; margin-bottom: 6px; }
+.empty-sub  { font-size: 10px; color: var(--text4); }
+
+/* ── SIDEBAR ── */
+#sidebar { display: flex; flex-direction: column; gap: 10px; }
+.panel { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
+.panel-title { font-family: var(--mono); font-size: 8px; font-weight: 700; letter-spacing: 2px; color: var(--text3); text-transform: uppercase; margin-bottom: 10px; }
+
+/* P&L */
+.pnl-big { font-family: var(--mono); font-size: 26px; font-weight: 700; line-height: 1; margin-bottom: 3px; }
+.pnl-sub { font-size: 10px; color: var(--text3); margin-bottom: 10px; }
+.mini-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.mini-cell { background: var(--bg3); border-radius: 3px; padding: 6px 8px; }
+.mini-label { font-size: 8px; color: var(--text3); margin-bottom: 2px; }
+.mini-value { font-family: var(--mono); font-size: 13px; font-weight: 700; }
+
+/* Cluster */
+.cluster-item { background: var(--bg3); border-radius: 3px; padding: 6px 8px; margin-bottom: 5px; border: 1px solid transparent; transition: all 0.3s; }
+.cluster-item.active { background: #1e3a5f40; border-color: var(--blue); }
+.cluster-head { display: flex; justify-content: space-between; align-items: center; }
+.cluster-leader { font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--text2); }
+.cluster-item.active .cluster-leader { color: var(--blue); }
+.cluster-name { font-size: 8px; color: var(--text4); }
+.cluster-followers { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 5px; }
+.cf { font-family: var(--mono); font-size: 8px; font-weight: 700; padding: 1px 4px; border-radius: 2px; background: var(--bg2); color: var(--text4); }
+.cf.alerted { background: #065f4630; color: var(--green); }
+
+/* Market */
+.etf-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
+.etf-name { font-size: 10px; color: var(--text3); }
+.etf-val  { font-family: var(--mono); font-size: 11px; font-weight: 700; }
+.pos { color: var(--green); } .neg { color: var(--red); } .neu { color: var(--text3); }
+
+.stream-row { display: flex; justify-content: space-between; margin-bottom: 3px; }
+.stream-name { font-size: 9px; color: var(--text3); }
+.stream-status { font-family: var(--mono); font-size: 9px; font-weight: 700; }
+
+/* Pre-market */
+.pm-bias { display: flex; justify-content: space-between; margin-bottom: 8px; }
+.pm-bias-label { font-size: 9px; color: var(--text3); }
+.pm-bias-val { font-family: var(--mono); font-size: 10px; font-weight: 700; }
+.pm-tickers { display: flex; flex-wrap: wrap; gap: 4px; }
+.pm-ticker { font-family: var(--mono); font-size: 9px; font-weight: 700; background: var(--bg3); border-radius: 3px; padding: 2px 6px; color: var(--text2); }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div id="header">
+  <div class="logo">
+    <div class="logo-dot"></div>
+    LAUNCH CONTROL
+    <span style="font-size:9px;color:var(--text3);font-weight:400">v3.0</span>
+  </div>
+  <div class="header-right">
+    <span id="conflBadge" class="badge badge-gold" style="display:none"></span>
+    <span id="activeBadge" class="badge badge-amber" style="display:none"></span>
+    <span id="clock" class="clock">--:--:--</span>
+    <span id="liveDot" style="color:var(--text4);font-size:16px">●</span>
+  </div>
+</div>
+
+<!-- SESSION BAR -->
+<div id="sessionBar" style="color:var(--text3)">
+  <span class="session-dot"></span>
+  <span id="sessionLabel">CONNECTING...</span>
+  <span style="margin-left:auto;font-size:9px;color:var(--text4)" id="lastUpdate">—</span>
+</div>
+
+<!-- MAIN -->
+<div id="main">
+  <!-- LEFT: SIGNALS -->
+  <div>
+    <!-- Stats -->
+    <div id="statRow">
+      <div class="stat"><div class="stat-label">Active</div><div class="stat-value" id="sActive">0</div></div>
+      <div class="stat"><div class="stat-label">Today</div><div class="stat-value" style="color:var(--blue)" id="sToday">0</div></div>
+      <div class="stat"><div class="stat-label">Taken</div><div class="stat-value" style="color:var(--green)" id="sTaken">0</div></div>
+      <div class="stat"><div class="stat-label">Win %</div><div class="stat-value" id="sWinRate">—</div></div>
+      <div class="stat"><div class="stat-label">Day P&L</div><div class="stat-value" id="sPnl">—</div></div>
+    </div>
+
+    <!-- Filters -->
+    <div id="filterBar">
+      <button class="filter-btn on"     onclick="grade('all',this)">ALL</button>
+      <button class="filter-btn"        onclick="grade('A+',this)">A+</button>
+      <button class="filter-btn"        onclick="grade('A',this)">A</button>
+      <button class="filter-btn"        onclick="grade('A-',this)">A-</button>
+      <button class="filter-btn"        onclick="grade('B+',this)">B+</button>
+      <button class="filter-btn"        onclick="grade('B',this)">B</button>
+      <div class="filter-divider"></div>
+      <button class="filter-btn on-blue" onclick="tier('all',this)">ALL TIERS</button>
+      <button class="filter-btn"         onclick="tier('primary',this)">PRIMARY</button>
+      <button class="filter-btn"         onclick="tier('propagation',this)">PROP</button>
+      <button class="filter-btn"         onclick="tier('base_layer',this)">BASE</button>
+      <div class="filter-divider"></div>
+      <button class="filter-btn" id="histBtn" onclick="toggleHist(this)" style="margin-left:auto">+ HISTORY</button>
+    </div>
+
+    <!-- Signal cards -->
+    <div id="signalGrid">
+      <div class="empty">
+        <div class="empty-icon">◎</div>
+        <div class="empty-text">Connecting to market data...</div>
+        <div class="empty-sub">Signals appear when scoring thresholds are met</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: SIDEBAR -->
+  <div id="sidebar">
+    <!-- P&L -->
+    <div class="panel">
+      <div class="panel-title">Today's Performance</div>
+      <div class="pnl-big" id="pnlBig" style="color:var(--text3)">—</div>
+      <div class="pnl-sub" id="pnlSub">No trades recorded</div>
+      <div class="mini-grid">
+        <div class="mini-cell"><div class="mini-label">Signals</div><div class="mini-value" id="pnlSignals">0</div></div>
+        <div class="mini-cell"><div class="mini-label">Taken</div><div class="mini-value" id="pnlTaken">0</div></div>
+        <div class="mini-cell"><div class="mini-label">Wins</div><div class="mini-value" style="color:var(--green)" id="pnlWins">0</div></div>
+        <div class="mini-cell"><div class="mini-label">Losses</div><div class="mini-value" style="color:var(--red)" id="pnlLosses">0</div></div>
+      </div>
+    </div>
+
+    <!-- Cluster map -->
+    <div class="panel">
+      <div class="panel-title">Cluster Propagation</div>
+      <div id="clusterMap"></div>
+    </div>
+
+    <!-- Pre-market -->
+    <div class="panel" id="pmPanel" style="display:none">
+      <div class="panel-title">Pre-Market Intel</div>
+      <div class="pm-bias">
+        <span class="pm-bias-label">Market Bias</span>
+        <span class="pm-bias-val" id="pmBias">—</span>
+      </div>
+      <div class="pm-tickers" id="pmTickers"></div>
+    </div>
+
+    <!-- Market context -->
+    <div class="panel">
+      <div class="panel-title">Market Context</div>
+      <div id="etfRows"></div>
+      <div style="border-top:1px solid var(--border);margin:8px 0 6px"></div>
+      <div class="stream-row"><span class="stream-name">Bars</span><span class="stream-status" id="streamBars" style="color:var(--text4)">—</span></div>
+      <div class="stream-row"><span class="stream-name">News</span><span class="stream-status" id="streamNews" style="color:var(--text4)">—</span></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── STATE ─────────────────────────────────────────────────────────
+let signals = [], gradeF = 'all', tierF = 'all', showHist = false;
+let countdowns = {};
+const ACCOUNT = parseFloat('{{ACCOUNT_SIZE}}') || 7500;
+
+const CLUSTERS = [
+  {leader:'NVDA', name:'AI Infrastructure',  followers:['AMD','MRVL','ARM','AVGO']},
+  {leader:'MU',   name:'Memory Cycle',        followers:['WDC','STX','MRVL']},
+  {leader:'MSFT', name:'Hyperscaler Capex',   followers:['NVDA','AVGO','AMZN','GOOGL']},
+  {leader:'AAPL', name:'Consumer Platform',   followers:['MSFT','GOOGL','META']},
+  {leader:'TSLA', name:'High Beta',           followers:['PLTR','APP']},
+  {leader:'AMAT', name:'Semi Equipment',      followers:['LRCX','KLAC']},
+  {leader:'NOW',  name:'Software Cloud',      followers:['CRM','ADBE','WDAY']},
+];
+
+function gc(grade) {
+  return {'A+':'grade-ap','A':'grade-a','A-':'grade-am','B+':'grade-bp','B':'grade-b'}[grade]||'grade-b';
+}
+function col(grade) {
+  return {'A+':'#fbbf24','A':'#f59e0b','A-':'#10b981','B+':'#3b82f6','B':'#8b5cf6'}[grade]||'#64748b';
+}
+
+// ── FILTERS ───────────────────────────────────────────────────────
+function grade(v, btn) {
+  gradeF = v;
+  document.querySelectorAll('#filterBar .filter-btn').forEach(b => {
+    if (['ALL','A+','A','A-','B+','B'].includes(b.textContent)) b.classList.remove('on');
+  });
+  btn.classList.add('on');
+  render();
+}
+function tier(v, btn) {
+  tierF = v;
+  document.querySelectorAll('#filterBar .filter-btn').forEach(b => {
+    if (['ALL TIERS','PRIMARY','PROP','BASE'].includes(b.textContent)) b.classList.remove('on-blue');
+  });
+  btn.classList.add('on-blue');
+  render();
+}
+function toggleHist(btn) {
+  showHist = !showHist;
+  btn.textContent = showHist ? '- HISTORY' : '+ HISTORY';
+  btn.classList.toggle('on', showHist);
+  render();
+}
+
+// ── RENDER SIGNALS ────────────────────────────────────────────────
+function render() {
+  const list = signals.filter(s => {
+    if (!showHist && s.status !== 'ACTIVE') return false;
+    if (gradeF !== 'all' && s.grade !== gradeF) return false;
+    if (tierF  !== 'all' && s.signal_tier !== tierF) return false;
+    return true;
+  });
+
+  if (!list.length) {
+    const msg = signals.length === 0 ? 'Scanning Nasdaq 100 — no signals yet' : 'No signals match current filter';
+    const sub = signals.length > 0 ? `${signals.length} total signals today` : 'System is live and monitoring 104 symbols';
+    document.getElementById('signalGrid').innerHTML = `
+      <div class="empty">
+        <div class="empty-icon">◎</div>
+        <div class="empty-text">${msg}</div>
+        <div class="empty-sub">${sub}</div>
+      </div>`;
+    return;
+  }
+
+  document.getElementById('signalGrid').innerHTML = list.map(buildCard).join('');
+  list.forEach(s => { if (s.status === 'ACTIVE' && s.expires_at) startCd(s); });
+}
+
+function buildCard(s) {
+  const g = gc(s.grade);
+  const c = col(s.grade);
+  const pct = Math.min(((s.composite_raw||0)/110)*100, 100);
+  const stale = s.status !== 'ACTIVE';
+  const dir = (s.direction||'CALL').toLowerCase();
+
+  // Tags
+  const tags = [];
+  if (s.signal_tier==='propagation') tags.push(`<span class="tag tag-prop">🔗 PROP</span>`);
+  else if (s.signal_tier==='base_layer') tags.push(`<span class="tag tag-base">BASE</span>`);
+  else tags.push(`<span class="tag tag-primary">PRIMARY</span>`);
+  if ((s.confluence_score||0)>=3) tags.push(`<span class="tag tag-conf">⚡ CONF ${s.confluence_score}</span>`);
+
+  // Contract details
+  const contract = s.contract_details ? `
+    <div class="contract-row">
+      <div class="contract-label">Contract</div>
+      <div class="contract-details">${s.contract_details}</div>
+      ${s.entry_price ? `<div class="contract-targets">Entry $${s.entry_price} · T1 $${s.t1} · T2 $${s.t2} · Stop $${s.stop}</div>` : ''}
+    </div>` : '';
+
+  // Market ctx
+  const mkt = [
+    s.spy_change_pct!=null ? `SPY ${s.spy_change_pct>=0?'+':''}${(s.spy_change_pct*100).toFixed(2)}%` : null,
+    s.qqq_change_pct!=null ? `QQQ ${s.qqq_change_pct>=0?'+':''}${(s.qqq_change_pct*100).toFixed(2)}%` : null,
+    s.relative_volume!=null ? `${s.relative_volume.toFixed(1)}x vol` : null,
+  ].filter(Boolean).join(' · ');
+
+  // Propagation context
+  const propCtx = s.signal_tier==='propagation' && s.leader_ticker
+    ? `<div class="ctx-line">🔗 Propagation from ${s.leader_ticker} · lag ${s.propagation_lag_min||'?'}min</div>` : '';
+
+  // Actions
+  const actions = stale
+    ? `<button class="btn btn-skipped" disabled>${s.human_taken?'✓ TAKEN':'SKIPPED'}</button>`
+    : s.human_taken===true
+      ? `<button class="btn btn-taken" disabled>✓ TAKEN</button>`
+      : `<button class="btn btn-take" onclick="takeSignal('${s.signal_id}',this)">TAKE</button>
+         <button class="btn btn-skip" onclick="skipSignal('${s.signal_id}',this)">SKIP</button>`;
+
+  return `
+  <div class="card ${g}${stale?' stale':''}" id="card-${s.signal_id}">
+    <div class="card-glow"></div>
+    <div class="card-head">
+      <div class="card-left">
+        <div class="ticker-row">
+          <span class="ticker">${s.ticker}</span>
+          <span class="dir-badge dir-${dir}">${s.direction||'CALL'}</span>
+        </div>
+        <div class="card-time">${new Date(s.created_at).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:'America/New_York'})} ET</div>
+      </div>
+      <div class="card-right">
+        <span class="grade-badge">${s.grade}</span>
+        <div class="composite" style="color:${c}">${s.composite_raw||0}</div>
+      </div>
+    </div>
+    <div class="score-bar"><div class="score-fill" style="width:${pct}%"></div></div>
+    <div class="pillars">
+      <div class="pillar"><div class="pillar-score">${s.score_price_action??'—'}</div><div class="pillar-label">PA</div></div>
+      <div class="pillar"><div class="pillar-score">${s.score_volume??'—'}</div><div class="pillar-label">VOL</div></div>
+      <div class="pillar"><div class="pillar-score">${s.score_news??'—'}</div><div class="pillar-label">NEWS</div></div>
+      <div class="pillar"><div class="pillar-score">${s.score_market??'—'}</div><div class="pillar-label">MKT</div></div>
+      <div class="pillar"><div class="pillar-score">${s.score_timing??'—'}</div><div class="pillar-label">TIME</div></div>
+    </div>
+    <div class="tags">${tags.join('')}</div>
+    ${propCtx}
+    ${s.news_headline?`<div class="news-line">📰 ${s.news_headline}</div>`:''}
+    ${mkt?`<div class="ctx-line">${mkt}</div>`:''}
+    ${contract}
+    <div class="position-row">
+      <span class="pos-label">Position</span>
+      <span class="pos-value" style="color:${c}">$${Number(s.position_size_dollars||0).toLocaleString()} <span style="font-size:9px;color:var(--text3)">(${((s.position_size_pct||0)*100).toFixed(1)}%)</span></span>
+    </div>
+    ${s.status==='ACTIVE'&&s.expires_at?`
+      <div class="cd-bar"><div class="cd-fill" id="cdf-${s.signal_id}" style="width:100%"></div></div>
+      <div class="cd-label" id="cdl-${s.signal_id}">—</div>`:''
+    }
+    <div class="actions" id="act-${s.signal_id}">${actions}</div>
+    <div id="rec-${s.signal_id}"></div>
+  </div>`;
+}
+
+// ── COUNTDOWN ─────────────────────────────────────────────────────
+function startCd(s) {
+  const id = s.signal_id;
+  if (countdowns[id]) clearInterval(countdowns[id]);
+  const bar = document.getElementById(`cdf-${id}`);
+  const lbl = document.getElementById(`cdl-${id}`);
+  if (!bar||!lbl) return;
+  const total = new Date(s.expires_at) - new Date(s.created_at);
+  countdowns[id] = setInterval(() => {
+    const left = new Date(s.expires_at) - Date.now();
+    if (left<=0) { clearInterval(countdowns[id]); bar.style.width='0%'; lbl.textContent='EXPIRED'; return; }
+    bar.style.width = `${(left/total)*100}%`;
+    bar.classList.toggle('urgent', left<15000);
+    lbl.textContent = `${Math.round(left/1000)}s`;
+  }, 1000);
+}
+
+// ── TAKE / SKIP ───────────────────────────────────────────────────
+function takeSignal(id, btn) {
+  const rec = document.getElementById(`rec-${id}`);
+  rec.innerHTML = `
+    <div class="record-form">
+      <div class="record-inputs">
+        <input class="record-input" id="ep-${id}" placeholder="Entry $" type="number" step="0.01">
+        <input class="record-input" id="xp-${id}" placeholder="Exit $"  type="number" step="0.01">
+      </div>
+      <button class="btn-confirm" onclick="confirmTake('${id}')">CONFIRM TAKE</button>
+    </div>`;
+}
+async function confirmTake(id) {
+  const ep = parseFloat(document.getElementById(`ep-${id}`)?.value)||null;
+  const xp = parseFloat(document.getElementById(`xp-${id}`)?.value)||null;
+  await fetch('/api/outcome',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({signal_id:id,taken:true,entry_price:ep,exit_price:xp})});
+  document.getElementById(`act-${id}`).innerHTML=`<button class="btn btn-taken" disabled>✓ TAKEN</button>`;
+  document.getElementById(`rec-${id}`).innerHTML='';
+  loadAll();
+}
+async function skipSignal(id, btn) {
+  btn.disabled=true; btn.textContent='SKIPPING...';
+  await fetch('/api/outcome',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({signal_id:id,taken:false})});
+  btn.textContent='SKIPPED'; btn.className='btn btn-skipped';
+}
+
+// ── SESSION ───────────────────────────────────────────────────────
+function updateSession(session) {
+  const bar = document.getElementById('sessionBar');
+  const lbl = document.getElementById('sessionLabel');
+  const map = {
+    REGULAR:    ['var(--green)',  'MARKET OPEN'],
+    PRE_MARKET: ['var(--blue)',   '🌅 PRE-MARKET'],
+    POST_MARKET:['var(--blue)',   '🌆 POST-MARKET'],
+    OVERNIGHT:  ['var(--text3)',  'OVERNIGHT'],
+    WEEKEND:    ['var(--text3)',  'WEEKEND'],
+  };
+  const [color, label] = map[session]||['var(--text3)','CLOSED'];
+  bar.style.color = color;
+  lbl.textContent = label;
+}
+
+// ── CLUSTERS ──────────────────────────────────────────────────────
+function renderClusters(propagation) {
+  const map = document.getElementById('clusterMap');
+  map.innerHTML = CLUSTERS.map(cl => {
+    const win = (propagation||[]).find(w=>w.leaderTicker===cl.leader);
+    const active = !!win;
+    return `
+    <div class="cluster-item${active?' active':''}" id="cl-${cl.leader}">
+      <div class="cluster-head">
+        <span class="cluster-leader">${cl.leader}${active?` ▲ ${win.leaderDirection} ${win.minutesRemaining}min`:''}</span>
+        <span class="cluster-name">${cl.name}</span>
+      </div>
+      ${active?`<div class="cluster-followers">${cl.followers.map(f=>`<span class="cf${(win.followersAlerted||[]).includes(f)?' alerted':''}">${f}</span>`).join('')}</div>`:''}
+    </div>`;
+  }).join('');
+}
+
+// ── MAIN LOAD ─────────────────────────────────────────────────────
+async function loadAll() {
+  try {
+    const [sigRes, statusRes, pmRes] = await Promise.all([
+      fetch('/api/signals').then(r=>r.json()),
+      fetch('/api/status').then(r=>r.json()),
+      fetch('/api/premarket').then(r=>r.json()),
+    ]);
+
+    signals = sigRes.signals||[];
+    const active  = signals.filter(s=>s.status==='ACTIVE');
+    const taken   = signals.filter(s=>s.human_taken===true);
+    const wins    = taken.filter(s=>(s.human_pnl_pct||0)>0);
+    const losses  = taken.filter(s=>(s.human_pnl_pct||0)<0);
+    const totalPnl= taken.reduce((a,b)=>a+(b.human_pnl_pct||0),0);
+    const wr      = taken.length>0?Math.round(wins.length/taken.length*100):null;
+    const confCount = active.filter(s=>(s.confluence_score||0)>=3).length;
+
+    // Nav
+    document.getElementById('sActive').textContent  = active.length;
+    document.getElementById('sToday').textContent   = signals.length;
+    document.getElementById('sTaken').textContent   = taken.length;
+    document.getElementById('sWinRate').textContent = wr!=null?`${wr}%`:'—';
+    document.getElementById('sWinRate').style.color = wr>=55?'var(--green)':wr!=null?'var(--red)':'var(--amber)';
+    document.getElementById('sPnl').textContent = totalPnl?`${totalPnl>=0?'+':''}${(totalPnl*100).toFixed(2)}%`:'—';
+    document.getElementById('sPnl').style.color = totalPnl>0?'var(--green)':totalPnl<0?'var(--red)':'var(--amber)';
+
+    // Active badge
+    const ab = document.getElementById('activeBadge');
+    if (active.length>0) { ab.textContent=`${active.length} ACTIVE`; ab.style.display=''; }
+    else ab.style.display='none';
+
+    // Confluence badge
+    const cb = document.getElementById('conflBadge');
+    if (confCount>0) { cb.textContent=`⚡ ${confCount} CONFLUENCE`; cb.style.display=''; }
+    else cb.style.display='none';
+
+    // Live dot
+    document.getElementById('liveDot').style.color = 'var(--green)';
+
+    // P&L sidebar
+    document.getElementById('pnlBig').textContent = totalPnl?`${totalPnl>=0?'+':''}${(totalPnl*100).toFixed(2)}%`:'—';
+    document.getElementById('pnlBig').style.color = totalPnl>0?'var(--green)':totalPnl<0?'var(--red)':'var(--text3)';
+    document.getElementById('pnlSub').textContent = totalPnl?`${totalPnl>=0?'+':''}$${(ACCOUNT*totalPnl).toFixed(0)} on day`:'No trades recorded';
+    document.getElementById('pnlSignals').textContent = signals.length;
+    document.getElementById('pnlTaken').textContent   = taken.length;
+    document.getElementById('pnlWins').textContent    = wins.length;
+    document.getElementById('pnlLosses').textContent  = losses.length;
+
+    // Session
+    updateSession(statusRes.session||'OVERNIGHT');
+    renderClusters(statusRes.propagation||[]);
+
+    // Market ETFs from latest signal
+    const latest = signals.find(s=>s.spy_change_pct!=null);
+    const etfs = [
+      {label:'SPY', val:latest?.spy_change_pct},
+      {label:'QQQ', val:latest?.qqq_change_pct},
+      {label:'SMH', val:latest?.sector_change_pct},
+    ];
+    document.getElementById('etfRows').innerHTML = etfs.map(e=>`
+      <div class="etf-row">
+        <span class="etf-name">${e.label}</span>
+        <span class="etf-val ${e.val>0?'pos':e.val<0?'neg':'neu'}">
+          ${e.val!=null?`${e.val>=0?'+':''}${(e.val*100).toFixed(2)}%`:'—'}
+        </span>
+      </div>`).join('');
+
+    // Stream status
+    const streamStatus = statusRes.streams||{};
+    const bs = document.getElementById('streamBars');
+    const ns = document.getElementById('streamNews');
+    bs.textContent = streamStatus.bars==='connected'?'LIVE':'—';
+    bs.style.color = streamStatus.bars==='connected'?'var(--green)':'var(--text4)';
+    ns.textContent = streamStatus.news==='connected'?'LIVE':'—';
+    ns.style.color = streamStatus.news==='connected'?'var(--green)':'var(--text4)';
+
+    // Pre-market
+    const pm = pmRes.briefing;
+    if (pm) {
+      document.getElementById('pmPanel').style.display='';
+      const bv = document.getElementById('pmBias');
+      bv.textContent = pm.market_bias||'—';
+      bv.style.color = pm.market_bias==='BULLISH'?'var(--green)':pm.market_bias==='BEARISH'?'var(--red)':'var(--text3)';
+      const flagged = pm.flagged_tickers||[];
+      document.getElementById('pmTickers').innerHTML = flagged.slice(0,8).map(t=>
+        `<span class="pm-ticker">${t.ticker}</span>`).join('');
+    }
+
+    // Last update
+    document.getElementById('lastUpdate').textContent =
+      new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+
+    render();
+  } catch(e) {
+    console.error('Load error:', e);
+    document.getElementById('liveDot').style.color = 'var(--red)';
+  }
+}
+
+// ── CLOCK ─────────────────────────────────────────────────────────
+function updateClock() {
+  document.getElementById('clock').textContent =
+    new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:'America/New_York'})+' ET';
+}
+
+// ── INIT ──────────────────────────────────────────────────────────
+loadAll();
+setInterval(loadAll, 8000);
+setInterval(updateClock, 1000);
+updateClock();
+</script>
+</body>
+</html>

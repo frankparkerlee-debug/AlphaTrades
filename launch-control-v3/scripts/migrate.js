@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const { Pool } = pg;
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 async function migrate() {
   const client = await pool.connect();
@@ -106,7 +106,6 @@ async function migrate() {
         sens_hyperscaler_capex    DECIMAL(4,3) DEFAULT 1.0,
         sens_export_restriction   DECIMAL(4,3) DEFAULT 1.0,
         sens_memory_pricing       DECIMAL(4,3) DEFAULT 1.0,
-        sens_hbm_demand           DECIMAL(4,3) DEFAULT 1.0,
         sens_product_launch       DECIMAL(4,3) DEFAULT 1.0,
         sens_macro_bullish        DECIMAL(4,3) DEFAULT 1.0,
         sens_macro_bearish        DECIMAL(4,3) DEFAULT 1.0,

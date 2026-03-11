@@ -15,6 +15,7 @@ import { run as runNightlyProfiles } from './jobs/nightly-profiles.js';
 import { run as runPremarketScan } from './jobs/premarket-scan.js';
 import logger from './utils/logger.js';
 import { isMarketOpen, nowET, todayStr } from './utils/time.js';
+import { getMarketSession, SESSION } from './utils/session.js';
 
 const REFERENCE_ETFS = ['SPY', 'QQQ', 'SMH', 'XLK', 'XLY', 'XLC', 'DIA'];
 

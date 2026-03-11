@@ -1,66 +1,26 @@
 services:
-  # Web Service - Dashboard and API
   - type: web
-    name: alphatrades-web
-    env: python
-    region: oregon
-    plan: starter
-    buildCommand: pip install -r requirements.txt && python init_db.py
-    startCommand: gunicorn --worker-class gevent --workers 1 --timeout 600 --worker-connections 1000 --bind 0.0.0.0:$PORT app:app
-    healthCheckPath: /health
+    name: AlphaTradesV3
+    runtime: node
+    rootDir: launch-control-v3
+    buildCommand: npm install
+    startCommand: node server.js
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.0
-      - key: DATABASE_URL
-        fromDatabase:
-          name: alphatrades-db
-          property: connectionString
+      - key: NODE_ENV
+        value: production
       - key: ALPACA_API_KEY
-        sync: false  # Set manually in Render dashboard
+        sync: false
       - key: ALPACA_SECRET_KEY
-        sync: false  # Set manually in Render dashboard
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: ACCOUNT_SIZE
+        value: "7500"
+      - key: ALPACA_FEED
+        value: sip
       - key: ALPACA_BASE_URL
-        value: https://paper-api.alpaca.markets
+        value: https://api.alpaca.markets
       - key: ALPACA_DATA_URL
         value: https://data.alpaca.markets
-      - key: TRADING_MODE
-        value: paper
-      - key: FINNHUB_API_KEY
-        sync: false  # Set manually in Render dashboard
-      - key: ANTHROPIC_API_KEY
-        sync: false  # Set manually for AI sentiment analysis (optional)
-  
-  # Background Worker - Market Monitor
-  - type: worker
-    name: alphatrades-worker
-    env: python
-    region: oregon
-    plan: starter
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -u worker.py
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.0
-      - key: DATABASE_URL
-        fromDatabase:
-          name: alphatrades-db
-          property: connectionString
-      - key: ALPACA_API_KEY
-        sync: false  # Set manually in Render dashboard
-      - key: ALPACA_SECRET_KEY
-        sync: false  # Set manually in Render dashboard
-      - key: ALPACA_BASE_URL
-        value: https://paper-api.alpaca.markets
-      - key: ALPACA_DATA_URL
-        value: https://data.alpaca.markets
-      - key: TRADING_MODE
-        value: paper
-      - key: FINNHUB_API_KEY
-        sync: false  # Set manually in Render dashboard
-
-databases:
-  - name: alphatrades-db
-    databaseName: alphatrades
-    user: alphatrades
-    plan: starter  # $7/month
-    region: oregon
+      - key: ALPACA_STREAM_URL
+        value: wss://stream.data.alpaca.markets

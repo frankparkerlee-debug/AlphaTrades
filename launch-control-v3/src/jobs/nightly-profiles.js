@@ -331,7 +331,7 @@ function sleep(ms) {
 }
 
 // Run directly if called as script
-if (process.argv[1] && process.argv[1].includes('nightly-profiles')) {
+if (process.argv[1].includes('nightly-profiles')) {
   run().catch(err => {
     logger.error('Nightly profile update failed:', err);
     process.exit(1);

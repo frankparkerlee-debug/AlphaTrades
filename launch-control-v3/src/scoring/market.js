@@ -68,7 +68,7 @@ export function computeMarketScore(params) {
   // Beta and correlation weighting
   const betaWeight   = clamp(betaQqq / 1.30, 0.70, 1.40);
   const sectorWeight = clamp(sectorEtfCorrelation / 0.75, 0.70, 1.30);
-  const followthruAdj = ((alignmentFollowthruRate ?? 0.65) - 0.65) * 20;
+  const followthruAdj = (alignmentFollowthruRate - 0.65) * 20;
 
   const raw = (base * (betaWeight + sectorWeight) / 2) + followthruAdj;
   const score = clamp(Math.round(raw), -5, 15);

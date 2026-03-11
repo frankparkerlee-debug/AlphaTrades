@@ -318,7 +318,7 @@ export async function testScoring() {
     post_cpi_quality: 0.75,
     vol_to_move_correlation: 0.72,
     news_fade_rate: 0.42,
-    avg_vol_by_window: { '10:15': 120000, '14:15': 120000 },
+    avg_vol_by_window: { '10:15': 120000 },
     best_windows: [],
     worst_windows: [],
   };
@@ -326,9 +326,9 @@ export async function testScoring() {
   const result = await computeComposite({
     ticker: 'NVDA',
     barData: {
-      open: 178.00, high: 184.00, low: 177.50, close: 183.00,
+      open: 178.00, high: 181.50, low: 177.50, close: 181.00,
       volume: 280000, vwap: 179.00, prevClose: 175.00,
-      upVolRatio: 0.75, prevDayHigh: 182.80, prevDayLow: 172.00,
+      upVolRatio: 0.72, prevDayHigh: 180.00, prevDayLow: 172.00,
     },
     marketData: {
       spyPct: 0.008, qqqPct: 0.012, sectorPct: 0.018,
@@ -336,7 +336,7 @@ export async function testScoring() {
     },
     newsEvents: [],
     profile,
-    currentTime: new Date('2024-10-15T10:15:00-04:00'),
+    currentTime: new Date('2024-10-15T14:15:00-04:00'),
     announcementCtx: null,
   });
 

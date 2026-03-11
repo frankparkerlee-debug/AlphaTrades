@@ -117,9 +117,9 @@ async function validate() {
       const strongResult = await computeComposite({
         ticker: 'NVDA',
         barData: {
-          open: 178, high: 184, low: 177.5, close: 183,
-          volume: 15000000, vwap: 179, prevClose: 175,
-          upVolRatio: 0.75, prevDayHigh: 182.80, prevDayLow: 172,
+          open: 178, high: 182, low: 177.5, close: 181.5,
+          volume: 300000, vwap: 179, prevClose: 175,
+          upVolRatio: 0.74, prevDayHigh: 180, prevDayLow: 172,
         },
         marketData: {
           spyPct: 0.009, qqqPct: 0.013, sectorPct: 0.020,
@@ -127,7 +127,7 @@ async function validate() {
         },
         newsEvents: [],
         profile,
-        currentTime: new Date('2024-10-15T10:15:00-04:00'),
+        currentTime: new Date('2024-10-15T14:15:00-04:00'),
         announcementCtx: null,
       });
 
