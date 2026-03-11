@@ -1362,7 +1362,7 @@ def api_launchcontrol_signals():
                 spy_change_pct, qqq_change_pct, sector_change_pct,
                 relative_volume, atr_multiple,
                 human_taken, human_pnl_pct,
-                score_note, expires_at, created_at
+                expires_at, created_at
             FROM lc_v3.signals
             WHERE DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
             ORDER BY created_at DESC
@@ -1371,7 +1371,6 @@ def api_launchcontrol_signals():
 
         signals = [dict(r._mapping) for r in rows]
 
-        # Serialize datetimes for JSON
         for s in signals:
             if s.get('created_at'):
                 s['created_at'] = s['created_at'].isoformat()
