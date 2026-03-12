@@ -110,7 +110,12 @@ function selectContract(snapshots, direction, currentPrice, grade) {
     const mid     = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
     const oi      = snap.openInterest || 0;
     const iv      = greeks.impliedVolatility || 0;
-    const strike  = snap.details?.strikePrice || 0;
+    // Strike from snapshot details, fallback to parsing OCC symbol
+    let strike = snap.details?.strikePrice || 0;
+    if (!strike) {
+      const sm = symbol.match(/\d{8}$/);
+      if (sm) strike = parseInt(sm[0]) / 1000;
+    }
     return { symbol, delta, bid, ask, mid, oi, iv, strike, greeks, quote };
   });
 
