@@ -165,6 +165,9 @@ export function clearDayNews() {
 
 export function setStreamStatus(stream, status) {
   state.streamStatus[stream] = status;
+  // Expose globally so Express server can read it
+  if (!global.streamStatus) global.streamStatus = {};
+  global.streamStatus[stream] = status;
 }
 
 export function getStreamStatus() {

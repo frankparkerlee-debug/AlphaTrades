@@ -78,9 +78,6 @@ async function startup() {
   // 9. Schedule jobs
   scheduleJobs();
 
-  // 10. Start REST API for dashboard
-  await startApi();
-
   logger.info('✅ Launch Control v3 running');
 }
 
@@ -215,114 +212,7 @@ async function writeDailySummary() {
   logger.info(`Daily summary written: ${row.total} signals, ${row.taken} taken, ${row.wins} wins`);
 }
 
-// ── REST API (minimal — dashboard reads from DB) ───────
-
-async function startApi() {
-  const { createServer } = await import('http');
-  const { query: dbQuery } = await import('./data/db.js');
-
-  const PORT = process.env.PORT || 3001;
-
-  const server = createServer(async (req, res) => {
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204); res.end(); return;
-    }
-
-    const url = new URL(req.url, `http://localhost:${PORT}`);
-
-    try {
-      // Active signals (last 5 minutes)
-      if (url.pathname === '/api/signals/active') {
-        const signals = await dbQuery(`
-          SELECT * FROM lc_v3.signals
-          WHERE status = 'ACTIVE'
-          AND created_at > NOW() - INTERVAL '5 minutes'
-          ORDER BY composite_raw DESC
-        `);
-        res.writeHead(200);
-        res.end(JSON.stringify({ signals: signals.rows }));
-        return;
-      }
-
-      // Recent signals (today)
-      if (url.pathname === '/api/signals/today') {
-        const signals = await dbQuery(`
-          SELECT * FROM lc_v3.signals
-          WHERE DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
-          ORDER BY created_at DESC
-          LIMIT 100
-        `);
-        res.writeHead(200);
-        res.end(JSON.stringify({ signals: signals.rows }));
-        return;
-      }
-
-      // Pre-market briefing
-      if (url.pathname === '/api/premarket') {
-        const briefing = await dbQuery(`
-          SELECT * FROM lc_v3.premarket_briefing
-          WHERE date = CURRENT_DATE
-        `);
-        res.writeHead(200);
-        res.end(JSON.stringify({ briefing: briefing.rows[0] || null }));
-        return;
-      }
-
-      // Stream status
-      if (url.pathname === '/api/status') {
-        const { getStreamStatus } = await import('./data/state.js');
-        const { getOpenWindows } = await import('./cluster/propagation.js');
-        res.writeHead(200);
-        res.end(JSON.stringify({
-          streams:     getStreamStatus(),
-          propagation: getOpenWindows(),
-          time:        nowET().toISOString(),
-          marketOpen:  isMarketOpen(),
-        }));
-        return;
-      }
-
-      // Record human trade outcome
-      if (url.pathname === '/api/signals/outcome' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => { body += chunk; });
-        req.on('end', async () => {
-          const { signalId, taken, entryPrice, exitPrice, notes } = JSON.parse(body);
-          const pnlPct = entryPrice && exitPrice
-            ? (exitPrice - entryPrice) / entryPrice
-            : null;
-          await dbQuery(`
-            UPDATE lc_v3.signals SET
-              human_taken = $1, human_entry_price = $2,
-              human_exit_price = $3, human_pnl_pct = $4,
-              human_notes = $5, status = 'TAKEN'
-            WHERE signal_id = $6
-          `, [taken, entryPrice, exitPrice, pnlPct, notes, signalId]);
-          res.writeHead(200);
-          res.end(JSON.stringify({ ok: true }));
-        });
-        return;
-      }
-
-      res.writeHead(404);
-      res.end(JSON.stringify({ error: 'Not found' }));
-
-    } catch (err) {
-      logger.error('API error:', err.message);
-      res.writeHead(500);
-      res.end(JSON.stringify({ error: err.message }));
-    }
-  });
-
-  server.listen(PORT, () => {
-    logger.info(`✓ API listening on port ${PORT}`);
-  });
-}
+// API is handled by server.js — no API server here
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));

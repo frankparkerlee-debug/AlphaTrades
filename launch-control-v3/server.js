@@ -45,9 +45,23 @@ app.get('/api/signals', async (req, res) => {
     `);
     const signals = result.rows.map(s => ({
       ...s,
-      signal_id:  s.signal_id?.toString(),
-      created_at: s.created_at?.toISOString(),
-      expires_at: s.expires_at?.toISOString(),
+      signal_id:        s.signal_id?.toString(),
+      created_at:       s.created_at?.toISOString(),
+      expires_at:       s.expires_at?.toISOString(),
+      composite_raw:    Number(s.composite_raw)    || 0,
+      relative_volume:  Number(s.relative_volume)  || null,
+      atr_multiple:     Number(s.atr_multiple)     || null,
+      spy_change_pct:   Number(s.spy_change_pct)   || null,
+      qqq_change_pct:   Number(s.qqq_change_pct)   || null,
+      sector_change_pct:Number(s.sector_change_pct)|| null,
+      position_size_pct:Number(s.position_size_pct)|| 0,
+      position_size_dollars: Number(s.position_size_dollars) || 0,
+      score_price_action: Number(s.score_price_action) || 0,
+      score_volume:     Number(s.score_volume)     || 0,
+      score_news:       Number(s.score_news)       || 0,
+      score_market:     Number(s.score_market)     || 0,
+      score_timing:     Number(s.score_timing)     || 0,
+      confluence_score: Number(s.confluence_score) || 0,
     }));
     res.json({ signals, count: signals.length });
   } catch (err) {
@@ -77,19 +91,21 @@ app.get('/api/status', async (req, res) => {
     }));
 
     // Market session
-    const ET = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
-    const etDate = new Date(ET);
-    const day  = etDate.getDay();
-    const mins = etDate.getHours() * 60 + etDate.getMinutes();
-    let session = 'OVERNIGHT';
-    if (day === 0 || day === 6) session = 'WEEKEND';
+    const etNow   = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const day      = etNow.getDay();
+    const mins     = etNow.getHours() * 60 + etNow.getMinutes();
+    let session    = 'OVERNIGHT';
+    if (day === 0 || day === 6)           session = 'WEEKEND';
     else if (mins >= 240  && mins < 570)  session = 'PRE_MARKET';
     else if (mins >= 570  && mins < 960)  session = 'REGULAR';
     else if (mins >= 960  && mins < 1200) session = 'POST_MARKET';
 
-    res.json({ session, propagation: prop, time: now.toISOString() });
+    // Stream status from worker (shared via global)
+    const streams = global.streamStatus || { bars: 'unknown', news: 'unknown' };
+
+    res.json({ session, propagation: prop, streams, time: now.toISOString() });
   } catch (err) {
-    res.json({ session: 'UNKNOWN', propagation: [], error: err.message });
+    res.json({ session: 'UNKNOWN', propagation: [], streams: {}, error: err.message });
   }
 });
 

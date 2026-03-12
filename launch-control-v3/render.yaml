@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: AlphaTradesV3
+    runtime: node
+    rootDir: launch-control-v3
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ALPACA_API_KEY
+        sync: false
+      - key: ALPACA_SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: ACCOUNT_SIZE
+        value: "7500"
+      - key: ALPACA_FEED
+        value: sip
+      - key: ALPACA_BASE_URL
+        value: https://api.alpaca.markets
+      - key: ALPACA_DATA_URL
+        value: https://data.alpaca.markets
+      - key: ALPACA_STREAM_URL
+        value: wss://stream.data.alpaca.markets
