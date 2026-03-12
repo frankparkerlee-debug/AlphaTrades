@@ -55,6 +55,7 @@ async function getExpiry(ticker, direction) {
     });
 
     const contracts = res.data?.option_contracts || [];
+    console.log(`[contract] ${ticker}: contracts endpoint returned ${contracts.length} results`);
     const today     = new Date().toISOString().split('T')[0];
 
     // Get unique expiry dates that are >= today
@@ -64,6 +65,7 @@ async function getExpiry(ticker, direction) {
         .filter(d => d >= today)
     )].sort();
 
+    console.log(`[contract] ${ticker}: real expiries = [${dates.join(', ')}]`);
     if (dates.length === 0) return null;
 
     const nearest = dates[0];
@@ -93,15 +95,18 @@ async function fetchChain(ticker, expiry, direction) {
       },
       timeout: 8000,
     });
-    return res.data?.snapshots || {};
+    const snaps = res.data?.snapshots || {};
+    console.log(`[contract] ${ticker}: ${Object.keys(snaps).length} snapshots for ${expiry}`);
+    return snaps;
   } catch (err) {
-    console.error(`[contract] Chain fetch failed for ${ticker}:`, err.message);
+    console.error(`[contract] Chain fetch failed for ${ticker}:`, err.response?.status, err.message);
     return {};
   }
 }
 
 /**
- * Select the best contract from the chain
+ * Select the best contract from the chain.
+ * Uses progressive filter relaxation — strict first, then loosens until we find one.
  */
 function selectContract(snapshots, direction, currentPrice, grade) {
   const deltaRange = DELTA_TARGET[grade] || DELTA_TARGET['B+'];
@@ -109,45 +114,70 @@ function selectContract(snapshots, direction, currentPrice, grade) {
 
   if (contracts.length === 0) return null;
 
-  // Filter by delta range and minimum liquidity
-  const candidates = contracts
-    .map(([symbol, snap]) => {
-      const greeks  = snap.greeks || {};
-      const quote   = snap.latestQuote || {};
-      const delta   = Math.abs(greeks.delta || 0);
-      const bid     = quote.bp || 0;
-      const ask     = quote.ap || 0;
-      const mid     = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
-      const oi      = snap.openInterest || 0;
-      const iv      = greeks.impliedVolatility || 0;
-      const strike  = snap.details?.strikePrice || 0;
+  // Map all contracts once
+  const all = contracts.map(([symbol, snap]) => {
+    const greeks  = snap.greeks || {};
+    const quote   = snap.latestQuote || {};
+    const delta   = Math.abs(greeks.delta || 0);
+    const bid     = quote.bp || 0;
+    const ask     = quote.ap || 0;
+    const mid     = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
+    const oi      = snap.openInterest || 0;
+    const iv      = greeks.impliedVolatility || 0;
+    const strike  = snap.details?.strikePrice || 0;
+    return { symbol, delta, bid, ask, mid, oi, iv, strike, greeks, quote };
+  });
 
-      return { symbol, delta, bid, ask, mid, oi, iv, strike, greeks, quote };
-    })
-    .filter(c => {
-      if (c.delta < deltaRange.min || c.delta > deltaRange.max) return false;
-      if (c.bid < 0.05) return false; // no liquidity
-      if (c.oi < 50)    return false; // too illiquid
+  console.log(`[contract] ${all.length} contracts in chain, delta range ${deltaRange.min}-${deltaRange.max}`);
+
+  // Tier 1: strict filters
+  let candidates = all.filter(c => {
+    if (c.delta < deltaRange.min || c.delta > deltaRange.max) return false;
+    if (c.bid < 0.05) return false;
+    if (c.oi < 50)    return false;
+    if (c.mid <= 0)   return false;
+    const spread = c.ask - c.bid;
+    if (spread / c.mid > 0.25) return false;
+    return true;
+  });
+
+  // Tier 2: widen delta ±30%, drop OI to 10, widen spread to 40%
+  if (candidates.length === 0) {
+    console.log(`[contract] Tier 1 empty — relaxing filters`);
+    candidates = all.filter(c => {
+      if (c.delta < deltaRange.min * 0.7 || c.delta > deltaRange.max * 1.3) return false;
+      if (c.bid < 0.02) return false;
+      if (c.oi < 10)    return false;
       if (c.mid <= 0)   return false;
-      // Reasonable spread — reject if spread > 20% of mid
       const spread = c.ask - c.bid;
-      if (spread / c.mid > 0.25) return false;
+      if (c.mid > 0 && spread / c.mid > 0.40) return false;
       return true;
     });
+  }
 
-  if (candidates.length === 0) return null;
+  // Tier 3: any contract with a bid and a delta — just find something real
+  if (candidates.length === 0) {
+    console.log(`[contract] Tier 2 empty — using any contract with bid+delta`);
+    candidates = all.filter(c => c.bid > 0 && c.delta > 0.10 && c.mid > 0);
+  }
 
-  // Score each candidate — prefer highest OI within delta range
+  if (candidates.length === 0) {
+    console.log(`[contract] All tiers empty. Sample:`, all.slice(0, 3).map(c =>
+      `delta=${c.delta} bid=${c.bid} ask=${c.ask} oi=${c.oi}`
+    ));
+    return null;
+  }
+
+  // Sort: closest delta to ideal, then highest OI
+  const idealDelta = (deltaRange.min + deltaRange.max) / 2;
   candidates.sort((a, b) => {
-    // Primary: closest delta to ideal (center of range)
-    const idealDelta = (deltaRange.min + deltaRange.max) / 2;
-    const aDeltaDist = Math.abs(a.delta - idealDelta);
-    const bDeltaDist = Math.abs(b.delta - idealDelta);
-    if (Math.abs(aDeltaDist - bDeltaDist) > 0.05) return aDeltaDist - bDeltaDist;
-    // Secondary: highest open interest
+    const aDist = Math.abs(a.delta - idealDelta);
+    const bDist = Math.abs(b.delta - idealDelta);
+    if (Math.abs(aDist - bDist) > 0.05) return aDist - bDist;
     return b.oi - a.oi;
   });
 
+  console.log(`[contract] Selected: ${candidates[0].symbol} delta=${candidates[0].delta} bid=${candidates[0].bid} ask=${candidates[0].ask} oi=${candidates[0].oi}`);
   return candidates[0];
 }
 

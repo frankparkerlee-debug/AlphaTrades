@@ -224,7 +224,7 @@ async function startWorker() {
 const GRADE_SCALE  = [[83,'A+'],[73,'A'],[63,'A-'],[53,'B+'],[43,'B']];
 const POSITION_SZ  = {'A+':0.20,'A':0.15,'A-':0.10,'B+':0.075,'B':0.05};
 const ACCOUNT_SIZE = parseFloat(process.env.ACCOUNT_SIZE || '7500');
-const ALPACA_FEED  = process.env.ALPACA_FEED || 'iex';
+const ALPACA_FEED  = process.env.ALPACA_FEED || 'sip';
 const pollerFired  = new Set();
 
 function toGrade(score) {
@@ -313,6 +313,17 @@ async function startRestPoller() {
 
         const key = `${today}-${ticker}-${direction}`;
         if (pollerFired.has(key)) continue;
+
+        // Check DB for existing signal (survives restarts)
+        const existing = await db.query(
+          `SELECT 1 FROM lc_v3.signals WHERE ticker=$1 AND direction=$2
+           AND DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE LIMIT 1`,
+          [ticker, direction]
+        );
+        if (existing.rows.length > 0) {
+          pollerFired.add(key);
+          continue;
+        }
 
         // Get contract recommendation
         let contract = null;
