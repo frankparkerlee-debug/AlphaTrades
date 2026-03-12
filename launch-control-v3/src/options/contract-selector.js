@@ -1,13 +1,14 @@
 /**
  * Options Contract Selector
- * Fetches the options chain for a ticker and selects the optimal contract.
- * Only returns REAL contracts from the live chain — never estimates.
+ * Fetches the options chain for a ticker and selects the optimal contract
+ * based on signal grade, direction, current price, and ATR.
  */
 
 import axios from 'axios';
 
-const DATA_URL   = process.env.ALPACA_DATA_URL  || 'https://data.alpaca.markets';
-const API_KEY    = process.env.ALPACA_API_KEY;
+const BASE_URL  = process.env.ALPACA_BASE_URL  || 'https://api.alpaca.markets';
+const DATA_URL  = process.env.ALPACA_DATA_URL  || 'https://data.alpaca.markets';
+const API_KEY   = process.env.ALPACA_API_KEY;
 const API_SECRET = process.env.ALPACA_SECRET_KEY;
 
 const headers = {
@@ -17,10 +18,10 @@ const headers = {
 
 // Grade → target delta range
 const DELTA_TARGET = {
-  'A+': { min: 0.45, max: 0.60 },
+  'A+': { min: 0.45, max: 0.60 }, // near ATM — highest gamma
   'A':  { min: 0.38, max: 0.52 },
   'A-': { min: 0.30, max: 0.45 },
-  'B+': { min: 0.25, max: 0.38 },
+  'B+': { min: 0.25, max: 0.38 }, // slightly OTM
   'B':  { min: 0.20, max: 0.32 },
 };
 
@@ -36,119 +37,67 @@ const TARGETS = {
 const STOP_MULT = 0.60; // -40% of premium
 
 /**
- * Parse OCC symbol like BKR20260313P00053500
- * into { ticker: 'BKR', date: '2026-03-13', type: 'PUT', strike: 53.50 }
+ * Get nearest real expiry from Alpaca options chain
+ * Falls back to next monthly if no weekly exists
  */
-function parseOCC(symbol) {
-  // OCC format: TICKER(1-6 chars) + YYMMDD(6) + C/P(1) + strike*1000(8)
-  const match = symbol.match(/^([A-Z]{1,6})(\d{6})([CP])(\d{8})$/);
-  if (!match) return null;
-  const [, ticker, dateStr, cp, strikeStr] = match;
-  const yy = dateStr.slice(0, 2);
-  const mm = dateStr.slice(2, 4);
-  const dd = dateStr.slice(4, 6);
-  return {
-    ticker,
-    date: `20${yy}-${mm}-${dd}`,
-    type: cp === 'C' ? 'CALL' : 'PUT',
-    strike: parseInt(strikeStr) / 1000,
-  };
-}
-
-/**
- * Format OCC symbol into human-readable: "BKR 3/20/2026 PUT $53.50"
- */
-function formatContract(symbol) {
-  const p = parseOCC(symbol);
-  if (!p) return symbol;
-  const [y, m, d] = p.date.split('-');
-  return `${p.ticker} ${parseInt(m)}/${parseInt(d)}/${y} ${p.type} $${p.strike}`;
-}
-
-/**
- * Calculate DTE label from expiry date string
- */
-function dteLabel(expiryDate) {
-  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-  const exp = new Date(expiryDate + 'T16:00:00');
-  const diffMs = exp - now;
-  const days = Math.round(diffMs / (1000 * 60 * 60 * 24));
-  if (days <= 0) return '0DTE';
-  if (days === 1) return '1DTE';
-  return `${days}DTE`;
-}
-
-/**
- * Fetch real expiration dates from Alpaca's options contracts endpoint,
- * then fetch snapshots for the nearest valid expiry.
- */
-async function fetchChainWithExpiry(ticker, direction) {
-  const type = direction === 'CALL' ? 'call' : 'put';
-
-  // Step 1: Ask Alpaca what expiry dates actually exist for this ticker
-  const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-  const pad = n => String(n).padStart(2, '0');
-  const todayStr = `${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`;
-
-  let realExpiries = [];
+async function getExpiry(ticker, direction) {
   try {
     const res = await axios.get(`${DATA_URL}/v1beta1/options/contracts`, {
       headers,
       params: {
         underlying_symbols: ticker,
-        type,
-        expiration_date_gte: todayStr,
+        type: direction === 'CALL' ? 'call' : 'put',
         limit: 100,
-        status: 'active',
+        sort: 'expiration_date',
+        order: 'asc',
       },
       timeout: 8000,
     });
 
-    const contracts = res.data?.option_contracts || res.data?.contracts || [];
-    console.log(`[contract] ${ticker}: contracts endpoint returned ${contracts.length} results`);
+    const contracts = res.data?.option_contracts || [];
+    const today     = new Date().toISOString().split('T')[0];
 
-    // Extract unique expiry dates
-    const expirySet = new Set();
-    for (const c of contracts) {
-      const exp = c.expiration_date || c.expiry_date;
-      if (exp && exp >= todayStr) expirySet.add(exp);
-    }
-    realExpiries = [...expirySet].sort();
-    console.log(`[contract] ${ticker}: real expiries = [${realExpiries.join(', ')}]`);
+    // Get unique expiry dates that are >= today
+    const dates = [...new Set(
+      contracts
+        .map(c => c.expiration_date)
+        .filter(d => d >= today)
+    )].sort();
+
+    if (dates.length === 0) return null;
+
+    const nearest = dates[0];
+    const etNow   = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const isToday = nearest === today;
+    const label   = isToday ? '0DTE' : `${Math.round((new Date(nearest) - new Date(today)) / 86400000)}DTE`;
+
+    return { date: nearest, label };
   } catch (err) {
-    console.error(`[contract] ${ticker} contracts lookup failed:`, err.response?.status, err.message);
-    return { snapshots: {}, expiryDate: null };
+    console.error(`[contract] Expiry fetch failed for ${ticker}:`, err.message);
+    return null;
   }
+}
 
-  if (realExpiries.length === 0) {
-    console.log(`[contract] ${ticker}: no real expiry dates found`);
-    return { snapshots: {}, expiryDate: null };
+/**
+ * Fetch options chain from Alpaca
+ */
+async function fetchChain(ticker, expiry, direction) {
+  try {
+    const type = direction === 'CALL' ? 'call' : 'put';
+    const res  = await axios.get(`${DATA_URL}/v1beta1/options/snapshots/${ticker}`, {
+      headers,
+      params: {
+        expiration_date: expiry,
+        type,
+        limit: 50,
+      },
+      timeout: 8000,
+    });
+    return res.data?.snapshots || {};
+  } catch (err) {
+    console.error(`[contract] Chain fetch failed for ${ticker}:`, err.message);
+    return {};
   }
-
-  // Step 2: Fetch snapshots for the nearest real expiry (try up to 3 nearest)
-  for (const expiry of realExpiries.slice(0, 3)) {
-    try {
-      const res = await axios.get(`${DATA_URL}/v1beta1/options/snapshots/${ticker}`, {
-        headers,
-        params: {
-          expiration_date: expiry,
-          type,
-          limit: 50,
-        },
-        timeout: 8000,
-      });
-      const snapshots = res.data?.snapshots || {};
-      if (Object.keys(snapshots).length > 0) {
-        console.log(`[contract] ${ticker}: found ${Object.keys(snapshots).length} snapshots for ${expiry}`);
-        return { snapshots, expiryDate: expiry };
-      }
-    } catch (err) {
-      console.error(`[contract] ${ticker} snapshot error (${expiry}):`, err.message);
-    }
-  }
-
-  console.log(`[contract] ${ticker}: no snapshots found for any real expiry`);
-  return { snapshots: {}, expiryDate: null };
 }
 
 /**
@@ -160,6 +109,7 @@ function selectContract(snapshots, direction, currentPrice, grade) {
 
   if (contracts.length === 0) return null;
 
+  // Filter by delta range and minimum liquidity
   const candidates = contracts
     .map(([symbol, snap]) => {
       const greeks  = snap.greeks || {};
@@ -176,51 +126,25 @@ function selectContract(snapshots, direction, currentPrice, grade) {
     })
     .filter(c => {
       if (c.delta < deltaRange.min || c.delta > deltaRange.max) return false;
-      if (c.bid < 0.05) return false;
-      if (c.oi < 50)    return false;
+      if (c.bid < 0.05) return false; // no liquidity
+      if (c.oi < 50)    return false; // too illiquid
       if (c.mid <= 0)   return false;
+      // Reasonable spread — reject if spread > 20% of mid
       const spread = c.ask - c.bid;
       if (spread / c.mid > 0.25) return false;
       return true;
     });
 
-  if (candidates.length === 0) {
-    // Relax filters — drop OI requirement, widen delta range slightly
-    const relaxed = contracts
-      .map(([symbol, snap]) => {
-        const greeks = snap.greeks || {};
-        const quote  = snap.latestQuote || {};
-        const delta  = Math.abs(greeks.delta || 0);
-        const bid    = quote.bp || 0;
-        const ask    = quote.ap || 0;
-        const mid    = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
-        const iv     = greeks.impliedVolatility || 0;
-        const strike = snap.details?.strikePrice || 0;
-        const oi     = snap.openInterest || 0;
+  if (candidates.length === 0) return null;
 
-        return { symbol, delta, bid, ask, mid, oi, iv, strike, greeks, quote };
-      })
-      .filter(c => {
-        if (c.delta < deltaRange.min * 0.7 || c.delta > deltaRange.max * 1.3) return false;
-        if (c.bid < 0.01) return false;
-        if (c.mid <= 0)   return false;
-        return true;
-      });
-
-    if (relaxed.length === 0) return null;
-
-    relaxed.sort((a, b) => {
-      const idealDelta = (deltaRange.min + deltaRange.max) / 2;
-      return Math.abs(a.delta - idealDelta) - Math.abs(b.delta - idealDelta);
-    });
-    return relaxed[0];
-  }
-
+  // Score each candidate — prefer highest OI within delta range
   candidates.sort((a, b) => {
+    // Primary: closest delta to ideal (center of range)
     const idealDelta = (deltaRange.min + deltaRange.max) / 2;
     const aDeltaDist = Math.abs(a.delta - idealDelta);
     const bDeltaDist = Math.abs(b.delta - idealDelta);
     if (Math.abs(aDeltaDist - bDeltaDist) > 0.05) return aDeltaDist - bDeltaDist;
+    // Secondary: highest open interest
     return b.oi - a.oi;
   });
 
@@ -230,7 +154,7 @@ function selectContract(snapshots, direction, currentPrice, grade) {
 /**
  * Build contract recommendation
  */
-function buildRecommendation(contract, expiryDate, grade, direction, ticker) {
+function buildRecommendation(contract, expiry, grade, direction, ticker) {
   const targets  = TARGETS[grade] || TARGETS['B+'];
   const mid      = contract.mid;
   const entry_lo = Math.max(0.01, mid * 0.95);
@@ -241,28 +165,33 @@ function buildRecommendation(contract, expiryDate, grade, direction, ticker) {
   const t3   = targets.t3 ? mid * targets.t3 : null;
   const stop = mid * STOP_MULT;
 
-  const label = formatContract(contract.symbol);
-  const dteLbl = dteLabel(expiryDate);
+  // Format strike
+  const strike = contract.strike;
+  const label  = `${ticker} $${strike} ${direction} ${expiry.label}`;
 
   return {
     symbol:       contract.symbol,
     label,
-    strike:       contract.strike,
-    expiry:       expiryDate,
-    expiry_label: dteLbl,
+    strike,
+    expiry:       expiry.date,
+    expiry_label: expiry.label,
     direction,
+    // Pricing
     bid:          contract.bid,
     ask:          contract.ask,
     mid:          parseFloat(mid.toFixed(2)),
     entry_lo:     parseFloat(entry_lo.toFixed(2)),
     entry_hi:     parseFloat(entry_hi.toFixed(2)),
+    // Greeks
     delta:        parseFloat((contract.delta || 0).toFixed(3)),
     iv:           parseFloat(((contract.iv || 0) * 100).toFixed(1)),
     open_interest: contract.oi,
+    // Targets
     t1:           parseFloat(t1.toFixed(2)),
     t2:           t2 ? parseFloat(t2.toFixed(2)) : null,
     t3:           t3 ? parseFloat(t3.toFixed(2)) : null,
     stop:         parseFloat(stop.toFixed(2)),
+    // Risk/reward
     max_loss_pct: 40,
     r_r:          parseFloat((t1 / mid - 1).toFixed(2)),
     estimated:    false,
@@ -270,23 +199,30 @@ function buildRecommendation(contract, expiryDate, grade, direction, ticker) {
 }
 
 /**
- * Main export — get contract recommendation for a signal.
- * Only returns REAL contracts. Returns null if none found.
+ * Main export — get contract recommendation for a signal
  */
 export async function selectOptionsContract(ticker, direction, grade, currentPrice, atr) {
   try {
-    const { snapshots, expiryDate } = await fetchChainWithExpiry(ticker, direction);
-    if (!expiryDate) return null;
+    const expiry = await getExpiry(ticker, direction);
 
-    const contract = selectContract(snapshots, direction, currentPrice, grade);
-    if (!contract) {
-      console.log(`[contract] ${ticker}: no contract matched filters for ${expiryDate}`);
+    if (!expiry) {
+      // No contracts available for this ticker
+      console.log(`[contract] No options available for ${ticker}`);
       return null;
     }
 
-    return buildRecommendation(contract, expiryDate, grade, direction, ticker);
+    const snapshots = await fetchChain(ticker, expiry.date, direction);
+    const contract  = selectContract(snapshots, direction, currentPrice, grade);
+
+    if (!contract) {
+      console.log(`[contract] ${ticker}: no contract matched filters for ${expiry.date}`);
+      return null;
+    }
+
+    return buildRecommendation(contract, expiry, grade, direction, ticker);
   } catch (err) {
     console.error(`[contract] Selection failed for ${ticker}:`, err.message);
     return null;
   }
 }
+
