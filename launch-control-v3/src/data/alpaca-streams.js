@@ -7,6 +7,7 @@ import {
   setStreamStatus, initTicker,
 } from './state.js';
 import { classifyCatalyst } from '../scoring/news.js';
+import { scoreTicker } from '../scoring/loop.js';
 import logger from '../utils/logger.js';
 
 const STREAM_URL  = process.env.ALPACA_STREAM_URL || 'wss://stream.data.alpaca.markets';
@@ -38,6 +39,7 @@ export function onNewSignalReady(callback) {
 // ── STOCK BARS STREAM ──────────────────────────────────
 
 export function connectStockStream() {
+  if (stockWs && stockWs.readyState < 2) return;
   const url = `${STREAM_URL}/v2/${process.env.ALPACA_FEED || 'iex'}`;
   logger.info(`Connecting stock stream: ${url}`);
   setStreamStatus('bars', 'connecting');
@@ -99,8 +101,8 @@ function handleStockMessage(msg) {
       } else if (trackedTickers.includes(msg.S)) {
         updateTickerBar(msg.S, msg);
         console.log('[BAR]', msg.S, msg.c);
-        // Notify scoring loop that new bar is ready
-        if (onSignalCallback) onSignalCallback(msg.S);
+        // Score ticker directly
+        scoreTicker(msg.S).catch(err => logger.error(`Score error ${msg.S}:`, err.message));
       }
       break;
 
@@ -126,6 +128,7 @@ function subscribeStockBars() {
 // ── NEWS STREAM ────────────────────────────────────────
 
 export function connectNewsStream() {
+  if (newsWs && newsWs.readyState < 2) return;
   const url = `${STREAM_URL}/v1beta1/news`;
   logger.info(`Connecting news stream: ${url}`);
   setStreamStatus('news', 'connecting');
