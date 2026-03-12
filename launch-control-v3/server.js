@@ -101,15 +101,43 @@ app.get('/api/signals', async (req, res) => {
   }
 });
 
-// Debug — test contract selector on live server
+// Debug — test contract selector + raw Alpaca API on live server
 app.get('/api/debug/contract/:ticker/:direction', async (req, res) => {
   const { ticker, direction } = req.params;
+  const dir = direction.toUpperCase();
+  const dataUrl = process.env.ALPACA_DATA_URL || 'https://data.alpaca.markets';
+  const hdrs = {
+    'APCA-API-KEY-ID': process.env.ALPACA_API_KEY,
+    'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY,
+  };
+  const diag = { ticker, direction: dir, keySet: !!process.env.ALPACA_API_KEY, secretSet: !!process.env.ALPACA_SECRET_KEY, dataUrl };
+
+  // Test 1: stock snapshot (known working)
   try {
-    const result = await selectOptionsContract(ticker, direction.toUpperCase(), 'B+', 100, 0.025);
-    res.json({ ticker, direction, result });
-  } catch (err) {
-    res.json({ ticker, direction, error: err.message });
-  }
+    const r = await axios.get(`${dataUrl}/v2/stocks/${ticker}/snapshot`, { headers: hdrs, params: { feed: 'sip' }, timeout: 5000 });
+    diag.stockSnapshot = { status: 'ok', price: r.data.latestTrade?.p };
+  } catch (e) { diag.stockSnapshot = { status: e.response?.status, error: e.message }; }
+
+  // Test 2: options contracts endpoint
+  try {
+    const r = await axios.get(`${dataUrl}/v1beta1/options/contracts`, { headers: hdrs, params: { underlying_symbols: ticker, type: dir === 'CALL' ? 'call' : 'put', limit: 5 }, timeout: 5000 });
+    diag.optionsContracts = { status: 'ok', count: r.data?.option_contracts?.length, sample: r.data?.option_contracts?.slice(0, 2) };
+  } catch (e) { diag.optionsContracts = { status: e.response?.status, error: e.message, body: e.response?.data }; }
+
+  // Test 3: options snapshots
+  try {
+    const r = await axios.get(`${dataUrl}/v1beta1/options/snapshots/${ticker}`, { headers: hdrs, params: { type: dir === 'CALL' ? 'call' : 'put', limit: 5 }, timeout: 5000 });
+    const keys = Object.keys(r.data?.snapshots || {});
+    diag.optionsSnapshots = { status: 'ok', count: keys.length, symbols: keys.slice(0, 3) };
+  } catch (e) { diag.optionsSnapshots = { status: e.response?.status, error: e.message }; }
+
+  // Test 4: full contract selector
+  try {
+    const result = await selectOptionsContract(ticker, dir, 'B+', 100, 0.025);
+    diag.selectorResult = result;
+  } catch (e) { diag.selectorError = e.message; }
+
+  res.json(diag);
 });
 
 // Status — session + propagation windows
