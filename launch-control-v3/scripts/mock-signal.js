@@ -1,4 +1,4 @@
-import { query } from '../src/data/db.js';
+import { query } from './src/data/db.js';
 
 // First run the contract column migration
 await query(`

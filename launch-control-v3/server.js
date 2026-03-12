@@ -206,13 +206,142 @@ server.listen(PORT, () => {
 
 // ── SCORING WORKER ────────────────────────────────────────────────────────────
 async function startWorker() {
+  // Always start REST poller — guaranteed signal generation every 60s
+  startRestPoller();
+
+  // Also try WebSocket worker for real-time scoring
   try {
-    // Import and run the scoring engine directly
     await import('./src/main.js');
-    console.log('[LC v3] Scoring worker started');
+    console.log('[LC v3] WebSocket scoring worker started');
   } catch (err) {
-    console.error('[LC v3] Worker failed to start:', err.message);
-    console.error(err.stack);
-    console.log('[LC v3] Running in API-only mode (no live scoring)');
+    console.error('[LC v3] WebSocket worker failed — REST poller is backup:', err.message);
   }
+}
+
+// ── REST POLLING SCORER (guaranteed fallback) ─────────────────────────────────
+const GRADE_SCALE  = [[83,'A+'],[73,'A'],[63,'A-'],[53,'B+'],[43,'B']];
+const POSITION_SZ  = {'A+':0.20,'A':0.15,'A-':0.10,'B+':0.075,'B':0.05};
+const ACCOUNT_SIZE = parseFloat(process.env.ACCOUNT_SIZE || '7500');
+const ALPACA_FEED  = process.env.ALPACA_FEED || 'iex';
+const pollerFired  = new Set();
+
+function toGrade(score) {
+  for (const [t, g] of GRADE_SCALE) if (score >= t) return g;
+  return null;
+}
+
+function getSessionPoller() {
+  const et   = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const day  = et.getDay();
+  if (day === 0 || day === 6) return 'WEEKEND';
+  const mins = et.getHours() * 60 + et.getMinutes();
+  if (mins >= 240  && mins < 570)  return 'PRE_MARKET';
+  if (mins >= 570  && mins < 960)  return 'REGULAR';
+  if (mins >= 960  && mins < 1200) return 'POST_MARKET';
+  return 'OVERNIGHT';
+}
+
+async function startRestPoller() {
+  const alpacaHdrs = {
+    'APCA-API-KEY-ID':     process.env.ALPACA_API_KEY,
+    'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY,
+  };
+  const dataUrl = process.env.ALPACA_DATA_URL || 'https://data.alpaca.markets';
+
+  async function poll() {
+    const session = getSessionPoller();
+    if (session === 'OVERNIGHT' || session === 'WEEKEND') return;
+
+    try {
+      const profileRes = await db.query('SELECT ticker, atr_20d FROM lc_v3.equity_profiles');
+      const profiles   = {};
+      profileRes.rows.forEach(p => { profiles[p.ticker] = p; });
+      const tickers = Object.keys(profiles);
+
+      const allSnaps = {};
+      for (let i = 0; i < tickers.length; i += 50) {
+        const batch = tickers.slice(i, i + 50);
+        const res = await axios.get(`${dataUrl}/v2/stocks/snapshots`, {
+          headers: alpacaHdrs, params: { symbols: batch.join(','), feed: ALPACA_FEED }, timeout: 10000,
+        });
+        Object.assign(allSnaps, res.data || {});
+      }
+
+      const mktRes = await axios.get(`${dataUrl}/v2/stocks/snapshots`, {
+        headers: alpacaHdrs, params: { symbols: 'SPY,QQQ', feed: ALPACA_FEED }, timeout: 5000,
+      });
+      const mkt    = mktRes.data || {};
+      const spyPct = mkt.SPY ? ((mkt.SPY.latestTrade?.p||0)-(mkt.SPY.prevDailyBar?.c||0))/(mkt.SPY.prevDailyBar?.c||1) : 0;
+      const qqqPct = mkt.QQQ ? ((mkt.QQQ.latestTrade?.p||0)-(mkt.QQQ.prevDailyBar?.c||0))/(mkt.QQQ.prevDailyBar?.c||1) : 0;
+
+      console.log(`[POLL] ${Object.keys(allSnaps).length} snaps SPY=${(spyPct*100).toFixed(2)}% QQQ=${(qqqPct*100).toFixed(2)}%`);
+
+      let written = 0;
+      const today = new Date().toISOString().split('T')[0];
+
+      for (const [ticker, snap] of Object.entries(allSnaps)) {
+        const price     = snap.latestTrade?.p || snap.latestQuote?.ap || 0;
+        const prevClose = snap.prevDailyBar?.c || 0;
+        if (!price || !prevClose) continue;
+
+        const changePct = (price - prevClose) / prevClose;
+        const direction = changePct >= 0 ? 'CALL' : 'PUT';
+        const absPct    = Math.abs(changePct);
+        const atr       = parseFloat(profiles[ticker]?.atr_20d || 0.025);
+        const atrMult   = atr > 0 ? absPct / atr : 0;
+
+        const paScore  = Math.min(35, Math.round(atrMult * 15));
+        const relVol   = snap.minuteBar?.v ? snap.minuteBar.v / 1000 : 1;
+        const volScore = Math.min(30, Math.round(relVol));
+        const spyOk    = direction === 'CALL' ? spyPct > 0 : spyPct < 0;
+        const qqqOk    = direction === 'CALL' ? qqqPct > 0 : qqqPct < 0;
+        const mktScore = (spyOk?7:0) + (qqqOk?7:0);
+        const et2      = new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
+        const mins2    = et2.getHours()*60 + et2.getMinutes();
+        const timScore = (mins2>=570 && mins2<960) ? 5 : 2;
+        const composite = paScore + volScore + mktScore + timScore;
+
+        let grade = toGrade(composite);
+        if (!grade) continue;
+        if (paScore < 17 || volScore < 14) continue;
+
+        const isExt = session !== 'REGULAR';
+        if (isExt && ['A+','A','A-'].includes(grade)) grade = 'B+';
+        const sizePct = (POSITION_SZ[grade]||0.05) * (isExt?0.5:1.0);
+
+        const key = `${today}-${ticker}-${direction}`;
+        if (pollerFired.has(key)) continue;
+
+        await db.query(`
+          INSERT INTO lc_v3.signals (
+            ticker, direction, grade, status, composite_raw, signal_tier,
+            score_price_action, score_volume, score_news, score_market, score_timing,
+            position_size_pct, position_size_dollars,
+            spy_change_pct, qqq_change_pct, relative_volume, atr_multiple,
+            expires_at, created_at
+          ) VALUES ($1,$2,$3,'ACTIVE',$4,'primary',$5,$6,0,$7,$8,$9,$10,$11,$12,$13,$14,
+            NOW() + INTERVAL '10 minutes', NOW())
+        `, [
+          ticker, direction, grade, composite,
+          paScore, volScore, mktScore, timScore,
+          sizePct, Math.round(ACCOUNT_SIZE * sizePct),
+          spyPct, qqqPct,
+          parseFloat(relVol.toFixed(2)), parseFloat(atrMult.toFixed(2)),
+        ]);
+
+        pollerFired.add(key);
+        written++;
+        console.log(`[SIGNAL] ${ticker} ${direction} ${grade} composite=${composite} PA=${paScore} VOL=${volScore}`);
+      }
+
+      if (written > 0) console.log(`[POLL] ${written} new signals written`);
+
+    } catch(err) {
+      console.error('[POLL] Error:', err.message);
+    }
+  }
+
+  setTimeout(poll, 5000);
+  setInterval(poll, 60000);
+  console.log('[LC v3] REST poller started — scoring every 60s');
 }

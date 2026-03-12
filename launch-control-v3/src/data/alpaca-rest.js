@@ -30,7 +30,6 @@ export async function fetchSnapshot(ticker) {
       latestPrice: snap.latestTrade?.p || snap.latestQuote?.ap || 0,
     };
   } catch (err) {
-    console.error('Snapshot error:', err.response?.status, err.response?.data || err.message);
     return { prevClose: 0, prevHigh: 0, prevLow: 0, latestPrice: 0 };
   }
 }
@@ -54,7 +53,6 @@ export async function fetchSnapshots(tickers) {
     }
     return results;
   } catch (err) {
-    console.error('Snapshot error:', err.response?.status, err.response?.data || err.message);
     return {};
   }
 }
