@@ -1,12 +1,12 @@
 import 'dotenv/config';
-import axios from 'axios';
 import express from 'express';
-import { selectOptionsContract } from './src/options/contract-selector.js';
+import axios from 'axios';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { Pool } from 'pg';
 import cron from 'node-cron';
 import { createServer } from 'http';
+import { selectOptionsContract } from './src/options/contract-selector.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app  = express();
@@ -86,97 +86,19 @@ app.get('/api/signals', async (req, res) => {
       contract_stop:     Number(s.contract_stop)       || null,
       human_entry_price: Number(s.human_entry_price)   || null,
       human_exit_price:  Number(s.human_exit_price)    || null,
-      first_seen_at:     s.first_seen_at?.toISOString()  || s.created_at?.toISOString(),
-      last_confirmed_at: s.last_confirmed_at?.toISOString() || s.created_at?.toISOString(),
-      confirmation_count: s.confirmation_count || 1,
-      peak_composite:    Number(s.peak_composite) || Number(s.composite_raw) || 0,
-      peak_grade:        s.peak_grade || s.grade,
-      composite_history: s.composite_history || [],
-      momentum_trend:    s.momentum_trend || null,
+      first_seen_at:     s.first_seen_at?.toISOString()  || null,
+      last_confirmed_at: s.last_confirmed_at?.toISOString() || null,
+      confirmation_count: Number(s.confirmation_count) || 1,
+      peak_composite:    Number(s.peak_composite)      || null,
+      peak_grade:        s.peak_grade                  || null,
+      composite_history: s.composite_history            || [],
+      momentum_trend:    s.momentum_trend              || null,
     }));
     res.json({ signals, count: signals.length });
   } catch (err) {
     console.error('Signals error:', err.message);
     res.json({ signals: [], error: err.message });
   }
-});
-
-// Backfill contracts for signals missing them
-async function backfillContracts() {
-  try {
-    const missing = await db.query(`
-      SELECT signal_id, ticker, direction, grade
-      FROM lc_v3.signals
-      WHERE DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
-        AND contract_mid IS NULL AND status = 'ACTIVE'
-    `);
-    if (missing.rows.length === 0) return;
-    console.log(`[BACKFILL] ${missing.rows.length} signals missing contracts`);
-    for (const row of missing.rows) {
-      try {
-        const contract = await selectOptionsContract(row.ticker, row.direction, row.grade, 0, 0);
-        if (contract && contract.mid > 0) {
-          await db.query(`
-            UPDATE lc_v3.signals SET
-              contract_symbol=$1, contract_strike=$2, contract_expiry=$3, contract_expiry_label=$4,
-              contract_bid=$5, contract_ask=$6, contract_mid=$7,
-              contract_entry_lo=$8, contract_entry_hi=$9,
-              contract_delta=$10, contract_iv=$11,
-              contract_t1=$12, contract_t2=$13, contract_t3=$14, contract_stop=$15,
-              contract_estimated=false
-            WHERE signal_id=$16
-          `, [
-            contract.symbol, contract.strike, contract.expiry, contract.expiry_label,
-            contract.bid, contract.ask, contract.mid,
-            contract.entry_lo, contract.entry_hi,
-            contract.delta, contract.iv,
-            contract.t1, contract.t2, contract.t3, contract.stop,
-            row.signal_id,
-          ]);
-          console.log(`[BACKFILL] ${row.ticker} ${row.direction}: ${contract.symbol} mid=$${contract.mid}`);
-        }
-      } catch (e) { console.error(`[BACKFILL] ${row.ticker}:`, e.message); }
-    }
-  } catch (e) { console.error('[BACKFILL] Error:', e.message); }
-}
-
-// Debug — test contract selector + raw Alpaca API on live server
-app.get('/api/debug/contract/:ticker/:direction', async (req, res) => {
-  const { ticker, direction } = req.params;
-  const dir = direction.toUpperCase();
-  const dataUrl = process.env.ALPACA_DATA_URL || 'https://data.alpaca.markets';
-  const hdrs = {
-    'APCA-API-KEY-ID': process.env.ALPACA_API_KEY,
-    'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY,
-  };
-  const diag = { ticker, direction: dir, keySet: !!process.env.ALPACA_API_KEY, secretSet: !!process.env.ALPACA_SECRET_KEY, dataUrl };
-
-  // Test 1: stock snapshot (known working)
-  try {
-    const r = await axios.get(`${dataUrl}/v2/stocks/${ticker}/snapshot`, { headers: hdrs, params: { feed: 'sip' }, timeout: 5000 });
-    diag.stockSnapshot = { status: 'ok', price: r.data.latestTrade?.p };
-  } catch (e) { diag.stockSnapshot = { status: e.response?.status, error: e.message }; }
-
-  // Test 2: options contracts endpoint
-  try {
-    const r = await axios.get(`${dataUrl}/v1beta1/options/contracts`, { headers: hdrs, params: { underlying_symbols: ticker, type: dir === 'CALL' ? 'call' : 'put', limit: 5 }, timeout: 5000 });
-    diag.optionsContracts = { status: 'ok', count: r.data?.option_contracts?.length, sample: r.data?.option_contracts?.slice(0, 2) };
-  } catch (e) { diag.optionsContracts = { status: e.response?.status, error: e.message, body: e.response?.data }; }
-
-  // Test 3: options snapshots
-  try {
-    const r = await axios.get(`${dataUrl}/v1beta1/options/snapshots/${ticker}`, { headers: hdrs, params: { type: dir === 'CALL' ? 'call' : 'put', limit: 5 }, timeout: 5000 });
-    const keys = Object.keys(r.data?.snapshots || {});
-    diag.optionsSnapshots = { status: 'ok', count: keys.length, symbols: keys.slice(0, 3) };
-  } catch (e) { diag.optionsSnapshots = { status: e.response?.status, error: e.message }; }
-
-  // Test 4: full contract selector
-  try {
-    const result = await selectOptionsContract(ticker, dir, 'B+', 100, 0.025);
-    diag.selectorResult = result;
-  } catch (e) { diag.selectorError = e.message; }
-
-  res.json(diag);
 });
 
 // Status — session + propagation windows
@@ -211,8 +133,9 @@ app.get('/api/status', async (req, res) => {
 
     // Stream status from worker (shared via global)
     const streams = global.streamStatus || { bars: 'unknown', news: 'unknown' };
+    const regime  = global.currentRegime || { regime: 'NEUTRAL', regimeNote: '', sizeMult: 1.0 };
 
-    res.json({ session, propagation: prop, streams, time: now.toISOString() });
+    res.json({ session, propagation: prop, streams, regime: regime.regime, regimeNote: regime.regimeNote, time: now.toISOString() });
   } catch (err) {
     res.json({ session: 'UNKNOWN', propagation: [], streams: {}, error: err.message });
   }
@@ -280,6 +203,49 @@ app.post('/api/edit', async (req, res) => {
 // Health check
 app.get('/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
+// Debug endpoint — test contract selector on live Render
+app.get('/api/debug/contract/:ticker/:direction', async (req, res) => {
+  try {
+    const { ticker, direction } = req.params;
+    const alpacaHdrs = {
+      'APCA-API-KEY-ID': process.env.ALPACA_API_KEY,
+      'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY,
+    };
+    const dataUrl = process.env.ALPACA_DATA_URL || 'https://data.alpaca.markets';
+
+    // 1) Stock snapshot
+    let stockSnap = null;
+    try {
+      const r = await axios.get(`${dataUrl}/v2/stocks/snapshots`, {
+        headers: alpacaHdrs, params: { symbols: ticker, feed: ALPACA_FEED }, timeout: 8000,
+      });
+      stockSnap = r.data?.[ticker] || null;
+    } catch (e) { stockSnap = { error: e.response?.status + ' ' + e.message }; }
+
+    const price = stockSnap?.latestTrade?.p || 100;
+
+    // 2) Options snapshots
+    let optSnap = null;
+    try {
+      const type = direction === 'CALL' ? 'call' : 'put';
+      const r = await axios.get(`${dataUrl}/v1beta1/options/snapshots/${ticker}`, {
+        headers: alpacaHdrs, params: { type, limit: 20 }, timeout: 10000,
+      });
+      optSnap = { count: Object.keys(r.data?.snapshots || {}).length, sample: Object.keys(r.data?.snapshots || {}).slice(0, 5) };
+    } catch (e) { optSnap = { error: e.response?.status + ' ' + e.message }; }
+
+    // 3) Full selector
+    let contract = null;
+    try {
+      contract = await selectOptionsContract(ticker, direction, 'A', price, 0.025);
+    } catch (e) { contract = { error: e.message }; }
+
+    res.json({ ticker, direction, price, stockSnap: !!stockSnap, optSnap, contract });
+  } catch (err) {
+    res.json({ error: err.message });
+  }
+});
+
 // Catch-all — serve dashboard
 app.get('*', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'index.html'));
@@ -312,7 +278,6 @@ const GRADE_SCALE  = [[83,'A+'],[73,'A'],[63,'A-'],[53,'B+'],[43,'B']];
 const POSITION_SZ  = {'A+':0.20,'A':0.15,'A-':0.10,'B+':0.075,'B':0.05};
 const ACCOUNT_SIZE = parseFloat(process.env.ACCOUNT_SIZE || '7500');
 const ALPACA_FEED  = process.env.ALPACA_FEED || 'sip';
-// (no more pollerFired Set — dedup via DB lookup + UPSERT)
 
 function toGrade(score) {
   for (const [t, g] of GRADE_SCALE) if (score >= t) return g;
@@ -363,184 +328,281 @@ async function startRestPoller() {
       const spyPct = mkt.SPY ? ((mkt.SPY.latestTrade?.p||0)-(mkt.SPY.prevDailyBar?.c||0))/(mkt.SPY.prevDailyBar?.c||1) : 0;
       const qqqPct = mkt.QQQ ? ((mkt.QQQ.latestTrade?.p||0)-(mkt.QQQ.prevDailyBar?.c||0))/(mkt.QQQ.prevDailyBar?.c||1) : 0;
 
-      console.log(`[POLL] ${Object.keys(allSnaps).length} snaps SPY=${(spyPct*100).toFixed(2)}% QQQ=${(qqqPct*100).toFixed(2)}%`);
+      // SPY bars for regime detection (last 3 minute bars)
+      const spyBars = mkt.SPY ? [mkt.SPY.prevMinuteBar, mkt.SPY.minuteBar].filter(Boolean) : [];
 
-      let written = 0, updated = 0;
+      // Fetch VIX
+      let vix = 18;
+      try {
+        const vixRes = await axios.get(`${dataUrl}/v2/stocks/VIX/bars/latest`, {
+          headers: alpacaHdrs, params: { feed: 'iex' }, timeout: 5000,
+        });
+        vix = vixRes.data?.bar?.c || 18;
+      } catch(e) {}
+
+      // Classify market regime once for all signals this cycle
+      const { classifyRegime } = await import('./src/scoring/intelligence.js');
+      const regime = classifyRegime({ spyPct, qqqPct }, vix, spyBars);
+
+      if (regime.regimeNote) {
+        console.log(`[REGIME] ${regime.regime} — ${regime.regimeNote}`);
+      }
+      global.currentRegime = regime;
+
+      console.log(`[POLL] ${Object.keys(allSnaps).length} snaps SPY=${(spyPct*100).toFixed(2)}% QQQ=${(qqqPct*100).toFixed(2)}% VIX=${vix} REGIME=${regime.regime}`);
+
+      // Import intelligence functions
+      const { analyzeLevels, analyzeTrend, gateSignal } = await import('./src/scoring/intelligence.js');
+
+      let written = 0;
+      const today = new Date().toISOString().split('T')[0];
 
       for (const [ticker, snap] of Object.entries(allSnaps)) {
         const price     = snap.latestTrade?.p || snap.latestQuote?.ap || 0;
         const prevClose = snap.prevDailyBar?.c || 0;
+        const openPrice = snap.dailyBar?.o || price;
         if (!price || !prevClose) continue;
 
-        const changePct = (price - prevClose) / prevClose;
-        const direction = changePct >= 0 ? 'CALL' : 'PUT';
-        const absPct    = Math.abs(changePct);
-        const atr       = parseFloat(profiles[ticker]?.atr_20d || 0.025);
-        const atrMult   = atr > 0 ? absPct / atr : 0;
+        const latestBar = snap.minuteBar;
+        const prevBar   = snap.prevMinuteBar;
+        if (!latestBar || !prevBar) continue;
 
-        const paScore  = Math.min(35, Math.round(atrMult * 15));
-        const relVol   = snap.minuteBar?.v ? snap.minuteBar.v / 1000 : 1;
-        const volScore = Math.min(30, Math.round(relVol));
+        const recentMove = latestBar.c > 0 && prevBar.c > 0
+          ? (latestBar.c - prevBar.c) / prevBar.c
+          : 0;
+
+        const direction  = recentMove >= 0 ? 'CALL' : 'PUT';
+        const mult       = direction === 'CALL' ? 1 : -1;
+        const absRecent  = Math.abs(recentMove);
+        const moveFromOpen = openPrice > 0 ? ((price - openPrice) / openPrice) * mult : 0;
+        const atr        = parseFloat(profiles[ticker]?.atr_20d || 0.025);
+        const moveInATRs = atr > 0 ? Math.abs(moveFromOpen) / atr : 0;
+
+        if (absRecent < atr * 0.1) continue;
+
+        // Build mock state for intelligence engine from snapshot data
+        const vwap         = snap.minuteBar?.vw || price;
+        const sessionHigh  = snap.dailyBar?.h || price;
+        const sessionLow   = snap.dailyBar?.l || price;
+        const prevDayHigh  = snap.prevDailyBar?.h || prevClose * 1.01;
+        const prevDayLow   = snap.prevDailyBar?.l || prevClose * 0.99;
+
+        // Build synthetic bar history from daily and minute bars
+        // REST poller has limited bar history vs WebSocket — use what we have
+        const syntheticBars = [
+          snap.prevMinuteBar,
+          snap.minuteBar,
+        ].filter(Boolean).map(b => ({ o: b.o, h: b.h, l: b.l, c: b.c, v: b.v || 0 }));
+
+        const mockState = {
+          close: price, vwap, sessionHigh, sessionLow,
+          prevDayHigh, prevDayLow, sessionOpen: openPrice,
+          bars: syntheticBars,
+        };
+
+        // Freshness classification
+        const freshness = moveInATRs < 0.5 ? 'FRESH'
+                        : moveInATRs < 1.0 ? 'DEVELOPING'
+                        : moveInATRs < 1.5 ? 'EXTENDED'
+                        : moveInATRs < 2.0 ? 'LATE'
+                        : 'EXHAUSTED';
+
+        // Run intelligence analysis
+        const levels = analyzeLevels(mockState, atr);
+        const trend  = analyzeTrend(syntheticBars, direction); // limited without full bar history
+
+        // Gate signal through full intelligence check
+        const gate = gateSignal(direction, trend, levels, regime, freshness);
+
+        if (!gate.allow) {
+          console.log(`[GATE] ${ticker} ${direction} rejected — ${gate.reason}`);
+          continue;
+        }
+
+        // Scoring
+        const freshnessPenalty = moveInATRs > 1.5 ? 0.5 : moveInATRs > 1.0 ? 0.75 : 1.0;
+        const atrMult  = atr > 0 ? absRecent / atr : 0;
+        const paScore  = Math.min(35, Math.round(atrMult * 20 * freshnessPenalty));
+
+        const avgDayVol = snap.dailyBar?.v || 0;
+        const minsOpen  = Math.max(1, (() => {
+          const et = new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
+          return Math.max(1, (et.getHours() * 60 + et.getMinutes()) - 570);
+        })());
+        const avgMinVol = avgDayVol / minsOpen;
+        const curMinVol = latestBar.v || 0;
+        const relVol    = avgMinVol > 0 ? curMinVol / avgMinVol : 1;
+        const volScore  = Math.min(30, Math.round(relVol * 12));
+
         const spyOk    = direction === 'CALL' ? spyPct > 0 : spyPct < 0;
         const qqqOk    = direction === 'CALL' ? qqqPct > 0 : qqqPct < 0;
         const mktScore = (spyOk?7:0) + (qqqOk?7:0);
+
         const et2      = new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
         const mins2    = et2.getHours()*60 + et2.getMinutes();
-        const timScore = (mins2>=570 && mins2<960) ? 5 : 2;
+        const timScore = (mins2>=570 && mins2<660) ? 5
+                       : (mins2>=660 && mins2<720) ? 4
+                       : (mins2>=720 && mins2<780) ? 1
+                       : (mins2>=780 && mins2<960) ? 3
+                       : 2;
+
         const composite = paScore + volScore + mktScore + timScore;
 
         let grade = toGrade(composite);
         if (!grade) continue;
-        if (paScore < 17 || volScore < 14) continue;
+        if (paScore < 15 || volScore < 12) continue;
 
         const isExt = session !== 'REGULAR';
         if (isExt && ['A+','A','A-'].includes(grade)) grade = 'B+';
-        const sizePct = (POSITION_SZ[grade]||0.05) * (isExt?0.5:1.0);
 
-        // Look up existing active signal for this ticker+direction today
-        const existing = await db.query(
-          `SELECT signal_id, composite_raw, peak_composite, peak_grade,
-                  confirmation_count, composite_history, contract_mid,
-                  human_taken
-           FROM lc_v3.signals
-           WHERE ticker=$1 AND direction=$2
-             AND DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
-             AND status NOT IN ('TAKEN','SKIPPED')
-           ORDER BY created_at DESC LIMIT 1`,
-          [ticker, direction]
-        );
+        // Apply intelligence size multiplier
+        const baseSizePct = (POSITION_SZ[grade]||0.05) * (isExt?0.5:1.0);
+        const sizePct     = baseSizePct * (gate.adjustedSizeMult || 1.0);
 
-        // Get contract recommendation
+        // Build signal note with full context
+        const signalNote = [
+          freshness,
+          `Risk:${freshness === 'FRESH' ? 'LOW' : freshness === 'DEVELOPING' ? 'MOD' : 'HIGH'}`,
+          `Type:${gate.signalType || 'NEUTRAL'}`,
+          `From Open:${(moveFromOpen*100).toFixed(2)}%`,
+          regime.regimeNote ? `Regime:${regime.regime}` : null,
+          levels.nearestAbove ? `ResAt:$${levels.nearestAbove.price.toFixed(2)}(${levels.nearestAbove.name})` : null,
+        ].filter(Boolean).join(' · ');
+
+        // ── MOMENTUM UPSERT — one signal per ticker+direction per day ──
+        const existing = await db.query(`
+          SELECT signal_id, composite_raw, grade, peak_composite, peak_grade,
+                 confirmation_count, composite_history, human_taken
+          FROM lc_v3.signals
+          WHERE ticker = $1 AND direction = $2
+            AND DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
+            AND status NOT IN ('TAKEN','SKIPPED')
+          ORDER BY created_at DESC LIMIT 1
+        `, [ticker, direction]);
+
+        // Fetch contract
         let contract = null;
         try {
           contract = await selectOptionsContract(ticker, direction, grade, price, atr);
-        } catch (err) {
-          console.error(`[contract] ${ticker}:`, err.message);
+        } catch (ce) {
+          console.error(`[contract] ${ticker}: ${ce.message}`);
         }
 
         if (existing.rows.length > 0) {
-          // ── UPDATE PATH (confirmation) ──
           const row = existing.rows[0];
-          if (row.human_taken !== null) continue; // already acted on
+          if (row.human_taken !== null) continue; // don't update taken/skipped
 
-          const oldPeak = row.peak_composite || row.composite_raw;
-          const newPeak = Math.max(oldPeak, composite);
-          const newPeakGrade = composite >= oldPeak ? grade : (row.peak_grade || grade);
-          const count = (row.confirmation_count || 1) + 1;
+          const oldHistory = row.composite_history || [];
+          const newHistory = [...oldHistory, { t: Date.now(), score: composite, grade }].slice(-60);
+          const newPeak = composite > (row.peak_composite || 0) ? composite : row.peak_composite;
+          const newPeakGrade = composite > (row.peak_composite || 0) ? grade : row.peak_grade;
 
-          // Append to history (cap at 60)
-          const history = Array.isArray(row.composite_history) ? [...row.composite_history] : [];
-          history.push({ t: new Date().toISOString(), c: composite, g: grade });
-          if (history.length > 60) history.splice(0, history.length - 60);
-
-          // Compute trend from last 3
+          // Compute momentum trend from last 3 entries
           let trend = 'STABLE';
-          if (history.length >= 3) {
-            const r3 = history.slice(-3).map(h => h.c);
-            if (r3[2] > r3[0] + 2) trend = 'STRENGTHENING';
-            else if (r3[2] < r3[0] - 2) trend = 'WEAKENING';
+          if (newHistory.length >= 3) {
+            const last3 = newHistory.slice(-3).map(h => h.score);
+            if (last3[2] > last3[0] + 3) trend = 'STRENGTHENING';
+            else if (last3[2] < last3[0] - 3) trend = 'WEAKENING';
           }
 
-          // Always update contract if we got one — prices change every poll
-          if (contract && contract.mid > 0) {
-            await db.query(`
-              UPDATE lc_v3.signals SET
-                composite_raw=$1, grade=$2,
-                score_price_action=$3, score_volume=$4, score_market=$5, score_timing=$6,
-                peak_composite=$7, peak_grade=$8, confirmation_count=$9,
-                composite_history=$10, momentum_trend=$11,
-                last_confirmed_at=NOW(), expires_at=NOW()+INTERVAL '10 minutes',
-                spy_change_pct=$12, qqq_change_pct=$13, relative_volume=$14, atr_multiple=$15,
-                position_size_pct=$16, position_size_dollars=$17,
-                contract_symbol=$18, contract_strike=$19, contract_expiry=$20, contract_expiry_label=$21,
-                contract_bid=$22, contract_ask=$23, contract_mid=$24,
-                contract_entry_lo=$25, contract_entry_hi=$26,
-                contract_delta=$27, contract_iv=$28,
-                contract_t1=$29, contract_t2=$30, contract_t3=$31, contract_stop=$32,
-                contract_estimated=$33
-              WHERE signal_id=$34
-            `, [
-              composite, grade, paScore, volScore, mktScore, timScore,
-              newPeak, newPeakGrade, count, JSON.stringify(history), trend,
-              spyPct, qqqPct, parseFloat(relVol.toFixed(2)), parseFloat(atrMult.toFixed(2)),
-              sizePct, Math.round(ACCOUNT_SIZE * sizePct),
-              contract.symbol, contract.strike, contract.expiry, contract.expiry_label,
-              contract.bid, contract.ask, contract.mid,
-              contract.entry_lo, contract.entry_hi,
-              contract.delta, contract.iv,
-              contract.t1, contract.t2, contract.t3, contract.stop,
-              contract.estimated || false,
-              row.signal_id,
-            ]);
-          } else {
-            // No contract available — update scores only
-            await db.query(`
-              UPDATE lc_v3.signals SET
-                composite_raw=$1, grade=$2,
-                score_price_action=$3, score_volume=$4, score_market=$5, score_timing=$6,
-                peak_composite=$7, peak_grade=$8, confirmation_count=$9,
-                composite_history=$10, momentum_trend=$11,
-                last_confirmed_at=NOW(), expires_at=NOW()+INTERVAL '10 minutes',
-                spy_change_pct=$12, qqq_change_pct=$13, relative_volume=$14, atr_multiple=$15,
-                position_size_pct=$16, position_size_dollars=$17
-              WHERE signal_id=$18
-            `, [
-              composite, grade, paScore, volScore, mktScore, timScore,
-              newPeak, newPeakGrade, count, JSON.stringify(history), trend,
-              spyPct, qqqPct, parseFloat(relVol.toFixed(2)), parseFloat(atrMult.toFixed(2)),
-              sizePct, Math.round(ACCOUNT_SIZE * sizePct),
-              row.signal_id,
-            ]);
-          }
+          const contractCols = contract ? `,
+            contract_symbol = $14, contract_strike = $15, contract_expiry = $16,
+            contract_expiry_label = $17, contract_bid = $18, contract_ask = $19,
+            contract_mid = $20, contract_entry_lo = $21, contract_entry_hi = $22,
+            contract_delta = $23, contract_iv = $24,
+            contract_t1 = $25, contract_t2 = $26, contract_t3 = $27, contract_stop = $28,
+            contract_estimated = $29` : '';
+          const contractParams = contract ? [
+            contract.symbol, contract.strike, contract.expiry,
+            contract.expiry_label, contract.bid, contract.ask,
+            contract.mid, contract.entry_lo, contract.entry_hi,
+            contract.delta, contract.iv,
+            contract.t1, contract.t2, contract.t3, contract.stop,
+            contract.estimated || false,
+          ] : [];
 
-          updated++;
-          console.log(`[SIGNAL] ${ticker} ${direction} ${grade} composite=${composite} (CONFIRM #${count}, peak=${newPeakGrade}/${newPeak}, ${trend})`);
+          await db.query(`
+            UPDATE lc_v3.signals SET
+              grade = $1, composite_raw = $2,
+              score_price_action = $3, score_volume = $4, score_market = $5, score_timing = $6,
+              position_size_pct = $7, position_size_dollars = $8,
+              spy_change_pct = $9, qqq_change_pct = $10,
+              relative_volume = $11, atr_multiple = $12,
+              news_headline = $13,
+              last_confirmed_at = NOW(),
+              confirmation_count = COALESCE(confirmation_count, 1) + 1,
+              peak_composite = ${newPeak},
+              peak_grade = '${newPeakGrade}',
+              composite_history = '${JSON.stringify(newHistory)}'::jsonb,
+              momentum_trend = '${trend}',
+              expires_at = NOW() + INTERVAL '10 minutes'
+              ${contractCols}
+            WHERE signal_id = ${row.signal_id}
+          `, [
+            grade, composite,
+            paScore, volScore, mktScore, timScore,
+            sizePct, Math.round(ACCOUNT_SIZE * sizePct),
+            spyPct, qqqPct,
+            parseFloat(relVol.toFixed(2)), parseFloat(atrMult.toFixed(2)),
+            signalNote,
+            ...contractParams,
+          ]);
 
+          written++;
+          console.log(`[SIGNAL] ${ticker} ${direction} ${grade} composite=${composite} (CONFIRM #${(row.confirmation_count||1)+1}, peak=${newPeakGrade}/${newPeak}, ${trend}) ${freshness} type=${gate.signalType}`);
         } else {
-          // ── INSERT PATH (first sighting) ──
-          const initHistory = JSON.stringify([{ t: new Date().toISOString(), c: composite, g: grade }]);
+          // NEW signal
+          const contractCols = contract ? `,
+            contract_symbol, contract_strike, contract_expiry, contract_expiry_label,
+            contract_bid, contract_ask, contract_mid,
+            contract_entry_lo, contract_entry_hi,
+            contract_delta, contract_iv,
+            contract_t1, contract_t2, contract_t3, contract_stop,
+            contract_estimated` : '';
+          const contractPlaceholders = contract ? ',$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31' : '';
+          const contractParams = contract ? [
+            contract.symbol, contract.strike, contract.expiry,
+            contract.expiry_label, contract.bid, contract.ask,
+            contract.mid, contract.entry_lo, contract.entry_hi,
+            contract.delta, contract.iv,
+            contract.t1, contract.t2, contract.t3, contract.stop,
+            contract.estimated || false,
+          ] : [];
+
           await db.query(`
             INSERT INTO lc_v3.signals (
               ticker, direction, grade, status, composite_raw, signal_tier,
               score_price_action, score_volume, score_news, score_market, score_timing,
               position_size_pct, position_size_dollars,
               spy_change_pct, qqq_change_pct, relative_volume, atr_multiple,
-              contract_symbol, contract_strike, contract_expiry, contract_expiry_label,
-              contract_bid, contract_ask, contract_mid,
-              contract_entry_lo, contract_entry_hi,
-              contract_delta, contract_iv,
-              contract_t1, contract_t2, contract_t3, contract_stop,
-              contract_estimated,
+              news_headline,
               first_seen_at, last_confirmed_at, confirmation_count,
-              peak_composite, peak_grade, composite_history,
+              peak_composite, peak_grade, composite_history, momentum_trend,
               expires_at, created_at
-            ) VALUES ($1,$2,$3,'ACTIVE',$4,'primary',$5,$6,0,$7,$8,$9,$10,$11,$12,$13,$14,
-              $15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
-              NOW(), NOW(), 1, $4, $3, $31,
-              NOW() + INTERVAL '10 minutes', NOW())
+              ${contractCols}
+            ) VALUES ($1,$2,$3,'ACTIVE',$4,'primary',$5,$6,0,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+              NOW(), NOW(), 1, $4, $3, '[]'::jsonb, 'NEW',
+              NOW() + INTERVAL '10 minutes', NOW()
+              ${contractPlaceholders})
           `, [
             ticker, direction, grade, composite,
             paScore, volScore, mktScore, timScore,
             sizePct, Math.round(ACCOUNT_SIZE * sizePct),
             spyPct, qqqPct,
             parseFloat(relVol.toFixed(2)), parseFloat(atrMult.toFixed(2)),
-            contract?.symbol || null, contract?.strike || null,
-            contract?.expiry || null, contract?.expiry_label || null,
-            contract?.bid || null, contract?.ask || null, contract?.mid || null,
-            contract?.entry_lo || null, contract?.entry_hi || null,
-            contract?.delta || null, contract?.iv || null,
-            contract?.t1 || null, contract?.t2 || null, contract?.t3 || null,
-            contract?.stop || null, contract?.estimated || false,
-            initHistory,
+            signalNote,
+            ...contractParams,
           ]);
 
           written++;
-          const cStr = contract ? ` | ${contract.label} mid=$${contract.mid}` : ' | no contract';
-          console.log(`[SIGNAL] ${ticker} ${direction} ${grade} composite=${composite} (NEW)${cStr}`);
+          console.log(`[SIGNAL] ${ticker} ${direction} ${grade} composite=${composite} (NEW) ${freshness} type=${gate.signalType} regime=${regime.regime}`);
         }
       }
 
-      if (written > 0 || updated > 0) console.log(`[POLL] ${written} new, ${updated} updated`);
+      if (written > 0) console.log(`[POLL] ${written} signals written/updated`);
+
+      // Post-signal monitoring — check active signals for breakdowns
+      await monitorActiveSignals(alpacaHdrs, dataUrl, profiles);
 
     } catch(err) {
       console.error('[POLL] Error:', err.message);
@@ -549,8 +611,107 @@ async function startRestPoller() {
 
   setTimeout(poll, 5000);
   setInterval(poll, 60000);
-  // Backfill contracts for any signals that were created before the contract fix
-  setTimeout(backfillContracts, 15000);
-  setInterval(backfillContracts, 5 * 60 * 1000);
   console.log('[LC v3] REST poller started — scoring every 60s');
 }
+
+// ── POST-SIGNAL MONITORING ────────────────────────────────────────────────────
+async function monitorActiveSignals(alpacaHdrs, dataUrl, profiles) {
+  try {
+    const { monitorSignal } = await import('./src/scoring/intelligence.js');
+
+    // Get all ACTIVE and WEAKENING signals from today
+    const res = await db.query(`
+      SELECT signal_id, ticker, direction, atr_multiple, grade
+      FROM lc_v3.signals
+      WHERE status IN ('ACTIVE','WEAKENING')
+      AND DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
+      AND expires_at > NOW() - INTERVAL '30 minutes'
+    `);
+
+    if (res.rows.length === 0) return;
+
+    // Fetch current snapshots for active signal tickers
+    const tickers = [...new Set(res.rows.map(r => r.ticker))];
+    const snapRes = await axios.get(`${dataUrl}/v2/stocks/snapshots`, {
+      headers: alpacaHdrs,
+      params: { symbols: tickers.join(','), feed: ALPACA_FEED },
+      timeout: 8000,
+    });
+    const snaps = snapRes.data || {};
+
+    for (const signal of res.rows) {
+      const snap = snaps[signal.ticker];
+      if (!snap) continue;
+
+      const price = snap.latestTrade?.p || snap.latestQuote?.ap || 0;
+      const vwap  = snap.minuteBar?.vw || price;
+      const atr   = parseFloat(profiles[signal.ticker]?.atr_20d || 0.025);
+      const bars  = [snap.prevMinuteBar, snap.minuteBar].filter(Boolean)
+        .map(b => ({ o: b.o, h: b.h, l: b.l, c: b.c, v: b.v || 0 }));
+
+      const mockState = { close: price, vwap, bars };
+      const result    = monitorSignal(signal, mockState, atr);
+
+      if (result.status !== 'ACTIVE' && result.status !== signal.status) {
+        await db.query(`
+          UPDATE lc_v3.signals
+          SET status = $1, human_notes = COALESCE(human_notes || ' | ', '') || $2
+          WHERE signal_id = $3
+        `, [result.status, result.note, signal.signal_id]);
+
+        console.log(`[MONITOR] ${signal.ticker} ${signal.direction} → ${result.status}: ${result.note}`);
+      }
+    }
+  } catch(err) {
+    console.error('[MONITOR] Error:', err.message);
+  }
+}
+
+// ── CONTRACT BACKFILL ──────────────────────────────────────────────────────
+async function backfillContracts() {
+  try {
+    const res = await db.query(`
+      SELECT signal_id, ticker, direction, grade, composite_raw
+      FROM lc_v3.signals
+      WHERE contract_mid IS NULL
+        AND DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
+        AND status NOT IN ('TAKEN','SKIPPED')
+    `);
+    if (res.rows.length === 0) return;
+    console.log(`[BACKFILL] ${res.rows.length} signals need contracts`);
+
+    for (const row of res.rows) {
+      try {
+        const contract = await selectOptionsContract(row.ticker, row.direction, row.grade, 0, 0.025);
+        if (!contract) continue;
+        await db.query(`
+          UPDATE lc_v3.signals SET
+            contract_symbol = $1, contract_strike = $2, contract_expiry = $3,
+            contract_expiry_label = $4, contract_bid = $5, contract_ask = $6,
+            contract_mid = $7, contract_entry_lo = $8, contract_entry_hi = $9,
+            contract_delta = $10, contract_iv = $11,
+            contract_t1 = $12, contract_t2 = $13, contract_t3 = $14, contract_stop = $15,
+            contract_estimated = $16
+          WHERE signal_id = $17
+        `, [
+          contract.symbol, contract.strike, contract.expiry,
+          contract.expiry_label, contract.bid, contract.ask,
+          contract.mid, contract.entry_lo, contract.entry_hi,
+          contract.delta, contract.iv,
+          contract.t1, contract.t2, contract.t3, contract.stop,
+          contract.estimated || false,
+          row.signal_id,
+        ]);
+        console.log(`[BACKFILL] ${row.ticker} ${row.direction} → ${contract.symbol}`);
+      } catch (e) {
+        console.error(`[BACKFILL] ${row.ticker}: ${e.message}`);
+      }
+    }
+  } catch (err) {
+    console.error('[BACKFILL] Error:', err.message);
+  }
+}
+
+// Run backfill 15s after startup, then every 5 min
+setTimeout(backfillContracts, 15000);
+setInterval(backfillContracts, 300000);

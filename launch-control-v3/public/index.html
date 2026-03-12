@@ -160,13 +160,6 @@ body::after {
 .grade-bp .score-fill { background: #3b82f6; }
 .grade-b  .score-fill { background: #8b5cf6; }
 
-/* Momentum */
-.momentum-row { display:flex; align-items:center; gap:8px; margin-bottom:8px; padding:6px 8px; background:var(--bg2); border-radius:4px; font-size:11px; }
-.confirm-badge { font-family:var(--mono); font-size:11px; font-weight:700; color:#fbbf24; background:#78350f60; padding:1px 6px; border-radius:3px; }
-.trend-up { color:#10b981; } .trend-down { color:#ef4444; } .trend-flat { color:var(--text3); }
-.peak-label { color:var(--text3); font-size:10px; }
-.first-seen { color:var(--text3); font-size:10px; margin-left:auto; }
-
 /* Pillars */
 .pillars { display: grid; grid-template-columns: repeat(5,1fr); gap: 5px; margin-bottom: 10px; }
 .pillar { text-align: center; background: var(--bg3); border-radius: 3px; padding: 5px 3px; }
@@ -192,6 +185,12 @@ body::after {
   padding: 4px 8px; border-radius: 0 3px 3px 0; margin-bottom: 8px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.freshness-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.fresh-badge { font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 1px; padding: 2px 8px; border: 1px solid; border-radius: 3px; }
+.risk-badge  { font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: 0.5px; }
+.move-badge  { font-family: var(--mono); font-size: 9px; color: var(--text3); }
+.breakdown-card { border-color: var(--red) !important; box-shadow: 0 0 12px rgba(239,68,68,0.15); }
+.weakening-card { border-color: var(--amber) !important; box-shadow: 0 0 8px rgba(245,158,11,0.1); }
 
 /* Context */
 .ctx-line { font-size: 9px; color: var(--text3); font-family: var(--mono); margin-bottom: 6px; }
@@ -312,12 +311,16 @@ body::after {
     <span style="font-size:9px;color:var(--text3);font-weight:400">v3.0</span>
   </div>
   <div class="header-right">
+    <span id="warnBadge" class="badge" style="display:none;font-family:var(--mono);font-size:9px;padding:3px 8px;border-radius:3px;border:1px solid currentColor"></span>
     <span id="conflBadge" class="badge badge-gold" style="display:none"></span>
     <span id="activeBadge" class="badge badge-amber" style="display:none"></span>
     <span id="clock" class="clock">--:--:--</span>
     <span id="liveDot" style="color:var(--text4);font-size:16px">●</span>
   </div>
 </div>
+
+<!-- REGIME BANNER -->
+<div id="regimeBanner" style="display:none;padding:6px 16px;font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:0.5px;border-bottom:1px solid;text-align:center"></div>
 
 <!-- SESSION BAR -->
 <div id="sessionBar" style="color:var(--text3)">
@@ -412,7 +415,18 @@ body::after {
 // ── STATE ─────────────────────────────────────────────────────────
 let signals = [], gradeF = 'all', tierF = 'all', showHist = false;
 let countdowns = {};
+let lastRenderHash = '';
 const ACCOUNT = parseFloat('{{ACCOUNT_SIZE}}') || 7500;
+
+// Format OCC symbol: BKR260320P00033000 → BKR 3/20 $33 P
+function formatOCC(sym) {
+  if (!sym) return '';
+  const m = sym.match(/^([A-Z]{1,6})(\d{2})(\d{2})(\d{2})([CP])(\d{8})$/);
+  if (!m) return sym;
+  const [,tk,yy,mm,dd,cp,strRaw] = m;
+  const strike = parseInt(strRaw) / 1000;
+  return `${tk} ${parseInt(mm)}/${parseInt(dd)} $${strike} ${cp}`;
+}
 
 const CLUSTERS = [
   {leader:'NVDA', name:'AI Infrastructure',  followers:['AMD','MRVL','ARM','AVGO']},
@@ -455,20 +469,7 @@ function toggleHist(btn) {
   render();
 }
 
-// Format OCC symbol like BKR20260320P00053500 → "BKR 3/20/2026 PUT $53.50"
-function formatOCC(sym) {
-  if (!sym) return null;
-  const m = sym.match(/^([A-Z]{1,6})(\d{6})([CP])(\d{8})$/);
-  if (!m) return sym;
-  const [,tkr,dt,cp,st] = m;
-  const mm=parseInt(dt.slice(2,4)), dd=parseInt(dt.slice(4,6)), yy='20'+dt.slice(0,2);
-  return `${tkr} ${mm}/${dd}/${yy} ${cp==='C'?'CALL':'PUT'} $${parseInt(st)/1000}`;
-}
-
 // ── RENDER SIGNALS ────────────────────────────────────────────────
-// Track last rendered state to diff against
-let lastRenderedHash = '';
-
 function render() {
   const list = signals.filter(s => {
     if (!showHist && s.status !== 'ACTIVE') return false;
@@ -477,67 +478,52 @@ function render() {
     return true;
   });
 
-  const grid = document.getElementById('signalGrid');
-
   if (!list.length) {
     const msg = signals.length === 0 ? 'Scanning Nasdaq 100 — no signals yet' : 'No signals match current filter';
     const sub = signals.length > 0 ? `${signals.length} total signals today` : 'System is live and monitoring 104 symbols';
-    grid.innerHTML = `
+    document.getElementById('signalGrid').innerHTML = `
       <div class="empty">
         <div class="empty-icon">◎</div>
         <div class="empty-text">${msg}</div>
         <div class="empty-sub">${sub}</div>
       </div>`;
-    lastRenderedHash = '';
     return;
   }
 
-  // Build a hash of all signal data to detect changes
-  const hash = list.map(s => `${s.signal_id}:${s.composite_raw}:${s.grade}:${s.confirmation_count}:${s.contract_mid}:${s.status}:${s.human_taken}`).join('|');
-
-  if (hash === lastRenderedHash) return; // nothing changed — skip DOM update
-  lastRenderedHash = hash;
-
-  // Check if we can do a targeted update (same signals, same order)
-  const existingIds = [...grid.querySelectorAll('.card')].map(el => el.id.replace('card-',''));
-  const newIds = list.map(s => s.signal_id);
-  const sameCards = existingIds.length === newIds.length && existingIds.every((id,i) => id === newIds[i]);
-
-  if (sameCards) {
-    // Same cards in same order — update each card in-place
-    list.forEach(s => {
-      const card = document.getElementById(`card-${s.signal_id}`);
-      if (!card) return;
-      const fresh = document.createElement('div');
-      fresh.innerHTML = buildCard(s);
-      const newCard = fresh.firstElementChild;
-      // Morph: replace only if content differs
-      if (card.innerHTML !== newCard.innerHTML) {
-        card.className = newCard.className;
-        card.innerHTML = newCard.innerHTML;
-      }
-    });
-  } else {
-    // Cards added/removed/reordered — full replace
-    grid.innerHTML = list.map(buildCard).join('');
+  const html = list.map(buildCard).join('');
+  const hash = list.map(s => `${s.signal_id}:${s.composite_raw}:${s.grade}:${s.status}:${s.confirmation_count}:${s.contract_mid}:${s.momentum_trend}`).join('|');
+  if (hash !== lastRenderHash) {
+    document.getElementById('signalGrid').innerHTML = html;
+    lastRenderHash = hash;
   }
-
-  list.forEach(s => { if (s.status === 'ACTIVE' && s.expires_at) startCd(s); });
+  list.forEach(s => { if ((s.status === 'ACTIVE' || s.status === 'WEAKENING') && s.expires_at) startCd(s); });
 }
 
 function buildCard(s) {
   const g = gc(s.grade);
   const c = col(s.grade);
   const pct = Math.min(((s.composite_raw||0)/110)*100, 100);
-  const stale = s.status !== 'ACTIVE';
+  const stale = s.status !== 'ACTIVE' && s.status !== 'WEAKENING' && s.status !== 'BREAKDOWN' && s.status !== 'TARGET_ZONE';
+  const isWeakening = s.status === 'WEAKENING';
+  const isBreakdown = s.status === 'BREAKDOWN';
+  const isTarget    = s.status === 'TARGET_ZONE';
   const dir = (s.direction||'CALL').toLowerCase();
+
+  // Status overlay for monitored signals
+  const statusOverlay = isBreakdown
+    ? `<div style="background:rgba(239,68,68,0.12);border:1px solid var(--red);border-radius:3px;padding:5px 10px;margin-bottom:8px;font-family:var(--mono);font-size:10px;color:var(--red);font-weight:700">BREAKDOWN — EXIT IMMEDIATELY</div>`
+    : isWeakening
+    ? `<div style="background:rgba(245,158,11,0.08);border:1px solid var(--amber);border-radius:3px;padding:5px 10px;margin-bottom:8px;font-family:var(--mono);font-size:10px;color:var(--amber);font-weight:600">WEAKENING — WATCH CLOSELY</div>`
+    : isTarget
+    ? `<div style="background:rgba(16,185,129,0.08);border:1px solid var(--green);border-radius:3px;padding:5px 10px;margin-bottom:8px;font-family:var(--mono);font-size:10px;color:var(--green);font-weight:600">NEAR TARGET — CONSIDER PARTIAL EXIT</div>`
+    : '';
 
   // Tags
   const tags = [];
-  if (s.signal_tier==='propagation') tags.push(`<span class="tag tag-prop">🔗 PROP</span>`);
+  if (s.signal_tier==='propagation') tags.push(`<span class="tag tag-prop">PROP</span>`);
   else if (s.signal_tier==='base_layer') tags.push(`<span class="tag tag-base">BASE</span>`);
   else tags.push(`<span class="tag tag-primary">PRIMARY</span>`);
-  if ((s.confluence_score||0)>=3) tags.push(`<span class="tag tag-conf">⚡ CONF ${s.confluence_score}</span>`);
+  if ((s.confluence_score||0)>=3) tags.push(`<span class="tag tag-conf">CONF ${s.confluence_score}</span>`);
 
   // Contract details
   const hasContract = s.contract_mid > 0;
@@ -545,7 +531,7 @@ function buildCard(s) {
   const contract = hasContract ? `
     <div class="contract-row">
       <div class="contract-label">CONTRACT${isEst?' (ESTIMATED)':''}</div>
-      <div class="contract-details">${formatOCC(s.contract_symbol)||`${s.ticker} $${s.contract_strike} ${s.direction}`} · ${s.contract_expiry_label||''}</div>
+      <div class="contract-details">${s.contract_symbol ? formatOCC(s.contract_symbol) : `${s.ticker} $${s.contract_strike} ${s.direction}`} · ${s.contract_expiry_label||'0DTE'}</div>
       <div class="contract-pricing">
         <span class="cp-item">Entry <strong>$${s.contract_entry_lo}–$${s.contract_entry_hi}</strong></span>
         <span class="cp-item cp-green">T1 <strong>$${s.contract_t1}</strong></span>
@@ -584,15 +570,16 @@ function buildCard(s) {
          <button class="btn btn-skip" onclick="skipSignal('${s.signal_id}',this)">SKIP</button>`;
 
   return `
-  <div class="card ${g}${stale?' stale':''}" id="card-${s.signal_id}">
+  <div class="card ${g}${stale?' stale':''}${isBreakdown?' breakdown-card':''}${isWeakening?' weakening-card':''}" id="card-${s.signal_id}">
     <div class="card-glow"></div>
+    ${statusOverlay}
     <div class="card-head">
       <div class="card-left">
         <div class="ticker-row">
           <span class="ticker">${s.ticker}</span>
           <span class="dir-badge dir-${dir}">${s.direction||'CALL'}</span>
         </div>
-        <div class="card-time">${new Date(s.first_seen_at||s.created_at).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:'America/New_York'})} ET</div>
+        <div class="card-time">${new Date(s.created_at).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:'America/New_York'})} ET</div>
       </div>
       <div class="card-right">
         <span class="grade-badge">${s.grade}</span>
@@ -600,19 +587,6 @@ function buildCard(s) {
       </div>
     </div>
     <div class="score-bar"><div class="score-fill" style="width:${pct}%"></div></div>
-    ${(s.confirmation_count||1) > 1 ? (() => {
-      const cnt = s.confirmation_count;
-      const trend = s.momentum_trend;
-      const trendIcon = trend==='STRENGTHENING' ? '<span class="trend-up">▲</span>' : trend==='WEAKENING' ? '<span class="trend-down">▼</span>' : '<span class="trend-flat">—</span>';
-      const peak = s.peak_composite !== s.composite_raw ? `<span class="peak-label">peak ${s.peak_grade}/${s.peak_composite}</span>` : '';
-      const mins = Math.round((Date.now() - new Date(s.first_seen_at||s.created_at).getTime()) / 60000);
-      return `<div class="momentum-row">
-        <span class="confirm-badge">x${cnt}</span>
-        ${trendIcon}
-        ${peak}
-        <span class="first-seen">${mins}min ago</span>
-      </div>`;
-    })() : ''}
     <div class="pillars">
       <div class="pillar"><div class="pillar-score">${s.score_price_action??'—'}</div><div class="pillar-label">PA</div></div>
       <div class="pillar"><div class="pillar-score">${s.score_volume??'—'}</div><div class="pillar-label">VOL</div></div>
@@ -620,16 +594,48 @@ function buildCard(s) {
       <div class="pillar"><div class="pillar-score">${s.score_market??'—'}</div><div class="pillar-label">MKT</div></div>
       <div class="pillar"><div class="pillar-score">${s.score_timing??'—'}</div><div class="pillar-label">TIME</div></div>
     </div>
-    <div class="tags">${tags.join('')}</div>
+    <div class="tags">${tags.join('')}${s.confirmation_count > 1 ? `<span class="tag" style="background:rgba(245,158,11,0.15);color:var(--amber);border:1px solid var(--amber)">x${s.confirmation_count}</span>` : ''}</div>
+    ${s.confirmation_count > 1 ? (() => {
+      const trendArrow = s.momentum_trend === 'STRENGTHENING' ? '<span style="color:var(--green)">&#9650;</span>'
+                       : s.momentum_trend === 'WEAKENING' ? '<span style="color:var(--red)">&#9660;</span>'
+                       : '<span style="color:var(--text3)">&#9644;</span>';
+      const peakLabel = (s.peak_composite && s.peak_composite !== s.composite_raw)
+        ? `<span style="color:var(--text3);font-size:9px">peak: ${s.peak_grade}/${s.peak_composite}</span>` : '';
+      const firstSeen = s.first_seen_at ? (() => {
+        const mins = Math.round((Date.now() - new Date(s.first_seen_at).getTime()) / 60000);
+        return `<span style="color:var(--text3);font-size:9px">first seen ${mins}min ago</span>`;
+      })() : '';
+      return `<div style="display:flex;align-items:center;gap:8px;margin:4px 0;font-family:var(--mono);font-size:10px">${trendArrow} ${peakLabel} ${firstSeen}</div>`;
+    })() : ''}
     ${propCtx}
-    ${s.news_headline?`<div class="news-line">📰 ${s.news_headline}</div>`:''}
+    ${s.news_headline ? (() => {
+      const isFreshnessNote = s.news_headline.includes('Risk:') || s.news_headline.includes('From Open:');
+      if (isFreshnessNote) {
+        const parts = s.news_headline.split(' · ');
+        const freshness = parts[0] || '';
+        const riskPart  = parts.find(p => p.startsWith('Risk:'))?.replace('Risk:','') || '';
+        const movePart  = parts.find(p => p.startsWith('From Open:'))?.replace('From Open:','') || '';
+        const typePart  = parts.find(p => p.startsWith('Type:'))?.replace('Type:','') || '';
+        const resPart   = parts.find(p => p.startsWith('ResAt:'))?.replace('ResAt:','') || '';
+        const riskColor = riskPart==='LOW'?'var(--green)':riskPart==='MOD'?'var(--amber)':riskPart==='HIGH'?'#f97316':'var(--red)';
+        const freshColor = freshness==='FRESH'?'var(--green)':freshness==='DEVELOPING'?'var(--amber2)':freshness==='EXTENDED'?'#f97316':'var(--red)';
+        return `<div class="freshness-bar">
+          <span class="fresh-badge" style="color:${freshColor};border-color:${freshColor}">${freshness}</span>
+          <span class="risk-badge" style="color:${riskColor}">RISK: ${riskPart}</span>
+          ${typePart?`<span class="move-badge">${typePart}</span>`:''}
+          ${movePart?`<span class="move-badge">${movePart}</span>`:''}
+          ${resPart?`<span class="move-badge" style="color:var(--amber)">RES: ${resPart}</span>`:''}
+        </div>`;
+      }
+      return `<div class="news-line">${s.news_headline}</div>`;
+    })() : ''}
     ${mkt?`<div class="ctx-line">${mkt}</div>`:''}
     ${contract}
     <div class="position-row">
       <span class="pos-label">Position</span>
       <span class="pos-value" style="color:${c}">$${Number(s.position_size_dollars||0).toLocaleString()} <span style="font-size:9px;color:var(--text3)">(${((s.position_size_pct||0)*100).toFixed(1)}%)</span></span>
     </div>
-    ${s.status==='ACTIVE'&&s.expires_at?`
+    ${(s.status==='ACTIVE'||s.status==='WEAKENING')&&s.expires_at?`
       <div class="cd-bar"><div class="cd-fill" id="cdf-${s.signal_id}" style="width:100%"></div></div>
       <div class="cd-label" id="cdl-${s.signal_id}">—</div>`:''
     }
@@ -645,7 +651,7 @@ function startCd(s) {
   const bar = document.getElementById(`cdf-${id}`);
   const lbl = document.getElementById(`cdl-${id}`);
   if (!bar||!lbl) return;
-  const total = 10 * 60 * 1000; // fixed 10-minute window
+  const total = new Date(s.expires_at) - new Date(s.created_at);
   countdowns[id] = setInterval(() => {
     const left = new Date(s.expires_at) - Date.now();
     if (left<=0) { clearInterval(countdowns[id]); bar.style.width='0%'; lbl.textContent='EXPIRED'; return; }
@@ -774,6 +780,48 @@ async function loadAll() {
     const ab = document.getElementById('activeBadge');
     if (active.length>0) { ab.textContent=`${active.length} ACTIVE`; ab.style.display=''; }
     else ab.style.display='none';
+
+    // Regime banner
+    const regime    = statusRes.regime || 'NEUTRAL';
+    const regNote   = statusRes.regimeNote || '';
+    const rb        = document.getElementById('regimeBanner');
+    if (rb) {
+      const dangerRegimes = ['MARKET_BREAKDOWN','RISK_OFF','FAST_MOVE_DOWN','FAST_MOVE_UP'];
+      const warnRegimes   = ['RISK_OFF_MILD','DIVERGING'];
+      if (dangerRegimes.includes(regime)) {
+        rb.style.display = '';
+        rb.style.background = 'rgba(239,68,68,0.15)';
+        rb.style.borderColor = 'var(--red)';
+        rb.style.color = 'var(--red)';
+        rb.textContent = `REGIME: ${regime}${regNote ? ' — ' + regNote : ''}`;
+      } else if (warnRegimes.includes(regime)) {
+        rb.style.display = '';
+        rb.style.background = 'rgba(245,158,11,0.1)';
+        rb.style.borderColor = 'var(--amber)';
+        rb.style.color = 'var(--amber)';
+        rb.textContent = `REGIME: ${regime}${regNote ? ' — ' + regNote : ''}`;
+      } else {
+        rb.style.display = 'none';
+      }
+    }
+
+    // Breakdown/weakening count
+    const weakening  = signals.filter(s=>s.status==='WEAKENING').length;
+    const breakdown  = signals.filter(s=>s.status==='BREAKDOWN').length;
+    const wb         = document.getElementById('warnBadge');
+    if (wb) {
+      if (breakdown > 0) {
+        wb.style.display = '';
+        wb.style.color = 'var(--red)';
+        wb.textContent = `${breakdown} BREAKDOWN`;
+      } else if (weakening > 0) {
+        wb.style.display = '';
+        wb.style.color = 'var(--amber)';
+        wb.textContent = `${weakening} WEAKENING`;
+      } else {
+        wb.style.display = 'none';
+      }
+    }
 
     // Confluence badge
     const cb = document.getElementById('conflBadge');
