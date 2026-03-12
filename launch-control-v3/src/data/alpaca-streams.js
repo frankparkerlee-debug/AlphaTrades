@@ -38,7 +38,7 @@ export function onNewSignalReady(callback) {
 // ── STOCK BARS STREAM ──────────────────────────────────
 
 export function connectStockStream() {
-  const url = `${STREAM_URL}/v2/sip`;
+  const url = `${STREAM_URL}/v2/${process.env.ALPACA_FEED || 'iex'}`;
   logger.info(`Connecting stock stream: ${url}`);
   setStreamStatus('bars', 'connecting');
 
