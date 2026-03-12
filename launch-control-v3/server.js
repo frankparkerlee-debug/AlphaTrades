@@ -101,6 +101,17 @@ app.get('/api/signals', async (req, res) => {
   }
 });
 
+// Debug — test contract selector on live server
+app.get('/api/debug/contract/:ticker/:direction', async (req, res) => {
+  const { ticker, direction } = req.params;
+  try {
+    const result = await selectOptionsContract(ticker, direction.toUpperCase(), 'B+', 100, 0.025);
+    res.json({ ticker, direction, result });
+  } catch (err) {
+    res.json({ ticker, direction, error: err.message });
+  }
+});
+
 // Status — session + propagation windows
 app.get('/api/status', async (req, res) => {
   try {
