@@ -45,6 +45,8 @@ app.get('/api/signals', async (req, res) => {
         contract_delta, contract_iv,
         contract_t1, contract_t2, contract_t3, contract_stop,
         contract_estimated,
+        first_seen_at, last_confirmed_at, confirmation_count,
+        peak_composite, peak_grade, composite_history, momentum_trend,
         expires_at, created_at
       FROM lc_v3.signals
       WHERE DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
@@ -84,6 +86,13 @@ app.get('/api/signals', async (req, res) => {
       contract_stop:     Number(s.contract_stop)       || null,
       human_entry_price: Number(s.human_entry_price)   || null,
       human_exit_price:  Number(s.human_exit_price)    || null,
+      first_seen_at:     s.first_seen_at?.toISOString()  || s.created_at?.toISOString(),
+      last_confirmed_at: s.last_confirmed_at?.toISOString() || s.created_at?.toISOString(),
+      confirmation_count: s.confirmation_count || 1,
+      peak_composite:    Number(s.peak_composite) || Number(s.composite_raw) || 0,
+      peak_grade:        s.peak_grade || s.grade,
+      composite_history: s.composite_history || [],
+      momentum_trend:    s.momentum_trend || null,
     }));
     res.json({ signals, count: signals.length });
   } catch (err) {
@@ -225,7 +234,7 @@ const GRADE_SCALE  = [[83,'A+'],[73,'A'],[63,'A-'],[53,'B+'],[43,'B']];
 const POSITION_SZ  = {'A+':0.20,'A':0.15,'A-':0.10,'B+':0.075,'B':0.05};
 const ACCOUNT_SIZE = parseFloat(process.env.ACCOUNT_SIZE || '7500');
 const ALPACA_FEED  = process.env.ALPACA_FEED || 'sip';
-const pollerFired  = new Set();
+// (no more pollerFired Set — dedup via DB lookup + UPSERT)
 
 function toGrade(score) {
   for (const [t, g] of GRADE_SCALE) if (score >= t) return g;
@@ -278,8 +287,7 @@ async function startRestPoller() {
 
       console.log(`[POLL] ${Object.keys(allSnaps).length} snaps SPY=${(spyPct*100).toFixed(2)}% QQQ=${(qqqPct*100).toFixed(2)}%`);
 
-      let written = 0;
-      const today = new Date().toISOString().split('T')[0];
+      let written = 0, updated = 0;
 
       for (const [ticker, snap] of Object.entries(allSnaps)) {
         const price     = snap.latestTrade?.p || snap.latestQuote?.ap || 0;
@@ -311,19 +319,18 @@ async function startRestPoller() {
         if (isExt && ['A+','A','A-'].includes(grade)) grade = 'B+';
         const sizePct = (POSITION_SZ[grade]||0.05) * (isExt?0.5:1.0);
 
-        const key = `${today}-${ticker}-${direction}`;
-        if (pollerFired.has(key)) continue;
-
-        // Check DB for existing signal (survives restarts)
+        // Look up existing active signal for this ticker+direction today
         const existing = await db.query(
-          `SELECT 1 FROM lc_v3.signals WHERE ticker=$1 AND direction=$2
-           AND DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE LIMIT 1`,
+          `SELECT signal_id, composite_raw, peak_composite, peak_grade,
+                  confirmation_count, composite_history, contract_mid,
+                  human_taken
+           FROM lc_v3.signals
+           WHERE ticker=$1 AND direction=$2
+             AND DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
+             AND status NOT IN ('TAKEN','SKIPPED')
+           ORDER BY created_at DESC LIMIT 1`,
           [ticker, direction]
         );
-        if (existing.rows.length > 0) {
-          pollerFired.add(key);
-          continue;
-        }
 
         // Get contract recommendation
         let contract = null;
@@ -333,44 +340,133 @@ async function startRestPoller() {
           console.error(`[contract] ${ticker}:`, err.message);
         }
 
-        await db.query(`
-          INSERT INTO lc_v3.signals (
-            ticker, direction, grade, status, composite_raw, signal_tier,
-            score_price_action, score_volume, score_news, score_market, score_timing,
-            position_size_pct, position_size_dollars,
-            spy_change_pct, qqq_change_pct, relative_volume, atr_multiple,
-            contract_symbol, contract_strike, contract_expiry, contract_expiry_label,
-            contract_bid, contract_ask, contract_mid,
-            contract_entry_lo, contract_entry_hi,
-            contract_delta, contract_iv,
-            contract_t1, contract_t2, contract_t3, contract_stop,
-            contract_estimated,
-            expires_at, created_at
-          ) VALUES ($1,$2,$3,'ACTIVE',$4,'primary',$5,$6,0,$7,$8,$9,$10,$11,$12,$13,$14,
-            $15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
-            NOW() + INTERVAL '10 minutes', NOW())
-        `, [
-          ticker, direction, grade, composite,
-          paScore, volScore, mktScore, timScore,
-          sizePct, Math.round(ACCOUNT_SIZE * sizePct),
-          spyPct, qqqPct,
-          parseFloat(relVol.toFixed(2)), parseFloat(atrMult.toFixed(2)),
-          contract?.symbol || null, contract?.strike || null,
-          contract?.expiry || null, contract?.expiry_label || null,
-          contract?.bid || null, contract?.ask || null, contract?.mid || null,
-          contract?.entry_lo || null, contract?.entry_hi || null,
-          contract?.delta || null, contract?.iv || null,
-          contract?.t1 || null, contract?.t2 || null, contract?.t3 || null,
-          contract?.stop || null, contract?.estimated || false,
-        ]);
+        if (existing.rows.length > 0) {
+          // ── UPDATE PATH (confirmation) ──
+          const row = existing.rows[0];
+          if (row.human_taken !== null) continue; // already acted on
 
-        pollerFired.add(key);
-        written++;
-        const cStr = contract ? ` | ${contract.label} mid=$${contract.mid}` : ' | no contract';
-        console.log(`[SIGNAL] ${ticker} ${direction} ${grade} composite=${composite} PA=${paScore} VOL=${volScore}${cStr}`);
+          const oldPeak = row.peak_composite || row.composite_raw;
+          const newPeak = Math.max(oldPeak, composite);
+          const newPeakGrade = composite >= oldPeak ? grade : (row.peak_grade || grade);
+          const count = (row.confirmation_count || 1) + 1;
+
+          // Append to history (cap at 60)
+          const history = Array.isArray(row.composite_history) ? [...row.composite_history] : [];
+          history.push({ t: new Date().toISOString(), c: composite, g: grade });
+          if (history.length > 60) history.splice(0, history.length - 60);
+
+          // Compute trend from last 3
+          let trend = 'STABLE';
+          if (history.length >= 3) {
+            const r3 = history.slice(-3).map(h => h.c);
+            if (r3[2] > r3[0] + 2) trend = 'STRENGTHENING';
+            else if (r3[2] < r3[0] - 2) trend = 'WEAKENING';
+          }
+
+          // Build contract update params if we have a better contract (or had none)
+          const hasNewContract = contract && contract.mid > 0;
+          const hadNoContract = !row.contract_mid || parseFloat(row.contract_mid) === 0;
+
+          if (hasNewContract && hadNoContract) {
+            // First time getting a real contract — include it
+            await db.query(`
+              UPDATE lc_v3.signals SET
+                composite_raw=$1, grade=$2,
+                score_price_action=$3, score_volume=$4, score_market=$5, score_timing=$6,
+                peak_composite=$7, peak_grade=$8, confirmation_count=$9,
+                composite_history=$10, momentum_trend=$11,
+                last_confirmed_at=NOW(), expires_at=NOW()+INTERVAL '10 minutes',
+                spy_change_pct=$12, qqq_change_pct=$13, relative_volume=$14, atr_multiple=$15,
+                position_size_pct=$16, position_size_dollars=$17,
+                contract_symbol=$18, contract_strike=$19, contract_expiry=$20, contract_expiry_label=$21,
+                contract_bid=$22, contract_ask=$23, contract_mid=$24,
+                contract_entry_lo=$25, contract_entry_hi=$26,
+                contract_delta=$27, contract_iv=$28,
+                contract_t1=$29, contract_t2=$30, contract_t3=$31, contract_stop=$32,
+                contract_estimated=$33
+              WHERE signal_id=$34
+            `, [
+              composite, grade, paScore, volScore, mktScore, timScore,
+              newPeak, newPeakGrade, count, JSON.stringify(history), trend,
+              spyPct, qqqPct, parseFloat(relVol.toFixed(2)), parseFloat(atrMult.toFixed(2)),
+              sizePct, Math.round(ACCOUNT_SIZE * sizePct),
+              contract.symbol, contract.strike, contract.expiry, contract.expiry_label,
+              contract.bid, contract.ask, contract.mid,
+              contract.entry_lo, contract.entry_hi,
+              contract.delta, contract.iv,
+              contract.t1, contract.t2, contract.t3, contract.stop,
+              contract.estimated || false,
+              row.signal_id,
+            ]);
+          } else {
+            // Update scores only, keep existing contract
+            await db.query(`
+              UPDATE lc_v3.signals SET
+                composite_raw=$1, grade=$2,
+                score_price_action=$3, score_volume=$4, score_market=$5, score_timing=$6,
+                peak_composite=$7, peak_grade=$8, confirmation_count=$9,
+                composite_history=$10, momentum_trend=$11,
+                last_confirmed_at=NOW(), expires_at=NOW()+INTERVAL '10 minutes',
+                spy_change_pct=$12, qqq_change_pct=$13, relative_volume=$14, atr_multiple=$15,
+                position_size_pct=$16, position_size_dollars=$17
+              WHERE signal_id=$18
+            `, [
+              composite, grade, paScore, volScore, mktScore, timScore,
+              newPeak, newPeakGrade, count, JSON.stringify(history), trend,
+              spyPct, qqqPct, parseFloat(relVol.toFixed(2)), parseFloat(atrMult.toFixed(2)),
+              sizePct, Math.round(ACCOUNT_SIZE * sizePct),
+              row.signal_id,
+            ]);
+          }
+
+          updated++;
+          console.log(`[SIGNAL] ${ticker} ${direction} ${grade} composite=${composite} (CONFIRM #${count}, peak=${newPeakGrade}/${newPeak}, ${trend})`);
+
+        } else {
+          // ── INSERT PATH (first sighting) ──
+          const initHistory = JSON.stringify([{ t: new Date().toISOString(), c: composite, g: grade }]);
+          await db.query(`
+            INSERT INTO lc_v3.signals (
+              ticker, direction, grade, status, composite_raw, signal_tier,
+              score_price_action, score_volume, score_news, score_market, score_timing,
+              position_size_pct, position_size_dollars,
+              spy_change_pct, qqq_change_pct, relative_volume, atr_multiple,
+              contract_symbol, contract_strike, contract_expiry, contract_expiry_label,
+              contract_bid, contract_ask, contract_mid,
+              contract_entry_lo, contract_entry_hi,
+              contract_delta, contract_iv,
+              contract_t1, contract_t2, contract_t3, contract_stop,
+              contract_estimated,
+              first_seen_at, last_confirmed_at, confirmation_count,
+              peak_composite, peak_grade, composite_history,
+              expires_at, created_at
+            ) VALUES ($1,$2,$3,'ACTIVE',$4,'primary',$5,$6,0,$7,$8,$9,$10,$11,$12,$13,$14,
+              $15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
+              NOW(), NOW(), 1, $4, $3, $31,
+              NOW() + INTERVAL '10 minutes', NOW())
+          `, [
+            ticker, direction, grade, composite,
+            paScore, volScore, mktScore, timScore,
+            sizePct, Math.round(ACCOUNT_SIZE * sizePct),
+            spyPct, qqqPct,
+            parseFloat(relVol.toFixed(2)), parseFloat(atrMult.toFixed(2)),
+            contract?.symbol || null, contract?.strike || null,
+            contract?.expiry || null, contract?.expiry_label || null,
+            contract?.bid || null, contract?.ask || null, contract?.mid || null,
+            contract?.entry_lo || null, contract?.entry_hi || null,
+            contract?.delta || null, contract?.iv || null,
+            contract?.t1 || null, contract?.t2 || null, contract?.t3 || null,
+            contract?.stop || null, contract?.estimated || false,
+            initHistory,
+          ]);
+
+          written++;
+          const cStr = contract ? ` | ${contract.label} mid=$${contract.mid}` : ' | no contract';
+          console.log(`[SIGNAL] ${ticker} ${direction} ${grade} composite=${composite} (NEW)${cStr}`);
+        }
       }
 
-      if (written > 0) console.log(`[POLL] ${written} new signals written`);
+      if (written > 0 || updated > 0) console.log(`[POLL] ${written} new, ${updated} updated`);
 
     } catch(err) {
       console.error('[POLL] Error:', err.message);

@@ -160,6 +160,13 @@ body::after {
 .grade-bp .score-fill { background: #3b82f6; }
 .grade-b  .score-fill { background: #8b5cf6; }
 
+/* Momentum */
+.momentum-row { display:flex; align-items:center; gap:8px; margin-bottom:8px; padding:6px 8px; background:var(--bg2); border-radius:4px; font-size:11px; }
+.confirm-badge { font-family:var(--mono); font-size:11px; font-weight:700; color:#fbbf24; background:#78350f60; padding:1px 6px; border-radius:3px; }
+.trend-up { color:#10b981; } .trend-down { color:#ef4444; } .trend-flat { color:var(--text3); }
+.peak-label { color:var(--text3); font-size:10px; }
+.first-seen { color:var(--text3); font-size:10px; margin-left:auto; }
+
 /* Pillars */
 .pillars { display: grid; grid-template-columns: repeat(5,1fr); gap: 5px; margin-bottom: 10px; }
 .pillar { text-align: center; background: var(--bg3); border-radius: 3px; padding: 5px 3px; }
@@ -550,7 +557,7 @@ function buildCard(s) {
           <span class="ticker">${s.ticker}</span>
           <span class="dir-badge dir-${dir}">${s.direction||'CALL'}</span>
         </div>
-        <div class="card-time">${new Date(s.created_at).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:'America/New_York'})} ET</div>
+        <div class="card-time">${new Date(s.first_seen_at||s.created_at).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:'America/New_York'})} ET</div>
       </div>
       <div class="card-right">
         <span class="grade-badge">${s.grade}</span>
@@ -558,6 +565,19 @@ function buildCard(s) {
       </div>
     </div>
     <div class="score-bar"><div class="score-fill" style="width:${pct}%"></div></div>
+    ${(s.confirmation_count||1) > 1 ? (() => {
+      const cnt = s.confirmation_count;
+      const trend = s.momentum_trend;
+      const trendIcon = trend==='STRENGTHENING' ? '<span class="trend-up">▲</span>' : trend==='WEAKENING' ? '<span class="trend-down">▼</span>' : '<span class="trend-flat">—</span>';
+      const peak = s.peak_composite !== s.composite_raw ? `<span class="peak-label">peak ${s.peak_grade}/${s.peak_composite}</span>` : '';
+      const mins = Math.round((Date.now() - new Date(s.first_seen_at||s.created_at).getTime()) / 60000);
+      return `<div class="momentum-row">
+        <span class="confirm-badge">x${cnt}</span>
+        ${trendIcon}
+        ${peak}
+        <span class="first-seen">${mins}min ago</span>
+      </div>`;
+    })() : ''}
     <div class="pillars">
       <div class="pillar"><div class="pillar-score">${s.score_price_action??'—'}</div><div class="pillar-label">PA</div></div>
       <div class="pillar"><div class="pillar-score">${s.score_volume??'—'}</div><div class="pillar-label">VOL</div></div>
@@ -590,7 +610,7 @@ function startCd(s) {
   const bar = document.getElementById(`cdf-${id}`);
   const lbl = document.getElementById(`cdl-${id}`);
   if (!bar||!lbl) return;
-  const total = new Date(s.expires_at) - new Date(s.created_at);
+  const total = 10 * 60 * 1000; // fixed 10-minute window
   countdowns[id] = setInterval(() => {
     const left = new Date(s.expires_at) - Date.now();
     if (left<=0) { clearInterval(countdowns[id]); bar.style.width='0%'; lbl.textContent='EXPIRED'; return; }
