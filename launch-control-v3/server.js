@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import axios from 'axios';
 import express from 'express';
+import { selectOptionsContract } from './src/options/contract-selector.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { Pool } from 'pg';
@@ -313,14 +314,29 @@ async function startRestPoller() {
         const key = `${today}-${ticker}-${direction}`;
         if (pollerFired.has(key)) continue;
 
+        // Get contract recommendation
+        let contract = null;
+        try {
+          contract = await selectOptionsContract(ticker, direction, grade, price, atr);
+        } catch (err) {
+          console.error(`[contract] ${ticker}:`, err.message);
+        }
+
         await db.query(`
           INSERT INTO lc_v3.signals (
             ticker, direction, grade, status, composite_raw, signal_tier,
             score_price_action, score_volume, score_news, score_market, score_timing,
             position_size_pct, position_size_dollars,
             spy_change_pct, qqq_change_pct, relative_volume, atr_multiple,
+            contract_symbol, contract_strike, contract_expiry, contract_expiry_label,
+            contract_bid, contract_ask, contract_mid,
+            contract_entry_lo, contract_entry_hi,
+            contract_delta, contract_iv,
+            contract_t1, contract_t2, contract_t3, contract_stop,
+            contract_estimated,
             expires_at, created_at
           ) VALUES ($1,$2,$3,'ACTIVE',$4,'primary',$5,$6,0,$7,$8,$9,$10,$11,$12,$13,$14,
+            $15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
             NOW() + INTERVAL '10 minutes', NOW())
         `, [
           ticker, direction, grade, composite,
@@ -328,11 +344,19 @@ async function startRestPoller() {
           sizePct, Math.round(ACCOUNT_SIZE * sizePct),
           spyPct, qqqPct,
           parseFloat(relVol.toFixed(2)), parseFloat(atrMult.toFixed(2)),
+          contract?.symbol || null, contract?.strike || null,
+          contract?.expiry || null, contract?.expiry_label || null,
+          contract?.bid || null, contract?.ask || null, contract?.mid || null,
+          contract?.entry_lo || null, contract?.entry_hi || null,
+          contract?.delta || null, contract?.iv || null,
+          contract?.t1 || null, contract?.t2 || null, contract?.t3 || null,
+          contract?.stop || null, contract?.estimated || false,
         ]);
 
         pollerFired.add(key);
         written++;
-        console.log(`[SIGNAL] ${ticker} ${direction} ${grade} composite=${composite} PA=${paScore} VOL=${volScore}`);
+        const cStr = contract ? ` | ${contract.label} mid=$${contract.mid}` : ' | no contract';
+        console.log(`[SIGNAL] ${ticker} ${direction} ${grade} composite=${composite} PA=${paScore} VOL=${volScore}${cStr}`);
       }
 
       if (written > 0) console.log(`[POLL] ${written} new signals written`);
