@@ -466,6 +466,9 @@ function formatOCC(sym) {
 }
 
 // ── RENDER SIGNALS ────────────────────────────────────────────────
+// Track last rendered state to diff against
+let lastRenderedHash = '';
+
 function render() {
   const list = signals.filter(s => {
     if (!showHist && s.status !== 'ACTIVE') return false;
@@ -474,19 +477,51 @@ function render() {
     return true;
   });
 
+  const grid = document.getElementById('signalGrid');
+
   if (!list.length) {
     const msg = signals.length === 0 ? 'Scanning Nasdaq 100 — no signals yet' : 'No signals match current filter';
     const sub = signals.length > 0 ? `${signals.length} total signals today` : 'System is live and monitoring 104 symbols';
-    document.getElementById('signalGrid').innerHTML = `
+    grid.innerHTML = `
       <div class="empty">
         <div class="empty-icon">◎</div>
         <div class="empty-text">${msg}</div>
         <div class="empty-sub">${sub}</div>
       </div>`;
+    lastRenderedHash = '';
     return;
   }
 
-  document.getElementById('signalGrid').innerHTML = list.map(buildCard).join('');
+  // Build a hash of all signal data to detect changes
+  const hash = list.map(s => `${s.signal_id}:${s.composite_raw}:${s.grade}:${s.confirmation_count}:${s.contract_mid}:${s.status}:${s.human_taken}`).join('|');
+
+  if (hash === lastRenderedHash) return; // nothing changed — skip DOM update
+  lastRenderedHash = hash;
+
+  // Check if we can do a targeted update (same signals, same order)
+  const existingIds = [...grid.querySelectorAll('.card')].map(el => el.id.replace('card-',''));
+  const newIds = list.map(s => s.signal_id);
+  const sameCards = existingIds.length === newIds.length && existingIds.every((id,i) => id === newIds[i]);
+
+  if (sameCards) {
+    // Same cards in same order — update each card in-place
+    list.forEach(s => {
+      const card = document.getElementById(`card-${s.signal_id}`);
+      if (!card) return;
+      const fresh = document.createElement('div');
+      fresh.innerHTML = buildCard(s);
+      const newCard = fresh.firstElementChild;
+      // Morph: replace only if content differs
+      if (card.innerHTML !== newCard.innerHTML) {
+        card.className = newCard.className;
+        card.innerHTML = newCard.innerHTML;
+      }
+    });
+  } else {
+    // Cards added/removed/reordered — full replace
+    grid.innerHTML = list.map(buildCard).join('');
+  }
+
   list.forEach(s => { if (s.status === 'ACTIVE' && s.expires_at) startCd(s); });
 }
 
