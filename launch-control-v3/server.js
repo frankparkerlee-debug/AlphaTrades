@@ -402,12 +402,8 @@ async function startRestPoller() {
             else if (r3[2] < r3[0] - 2) trend = 'WEAKENING';
           }
 
-          // Build contract update params if we have a better contract (or had none)
-          const hasNewContract = contract && contract.mid > 0;
-          const hadNoContract = !row.contract_mid || parseFloat(row.contract_mid) === 0;
-
-          if (hasNewContract && hadNoContract) {
-            // First time getting a real contract — include it
+          // Always update contract if we got one — prices change every poll
+          if (contract && contract.mid > 0) {
             await db.query(`
               UPDATE lc_v3.signals SET
                 composite_raw=$1, grade=$2,
@@ -438,7 +434,7 @@ async function startRestPoller() {
               row.signal_id,
             ]);
           } else {
-            // Update scores only, keep existing contract
+            // No contract available — update scores only
             await db.query(`
               UPDATE lc_v3.signals SET
                 composite_raw=$1, grade=$2,
