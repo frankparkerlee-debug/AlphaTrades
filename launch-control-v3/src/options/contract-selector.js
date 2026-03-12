@@ -37,70 +37,56 @@ const TARGETS = {
 const STOP_MULT = 0.60; // -40% of premium
 
 /**
- * Get nearest real expiry from Alpaca options chain
- * Falls back to next monthly if no weekly exists
+ * Parse expiry date from OCC symbol: BKR260320P00033000 → "2026-03-20"
  */
-async function getExpiry(ticker, direction) {
-  try {
-    const res = await axios.get(`${DATA_URL}/v1beta1/options/contracts`, {
-      headers,
-      params: {
-        underlying_symbols: ticker,
-        type: direction === 'CALL' ? 'call' : 'put',
-        limit: 100,
-        sort: 'expiration_date',
-        order: 'asc',
-      },
-      timeout: 8000,
-    });
-
-    const contracts = res.data?.option_contracts || [];
-    console.log(`[contract] ${ticker}: contracts endpoint returned ${contracts.length} results`);
-    const today     = new Date().toISOString().split('T')[0];
-
-    // Get unique expiry dates that are >= today
-    const dates = [...new Set(
-      contracts
-        .map(c => c.expiration_date)
-        .filter(d => d >= today)
-    )].sort();
-
-    console.log(`[contract] ${ticker}: real expiries = [${dates.join(', ')}]`);
-    if (dates.length === 0) return null;
-
-    const nearest = dates[0];
-    const etNow   = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-    const isToday = nearest === today;
-    const label   = isToday ? '0DTE' : `${Math.round((new Date(nearest) - new Date(today)) / 86400000)}DTE`;
-
-    return { date: nearest, label };
-  } catch (err) {
-    console.error(`[contract] Expiry fetch failed for ${ticker}:`, err.message);
-    return null;
-  }
+function parseExpiryFromOCC(symbol) {
+  const m = symbol.match(/^[A-Z]{1,6}(\d{6})[CP]\d{8}$/);
+  if (!m) return null;
+  const d = m[1];
+  return `20${d.slice(0,2)}-${d.slice(2,4)}-${d.slice(4,6)}`;
 }
 
 /**
- * Fetch options chain from Alpaca
+ * Fetch all option snapshots for a ticker+direction from Alpaca,
+ * then pick the nearest expiry from the results.
+ * Uses /v1beta1/options/snapshots which works (the /contracts endpoint 404s).
  */
-async function fetchChain(ticker, expiry, direction) {
+async function fetchAllSnapshots(ticker, direction) {
   try {
     const type = direction === 'CALL' ? 'call' : 'put';
-    const res  = await axios.get(`${DATA_URL}/v1beta1/options/snapshots/${ticker}`, {
+    const res = await axios.get(`${DATA_URL}/v1beta1/options/snapshots/${ticker}`, {
       headers,
-      params: {
-        expiration_date: expiry,
-        type,
-        limit: 50,
-      },
-      timeout: 8000,
+      params: { type, limit: 100 },
+      timeout: 10000,
     });
     const snaps = res.data?.snapshots || {};
-    console.log(`[contract] ${ticker}: ${Object.keys(snaps).length} snapshots for ${expiry}`);
-    return snaps;
+    const symbols = Object.keys(snaps);
+    console.log(`[contract] ${ticker}: got ${symbols.length} snapshots (no expiry filter)`);
+
+    if (symbols.length === 0) return { snapshots: {}, expiry: null };
+
+    // Extract unique expiry dates from OCC symbols
+    const today = new Date().toISOString().split('T')[0];
+    const expiries = [...new Set(symbols.map(parseExpiryFromOCC).filter(d => d && d >= today))].sort();
+    console.log(`[contract] ${ticker}: real expiries from snapshots = [${expiries.join(', ')}]`);
+
+    if (expiries.length === 0) return { snapshots: snaps, expiry: null };
+
+    const nearest = expiries[0];
+    const days = Math.round((new Date(nearest) - new Date(today)) / 86400000);
+    const label = days <= 0 ? '0DTE' : `${days}DTE`;
+
+    // Filter snapshots to nearest expiry only
+    const filtered = {};
+    for (const [sym, snap] of Object.entries(snaps)) {
+      if (parseExpiryFromOCC(sym) === nearest) filtered[sym] = snap;
+    }
+    console.log(`[contract] ${ticker}: ${Object.keys(filtered).length} contracts for ${nearest} (${label})`);
+
+    return { snapshots: filtered, expiry: { date: nearest, label } };
   } catch (err) {
-    console.error(`[contract] Chain fetch failed for ${ticker}:`, err.response?.status, err.message);
-    return {};
+    console.error(`[contract] Snapshot fetch failed for ${ticker}:`, err.response?.status, err.message);
+    return { snapshots: {}, expiry: null };
   }
 }
 
@@ -233,16 +219,14 @@ function buildRecommendation(contract, expiry, grade, direction, ticker) {
  */
 export async function selectOptionsContract(ticker, direction, grade, currentPrice, atr) {
   try {
-    const expiry = await getExpiry(ticker, direction);
+    const { snapshots, expiry } = await fetchAllSnapshots(ticker, direction);
 
     if (!expiry) {
-      // No contracts available for this ticker
       console.log(`[contract] No options available for ${ticker}`);
       return null;
     }
 
-    const snapshots = await fetchChain(ticker, expiry.date, direction);
-    const contract  = selectContract(snapshots, direction, currentPrice, grade);
+    const contract = selectContract(snapshots, direction, currentPrice, grade);
 
     if (!contract) {
       console.log(`[contract] ${ticker}: no contract matched filters for ${expiry.date}`);
