@@ -98,6 +98,7 @@ function handleStockMessage(msg) {
         updateMarketEtf(msg.S, msg);
       } else if (trackedTickers.includes(msg.S)) {
         updateTickerBar(msg.S, msg);
+        console.log('[BAR]', msg.S, msg.c);
         // Notify scoring loop that new bar is ready
         if (onSignalCallback) onSignalCallback(msg.S);
       }
