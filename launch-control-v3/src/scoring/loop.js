@@ -90,7 +90,12 @@ export function resetDailyCircuitBreakers() {
  */
 export async function scoreTicker(ticker) {
   const session = getMarketSession();
-  if (!isScoreable(session)) return;
+
+  if (!isScoreable(session)) {
+    console.log(`[SKIP] ${ticker} session=${session}`);
+    return;
+  }
+
   const sessionMods = getSessionModifiers(session);
 
   // Reset daily tracking on new day
@@ -101,12 +106,18 @@ export async function scoreTicker(ticker) {
 
   // Check circuit breakers
   const cbCheck = checkCircuitBreakers();
-  if (!cbCheck.allowed) return;
+  if (!cbCheck.allowed) {
+    console.log(`[SKIP] ${ticker} circuit breaker: ${cbCheck.reason}`);
+    return;
+  }
 
   // Get ticker state
   const tickerState = getTickerState(ticker);
-  if (!tickerState || !tickerState.close || !tickerState.prevClose) return;
-  console.log('[SCORE]', ticker, 'close=', tickerState.close, 'prevClose=', tickerState.prevClose, 'session=', session);
+  console.log(`[SCORE] ${ticker} close=${tickerState?.close} prevClose=${tickerState?.prevClose} session=${session}`);
+  if (!tickerState || !tickerState.close || !tickerState.prevClose) {
+    console.log(`[SKIP] ${ticker} missing state`);
+    return;
+  }
 
   // Get profile
   const profiles = await getProfiles();
