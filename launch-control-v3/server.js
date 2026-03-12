@@ -36,7 +36,13 @@ app.get('/api/signals', async (req, res) => {
         leader_ticker, propagation_lag_min,
         spy_change_pct, qqq_change_pct, sector_change_pct,
         relative_volume, atr_multiple,
-        human_taken, human_pnl_pct,
+        human_taken, human_pnl_pct, human_entry_price, human_exit_price, human_notes,
+        contract_symbol, contract_strike, contract_expiry, contract_expiry_label,
+        contract_bid, contract_ask, contract_mid,
+        contract_entry_lo, contract_entry_hi,
+        contract_delta, contract_iv,
+        contract_t1, contract_t2, contract_t3, contract_stop,
+        contract_estimated,
         expires_at, created_at
       FROM lc_v3.signals
       WHERE DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
@@ -45,23 +51,37 @@ app.get('/api/signals', async (req, res) => {
     `);
     const signals = result.rows.map(s => ({
       ...s,
-      signal_id:        s.signal_id?.toString(),
-      created_at:       s.created_at?.toISOString(),
-      expires_at:       s.expires_at?.toISOString(),
-      composite_raw:    Number(s.composite_raw)    || 0,
-      relative_volume:  Number(s.relative_volume)  || null,
-      atr_multiple:     Number(s.atr_multiple)     || null,
-      spy_change_pct:   Number(s.spy_change_pct)   || null,
-      qqq_change_pct:   Number(s.qqq_change_pct)   || null,
-      sector_change_pct:Number(s.sector_change_pct)|| null,
-      position_size_pct:Number(s.position_size_pct)|| 0,
+      signal_id:         s.signal_id?.toString(),
+      created_at:        s.created_at?.toISOString(),
+      expires_at:        s.expires_at?.toISOString(),
+      composite_raw:     Number(s.composite_raw)     || 0,
+      relative_volume:   Number(s.relative_volume)   || null,
+      atr_multiple:      Number(s.atr_multiple)       || null,
+      spy_change_pct:    Number(s.spy_change_pct)     || null,
+      qqq_change_pct:    Number(s.qqq_change_pct)     || null,
+      sector_change_pct: Number(s.sector_change_pct)  || null,
+      position_size_pct: Number(s.position_size_pct)  || 0,
       position_size_dollars: Number(s.position_size_dollars) || 0,
       score_price_action: Number(s.score_price_action) || 0,
-      score_volume:     Number(s.score_volume)     || 0,
-      score_news:       Number(s.score_news)       || 0,
-      score_market:     Number(s.score_market)     || 0,
-      score_timing:     Number(s.score_timing)     || 0,
-      confluence_score: Number(s.confluence_score) || 0,
+      score_volume:      Number(s.score_volume)        || 0,
+      score_news:        Number(s.score_news)          || 0,
+      score_market:      Number(s.score_market)        || 0,
+      score_timing:      Number(s.score_timing)        || 0,
+      confluence_score:  Number(s.confluence_score)    || 0,
+      contract_strike:   Number(s.contract_strike)     || null,
+      contract_mid:      Number(s.contract_mid)        || null,
+      contract_bid:      Number(s.contract_bid)        || null,
+      contract_ask:      Number(s.contract_ask)        || null,
+      contract_entry_lo: Number(s.contract_entry_lo)   || null,
+      contract_entry_hi: Number(s.contract_entry_hi)   || null,
+      contract_delta:    Number(s.contract_delta)      || null,
+      contract_iv:       Number(s.contract_iv)         || null,
+      contract_t1:       Number(s.contract_t1)         || null,
+      contract_t2:       Number(s.contract_t2)         || null,
+      contract_t3:       Number(s.contract_t3)         || null,
+      contract_stop:     Number(s.contract_stop)       || null,
+      human_entry_price: Number(s.human_entry_price)   || null,
+      human_exit_price:  Number(s.human_exit_price)    || null,
     }));
     res.json({ signals, count: signals.length });
   } catch (err) {
@@ -147,6 +167,27 @@ app.post('/api/outcome', async (req, res) => {
   }
 });
 
+// Edit a previously recorded trade
+app.post('/api/edit', async (req, res) => {
+  try {
+    const { signal_id, entry_price, exit_price, notes } = req.body;
+    const pnl = entry_price && exit_price
+      ? (exit_price - entry_price) / entry_price
+      : null;
+    await db.query(`
+      UPDATE lc_v3.signals SET
+        human_entry_price = $1,
+        human_exit_price  = $2,
+        human_pnl_pct     = $3,
+        human_notes       = $4
+      WHERE signal_id = $5
+    `, [entry_price || null, exit_price || null, pnl, notes || null, signal_id]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.json({ ok: false, error: err.message });
+  }
+});
+
 // Health check
 app.get('/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
@@ -166,9 +207,12 @@ server.listen(PORT, () => {
 // ── SCORING WORKER ────────────────────────────────────────────────────────────
 async function startWorker() {
   try {
-    const { default: worker } = await import('./src/main.js');
+    // Import and run the scoring engine directly
+    await import('./src/main.js');
+    console.log('[LC v3] Scoring worker started');
   } catch (err) {
     console.error('[LC v3] Worker failed to start:', err.message);
+    console.error(err.stack);
     console.log('[LC v3] Running in API-only mode (no live scoring)');
   }
 }

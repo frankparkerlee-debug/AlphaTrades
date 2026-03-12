@@ -6,6 +6,7 @@ import { computeNewsScore } from './news.js';
 import { computeMarketScore } from './market.js';
 import { computeTimingScore } from './timing.js';
 import { query } from '../data/db.js';
+import { selectOptionsContract } from '../options/contract-selector.js';
 import logger from '../utils/logger.js';
 
 // Grade thresholds
@@ -249,6 +250,20 @@ export async function computeComposite(params) {
 export async function writeSignal(signal, clusterCtx = {}) {
   const expiresAt = new Date(Date.now() + 60 * 1000); // 60 second expiry
 
+  // Fetch options contract recommendation
+  let contract = null;
+  try {
+    contract = await selectOptionsContract(
+      signal.ticker,
+      signal.direction,
+      signal.grade,
+      signal.marketSnapshot.price,
+      signal.marketSnapshot.atrMultiple,
+    );
+  } catch (err) {
+    logger.warn(`Contract selection failed for ${signal.ticker}: ${err.message}`);
+  }
+
   try {
     const res = await query(`
       INSERT INTO lc_v3.signals (
@@ -262,12 +277,20 @@ export async function writeSignal(signal, clusterCtx = {}) {
         cluster_id, cluster_context, leader_ticker, leader_move_pct,
         propagation_lag_min, confluence_score,
         flags, conflict_detected,
-        position_size_pct, position_size_dollars
+        position_size_pct, position_size_dollars,
+        contract_symbol, contract_strike, contract_expiry, contract_expiry_label,
+        contract_bid, contract_ask, contract_mid,
+        contract_entry_lo, contract_entry_hi,
+        contract_delta, contract_iv,
+        contract_t1, contract_t2, contract_t3, contract_stop,
+        contract_estimated
       ) VALUES (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
         $11,$12,$13,$14,$15,$16,$17,$18,$19,
         $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
-        $31,$32,$33,$34,$35,$36,$37,$38,$39,$40
+        $31,$32,$33,$34,$35,$36,$37,$38,$39,$40,
+        $41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,
+        $52,$53,$54,$55,$56
       ) RETURNING signal_id
     `, [
       expiresAt, 'ACTIVE', signal.ticker, signal.direction, signal.signalTier,
@@ -287,6 +310,14 @@ export async function writeSignal(signal, clusterCtx = {}) {
       clusterCtx.propagationLagMin || null, signal.confluenceScore || 0,
       JSON.stringify(signal.flags), signal.conflictDetected,
       signal.positionSizePct, signal.positionSizeDollars,
+      contract?.symbol || null, contract?.strike || null,
+      contract?.expiry || null, contract?.expiry_label || null,
+      contract?.bid || null, contract?.ask || null, contract?.mid || null,
+      contract?.entry_lo || null, contract?.entry_hi || null,
+      contract?.delta || null, contract?.iv || null,
+      contract?.t1 || null, contract?.t2 || null,
+      contract?.t3 || null, contract?.stop || null,
+      contract?.estimated || false,
     ]);
 
     logger.signal(signal);

@@ -199,12 +199,19 @@ body::after {
 
 /* Contract */
 .contract-row {
-  background: var(--bg3); border-radius: 4px; padding: 7px 10px; margin-bottom: 8px;
-  font-family: var(--mono); font-size: 11px;
+  background: var(--bg3); border-radius: 4px; padding: 8px 10px; margin-bottom: 8px;
+  border-left: 2px solid var(--amber);
 }
-.contract-label { font-size: 8px; color: var(--text3); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 3px; }
-.contract-details { color: var(--text1); font-weight: 600; }
-.contract-targets { font-size: 9px; color: var(--text3); margin-top: 3px; }
+.contract-row.contract-pending { border-left-color: var(--border); }
+.contract-label { font-size: 8px; color: var(--text3); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 4px; }
+.contract-details { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--text1); margin-bottom: 5px; }
+.contract-pricing { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
+.cp-item { font-size: 10px; color: var(--text3); font-family: var(--mono); }
+.cp-item strong { color: var(--text1); }
+.cp-green strong { color: var(--green); }
+.cp-gold  strong { color: var(--amber2); }
+.cp-red   strong { color: var(--red); }
+.contract-greeks { font-size: 9px; color: var(--text4); font-family: var(--mono); margin-top: 3px; }
 
 /* Countdown */
 .cd-bar { height: 2px; background: var(--border); border-radius: 1px; margin-bottom: 3px; overflow: hidden; }
@@ -224,6 +231,7 @@ body::after {
 .btn-skip   { background: var(--bg3); color: var(--text3); border: 1px solid var(--border); }
 .btn-taken  { background: #065f4640; color: var(--green); border: 1px solid var(--green); cursor: default; }
 .btn-skipped{ background: var(--bg3); color: var(--text4); cursor: default; }
+.btn-edit   { background: transparent; color: var(--amber); border: 1px solid var(--amber); font-size: 9px; padding: 9px 10px; flex: 0; }
 
 /* Record form */
 .record-form { margin-top: 8px; padding: 8px; background: var(--bg3); border-radius: 4px; border: 1px solid var(--border); }
@@ -480,12 +488,27 @@ function buildCard(s) {
   if ((s.confluence_score||0)>=3) tags.push(`<span class="tag tag-conf">⚡ CONF ${s.confluence_score}</span>`);
 
   // Contract details
-  const contract = s.contract_details ? `
+  const hasContract = s.contract_mid > 0;
+  const isEst = s.contract_estimated;
+  const contract = hasContract ? `
     <div class="contract-row">
-      <div class="contract-label">Contract</div>
-      <div class="contract-details">${s.contract_details}</div>
-      ${s.entry_price ? `<div class="contract-targets">Entry $${s.entry_price} · T1 $${s.t1} · T2 $${s.t2} · Stop $${s.stop}</div>` : ''}
-    </div>` : '';
+      <div class="contract-label">CONTRACT${isEst?' (ESTIMATED)':''}</div>
+      <div class="contract-details">${s.contract_symbol||`${s.ticker} $${s.contract_strike} ${s.direction}`} · ${s.contract_expiry_label||'0DTE'}</div>
+      <div class="contract-pricing">
+        <span class="cp-item">Entry <strong>$${s.contract_entry_lo}–$${s.contract_entry_hi}</strong></span>
+        <span class="cp-item cp-green">T1 <strong>$${s.contract_t1}</strong></span>
+        ${s.contract_t2?`<span class="cp-item cp-green">T2 <strong>$${s.contract_t2}</strong></span>`:''}
+        ${s.contract_t3?`<span class="cp-item cp-gold">T3 <strong>$${s.contract_t3}</strong></span>`:''}
+        <span class="cp-item cp-red">Stop <strong>$${s.contract_stop}</strong></span>
+      </div>
+      <div class="contract-greeks">
+        Δ ${s.contract_delta} · IV ${s.contract_iv}% · Bid $${s.contract_bid} / Ask $${s.contract_ask}
+      </div>
+    </div>` : `
+    <div class="contract-row contract-pending">
+      <div class="contract-label">CONTRACT</div>
+      <div style="color:var(--text3);font-size:10px">Fetching options chain...</div>
+    </div>`;
 
   // Market ctx
   const mkt = [
@@ -500,9 +523,11 @@ function buildCard(s) {
 
   // Actions
   const actions = stale
-    ? `<button class="btn btn-skipped" disabled>${s.human_taken?'✓ TAKEN':'SKIPPED'}</button>`
+    ? `<button class="btn btn-skipped" disabled>${s.human_taken?'✓ TAKEN':'SKIPPED'}</button>
+       ${s.human_taken?`<button class="btn btn-edit" onclick="editTrade('${s.signal_id}',${s.human_entry_price||0},${s.human_exit_price||0})">EDIT</button>`:''}`
     : s.human_taken===true
-      ? `<button class="btn btn-taken" disabled>✓ TAKEN</button>`
+      ? `<button class="btn btn-taken" disabled>✓ TAKEN</button>
+         <button class="btn btn-edit" onclick="editTrade('${s.signal_id}',${s.human_entry_price||0},${s.human_exit_price||0})">EDIT</button>`
       : `<button class="btn btn-take" onclick="takeSignal('${s.signal_id}',this)">TAKE</button>
          <button class="btn btn-skip" onclick="skipSignal('${s.signal_id}',this)">SKIP</button>`;
 
@@ -591,6 +616,33 @@ async function skipSignal(id, btn) {
   await fetch('/api/outcome',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({signal_id:id,taken:false})});
   btn.textContent='SKIPPED'; btn.className='btn btn-skipped';
+}
+
+function editTrade(id, currentEntry, currentExit) {
+  const rec = document.getElementById(`rec-${id}`);
+  rec.innerHTML = `
+    <div class="record-form" style="margin-top:8px">
+      <div style="font-size:9px;color:var(--text3);margin-bottom:5px;font-family:var(--mono)">EDIT TRADE</div>
+      <div class="record-inputs">
+        <input class="record-input" id="ep-${id}" placeholder="Entry $" type="number" step="0.01" value="${currentEntry||''}">
+        <input class="record-input" id="xp-${id}" placeholder="Exit $"  type="number" step="0.01" value="${currentExit||''}">
+      </div>
+      <input class="record-input" id="nt-${id}" placeholder="Notes (optional)" style="width:100%;margin-bottom:6px">
+      <div style="display:flex;gap:6px">
+        <button class="btn-confirm" style="flex:1" onclick="confirmEdit('${id}')">SAVE</button>
+        <button class="btn-confirm" style="flex:0;padding:6px 12px;background:var(--bg3);color:var(--text3)" onclick="document.getElementById('rec-${id}').innerHTML=''">CANCEL</button>
+      </div>
+    </div>`;
+}
+
+async function confirmEdit(id) {
+  const ep    = parseFloat(document.getElementById(`ep-${id}`)?.value)||null;
+  const xp    = parseFloat(document.getElementById(`xp-${id}`)?.value)||null;
+  const notes = document.getElementById(`nt-${id}`)?.value||null;
+  await fetch('/api/edit',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({signal_id:id,entry_price:ep,exit_price:xp,notes})});
+  document.getElementById(`rec-${id}`).innerHTML='';
+  loadAll();
 }
 
 // ── SESSION ───────────────────────────────────────────────────────

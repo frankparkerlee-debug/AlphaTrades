@@ -1,5 +1,5 @@
-import dotenv from 'dotenv';
-dotenv.config();
+// Scoring engine — runs inside server.js process
+// dotenv already loaded by server.js
 
 import cron from 'node-cron';
 import { query } from './data/db.js';
