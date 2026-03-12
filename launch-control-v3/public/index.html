@@ -448,6 +448,16 @@ function toggleHist(btn) {
   render();
 }
 
+// Format OCC symbol like BKR20260320P00053500 → "BKR 3/20/2026 PUT $53.50"
+function formatOCC(sym) {
+  if (!sym) return null;
+  const m = sym.match(/^([A-Z]{1,6})(\d{6})([CP])(\d{8})$/);
+  if (!m) return sym;
+  const [,tkr,dt,cp,st] = m;
+  const mm=parseInt(dt.slice(2,4)), dd=parseInt(dt.slice(4,6)), yy='20'+dt.slice(0,2);
+  return `${tkr} ${mm}/${dd}/${yy} ${cp==='C'?'CALL':'PUT'} $${parseInt(st)/1000}`;
+}
+
 // ── RENDER SIGNALS ────────────────────────────────────────────────
 function render() {
   const list = signals.filter(s => {
@@ -493,7 +503,7 @@ function buildCard(s) {
   const contract = hasContract ? `
     <div class="contract-row">
       <div class="contract-label">CONTRACT${isEst?' (ESTIMATED)':''}</div>
-      <div class="contract-details">${s.contract_symbol||`${s.ticker} $${s.contract_strike} ${s.direction}`} · ${s.contract_expiry_label||'0DTE'}</div>
+      <div class="contract-details">${formatOCC(s.contract_symbol)||`${s.ticker} $${s.contract_strike} ${s.direction}`} · ${s.contract_expiry_label||''}</div>
       <div class="contract-pricing">
         <span class="cp-item">Entry <strong>$${s.contract_entry_lo}–$${s.contract_entry_hi}</strong></span>
         <span class="cp-item cp-green">T1 <strong>$${s.contract_t1}</strong></span>
