@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const BASE_URL = process.env.ALPACA_DATA_URL || 'https://data.alpaca.markets';
-const FEED = process.env.ALPACA_FEED || 'iex';
+const FEED = process.env.ALPACA_FEED || 'sip';
 
 const client = axios.create({
   baseURL: BASE_URL,

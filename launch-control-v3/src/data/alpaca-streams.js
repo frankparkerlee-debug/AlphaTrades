@@ -40,7 +40,7 @@ export function onNewSignalReady(callback) {
 
 export function connectStockStream() {
   if (stockWs && stockWs.readyState < 2) return;
-  const url = `${STREAM_URL}/v2/${process.env.ALPACA_FEED || 'iex'}`;
+  const url = `${STREAM_URL}/v2/${process.env.ALPACA_FEED || 'sip'}`;
   logger.info(`Connecting stock stream: ${url}`);
   setStreamStatus('bars', 'connecting');
 
