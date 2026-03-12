@@ -101,6 +101,45 @@ app.get('/api/signals', async (req, res) => {
   }
 });
 
+// Backfill contracts for signals missing them
+async function backfillContracts() {
+  try {
+    const missing = await db.query(`
+      SELECT signal_id, ticker, direction, grade
+      FROM lc_v3.signals
+      WHERE DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
+        AND contract_mid IS NULL AND status = 'ACTIVE'
+    `);
+    if (missing.rows.length === 0) return;
+    console.log(`[BACKFILL] ${missing.rows.length} signals missing contracts`);
+    for (const row of missing.rows) {
+      try {
+        const contract = await selectOptionsContract(row.ticker, row.direction, row.grade, 0, 0);
+        if (contract && contract.mid > 0) {
+          await db.query(`
+            UPDATE lc_v3.signals SET
+              contract_symbol=$1, contract_strike=$2, contract_expiry=$3, contract_expiry_label=$4,
+              contract_bid=$5, contract_ask=$6, contract_mid=$7,
+              contract_entry_lo=$8, contract_entry_hi=$9,
+              contract_delta=$10, contract_iv=$11,
+              contract_t1=$12, contract_t2=$13, contract_t3=$14, contract_stop=$15,
+              contract_estimated=false
+            WHERE signal_id=$16
+          `, [
+            contract.symbol, contract.strike, contract.expiry, contract.expiry_label,
+            contract.bid, contract.ask, contract.mid,
+            contract.entry_lo, contract.entry_hi,
+            contract.delta, contract.iv,
+            contract.t1, contract.t2, contract.t3, contract.stop,
+            row.signal_id,
+          ]);
+          console.log(`[BACKFILL] ${row.ticker} ${row.direction}: ${contract.symbol} mid=$${contract.mid}`);
+        }
+      } catch (e) { console.error(`[BACKFILL] ${row.ticker}:`, e.message); }
+    }
+  } catch (e) { console.error('[BACKFILL] Error:', e.message); }
+}
+
 // Debug — test contract selector + raw Alpaca API on live server
 app.get('/api/debug/contract/:ticker/:direction', async (req, res) => {
   const { ticker, direction } = req.params;
@@ -510,5 +549,8 @@ async function startRestPoller() {
 
   setTimeout(poll, 5000);
   setInterval(poll, 60000);
+  // Backfill contracts for any signals that were created before the contract fix
+  setTimeout(backfillContracts, 15000);
+  setInterval(backfillContracts, 5 * 60 * 1000);
   console.log('[LC v3] REST poller started — scoring every 60s');
 }
