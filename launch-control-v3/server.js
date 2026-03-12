@@ -246,6 +246,97 @@ app.get('/api/debug/contract/:ticker/:direction', async (req, res) => {
   }
 });
 
+// ── BACKTEST ROUTES ──────────────────────────────────────────────────────────
+
+// Serve backtest dashboard
+app.get('/backtest', (req, res) => {
+  res.sendFile(join(__dirname, 'public', 'backtest.html'));
+});
+
+// Get latest backtest results
+app.get('/api/backtest', async (req, res) => {
+  try {
+    const result = await db.query(
+      'SELECT results, run_date, created_at FROM lc_v3.backtest_results ORDER BY run_date DESC LIMIT 1'
+    );
+    if (result.rows.length === 0) {
+      return res.json({ results: null, lastRun: null });
+    }
+    res.json({
+      results:  result.rows[0].results,
+      lastRun:  result.rows[0].created_at?.toISOString(),
+      runDate:  result.rows[0].run_date,
+    });
+  } catch (err) {
+    res.json({ results: null, error: err.message });
+  }
+});
+
+// Trigger manual backtest run
+let backtestRunning = false;
+app.post('/api/backtest/run', async (req, res) => {
+  if (backtestRunning) {
+    return res.json({ ok: false, error: 'Backtest already running' });
+  }
+  res.json({ ok: true, message: 'Backtest started' });
+
+  // Run in background
+  backtestRunning = true;
+  try {
+    await executeBacktest();
+  } finally {
+    backtestRunning = false;
+  }
+});
+
+// Backtest status
+app.get('/api/backtest/status', (req, res) => {
+  res.json({ running: backtestRunning });
+});
+
+async function executeBacktest() {
+  try {
+    const { runBacktest } = await import('./scripts/backtest/run.js');
+
+    // Last 20 trading days
+    const end = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - 30); // ~30 calendar days ≈ 20 trading days
+    const startDate = start.toISOString().split('T')[0];
+    const endDate   = end.toISOString().split('T')[0];
+
+    console.log(`[BACKTEST] Starting: ${startDate} → ${endDate}`);
+    const results = await runBacktest(startDate, endDate, parseFloat(process.env.ACCOUNT_SIZE || '7500'));
+
+    // Store in DB
+    await db.query(`
+      INSERT INTO lc_v3.backtest_results (run_date, start_date, end_date, results)
+      VALUES (CURRENT_DATE, $1, $2, $3)
+    `, [startDate, endDate, JSON.stringify(results)]);
+
+    // Keep only last 30 runs
+    await db.query(`
+      DELETE FROM lc_v3.backtest_results
+      WHERE id NOT IN (
+        SELECT id FROM lc_v3.backtest_results ORDER BY run_date DESC LIMIT 30
+      )
+    `);
+
+    console.log(`[BACKTEST] Complete: ${results.summary?.totalSignals || 0} signals, P&L: $${results.summary?.totalPnlDollars || 0}`);
+  } catch (err) {
+    console.error('[BACKTEST] Failed:', err.message);
+  }
+}
+
+// Schedule daily backtest at 5pm ET (after market close)
+cron.schedule('0 17 * * 1-5', () => {
+  if (!backtestRunning) {
+    console.log('[BACKTEST] Scheduled daily run starting...');
+    backtestRunning = true;
+    executeBacktest().finally(() => { backtestRunning = false; });
+  }
+}, { timezone: 'America/New_York' });
+
 // Catch-all — serve dashboard
 app.get('*', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'index.html'));

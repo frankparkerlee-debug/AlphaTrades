@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Launch Control v3 — Backtest</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg0:     #060a0f;
+  --bg1:     #0b1118;
+  --bg2:     #111a24;
+  --bg3:     #182030;
+  --border:  #1e2d3d;
+  --border2: #243547;
+  --amber:   #f59e0b;
+  --amber2:  #fbbf24;
+  --green:   #10b981;
+  --green2:  #34d399;
+  --red:     #ef4444;
+  --blue:    #3b82f6;
+  --purple:  #8b5cf6;
+  --text1:   #e2e8f0;
+  --text2:   #a8b8c8;
+  --text3:   #6b7f94;
+  --text4:   #3d5068;
+  --mono:    'IBM Plex Mono', monospace;
+  --sans:    'IBM Plex Sans', sans-serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; background: var(--bg0); color: var(--text1); font-family: var(--sans); font-size: 13px; }
+body::after {
+  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 9999;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.025) 2px, rgba(0,0,0,0.025) 4px);
+}
+::-webkit-scrollbar { width: 3px; } ::-webkit-scrollbar-track { background: var(--bg0); } ::-webkit-scrollbar-thumb { background: var(--border2); }
+
+/* Header */
+#header {
+  position: sticky; top: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 16px; height: 44px;
+  background: var(--bg1); border-bottom: 1px solid var(--border);
+}
+.logo {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--mono); font-size: 13px; font-weight: 700;
+  letter-spacing: 3px; color: var(--amber);
+}
+.logo-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+.back-link {
+  font-family: var(--mono); font-size: 10px; color: var(--text3);
+  text-decoration: none; letter-spacing: 1px;
+}
+.back-link:hover { color: var(--amber); }
+
+/* Layout */
+.container { max-width: 1200px; margin: 0 auto; padding: 16px; }
+
+/* Stat row */
+.stat-row { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+.stat { background: var(--bg2); border: 1px solid var(--border); border-radius: 5px; padding: 10px 16px; min-width: 110px; flex: 1; }
+.stat-label { font-size: 8px; font-weight: 700; letter-spacing: 1.5px; color: var(--text3); text-transform: uppercase; margin-bottom: 4px; }
+.stat-value { font-family: var(--mono); font-size: 20px; font-weight: 700; color: var(--amber); }
+.stat-sub { font-family: var(--mono); font-size: 9px; color: var(--text3); margin-top: 2px; }
+
+/* Sections */
+.section { background: var(--bg1); border: 1px solid var(--border); border-radius: 6px; padding: 16px; margin-bottom: 16px; }
+.section-title { font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 2px; color: var(--text3); margin-bottom: 12px; }
+
+/* Grid */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+@media(max-width:700px) { .grid-2 { grid-template-columns: 1fr; } }
+
+/* Tables */
+.data-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11px; }
+.data-table th {
+  text-align: left; padding: 6px 8px; font-size: 8px; font-weight: 700;
+  letter-spacing: 1px; color: var(--text3); border-bottom: 1px solid var(--border);
+  text-transform: uppercase;
+}
+.data-table td { padding: 5px 8px; border-bottom: 1px solid var(--bg3); color: var(--text2); }
+.data-table tr:hover td { background: var(--bg2); }
+.pos { color: var(--green); }
+.neg { color: var(--red); }
+.grade-col { font-weight: 700; }
+
+/* Equity curve */
+#equityChart { width: 100%; height: 200px; }
+
+/* Run button */
+.run-btn {
+  font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 1px;
+  padding: 6px 14px; border-radius: 3px; border: 1px solid var(--amber);
+  background: rgba(245,158,11,0.1); color: var(--amber); cursor: pointer;
+}
+.run-btn:hover { background: rgba(245,158,11,0.2); }
+.run-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.run-status { font-family: var(--mono); font-size: 9px; color: var(--text3); }
+
+/* Empty state */
+.empty { text-align: center; padding: 60px 20px; color: var(--text3); }
+.empty-icon { font-size: 36px; margin-bottom: 12px; opacity: 0.3; }
+.empty-text { font-family: var(--mono); font-size: 12px; letter-spacing: 1px; margin-bottom: 8px; }
+.empty-sub { font-size: 11px; }
+
+/* Signals table */
+#signalsSection { max-height: 500px; overflow-y: auto; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <div class="logo"><div class="logo-dot"></div>LAUNCH CONTROL — BACKTEST</div>
+  <div style="display:flex;align-items:center;gap:12px">
+    <span class="run-status" id="runStatus"></span>
+    <button class="run-btn" id="runBtn" onclick="triggerRun()">RUN NOW</button>
+    <a href="/" class="back-link">DASHBOARD</a>
+  </div>
+</div>
+
+<div class="container">
+  <!-- Summary Stats -->
+  <div class="stat-row" id="statRow">
+    <div class="stat"><div class="stat-label">SIGNALS</div><div class="stat-value" id="sTotalSigs">—</div><div class="stat-sub" id="sPerDay"></div></div>
+    <div class="stat"><div class="stat-label">WIN RATE</div><div class="stat-value" id="sWinRate">—</div></div>
+    <div class="stat"><div class="stat-label">TOTAL P&L</div><div class="stat-value" id="sPnl">—</div><div class="stat-sub" id="sPnlPct"></div></div>
+    <div class="stat"><div class="stat-label">PROFIT FACTOR</div><div class="stat-value" id="sPF">—</div></div>
+    <div class="stat"><div class="stat-label">MAX DRAWDOWN</div><div class="stat-value" id="sDD">—</div><div class="stat-sub" id="sDDPct"></div></div>
+    <div class="stat"><div class="stat-label">AVG HOLD</div><div class="stat-value" id="sHold">—</div></div>
+    <div class="stat"><div class="stat-label">CALLS / PUTS</div><div class="stat-value" id="sDir">—</div><div class="stat-sub" id="sDirWR"></div></div>
+  </div>
+
+  <!-- Equity Curve -->
+  <div class="section">
+    <div class="section-title">EQUITY CURVE</div>
+    <div id="equityChart"></div>
+  </div>
+
+  <!-- Grade + Exit Type -->
+  <div class="grid-2">
+    <div class="section">
+      <div class="section-title">BY GRADE</div>
+      <table class="data-table" id="gradeTable">
+        <thead><tr><th>Grade</th><th>Count</th><th>Win%</th><th>Avg P&L</th><th>Total</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="section">
+      <div class="section-title">EXIT TYPE</div>
+      <table class="data-table" id="exitTable">
+        <thead><tr><th>Type</th><th>Count</th><th>%</th><th>P&L</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Tickers + Hours -->
+  <div class="grid-2">
+    <div class="section">
+      <div class="section-title">TOP TICKERS</div>
+      <table class="data-table" id="tickerTable">
+        <thead><tr><th>Ticker</th><th>Signals</th><th>Win%</th><th>P&L</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="section">
+      <div class="section-title">BY HOUR (ET)</div>
+      <table class="data-table" id="hourTable">
+        <thead><tr><th>Hour</th><th>Signals</th><th>Win%</th><th>P&L</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Signals Table -->
+  <div class="section" id="signalsSection">
+    <div class="section-title">ALL SIGNALS</div>
+    <table class="data-table" id="signalsTable">
+      <thead><tr>
+        <th>Date</th><th>Time</th><th>Ticker</th><th>Dir</th><th>Grade</th>
+        <th>Comp</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Hold</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+function $(id) { return document.getElementById(id); }
+function dollarFmt(n) { return `${n >= 0 ? '+' : '-'}$${Math.abs(n).toLocaleString()}`; }
+function pctFmt(n) { return `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`; }
+function pnlClass(n) { return n > 0 ? 'pos' : n < 0 ? 'neg' : ''; }
+function gradeColor(g) {
+  return {'A+':'#fbbf24','A':'#f59e0b','A-':'#10b981','B+':'#3b82f6','B':'#8b5cf6'}[g]||'#64748b';
+}
+
+async function loadResults() {
+  try {
+    const res = await fetch('/api/backtest').then(r => r.json());
+    if (!res.results) {
+      showEmpty();
+      return;
+    }
+    renderResults(res.results, res.lastRun);
+  } catch(e) {
+    showEmpty();
+  }
+}
+
+function showEmpty() {
+  $('statRow').style.display = 'none';
+  document.querySelector('.container').innerHTML = `
+    <div class="empty">
+      <div class="empty-icon">&#9783;</div>
+      <div class="empty-text">NO BACKTEST RESULTS YET</div>
+      <div class="empty-sub">Click RUN NOW to generate your first backtest, or wait for the daily 5pm ET auto-run.</div>
+    </div>`;
+}
+
+function renderResults(data, lastRun) {
+  const s = data.summary;
+  const c = data.config;
+
+  // Header status
+  if (lastRun) {
+    $('runStatus').textContent = `Last run: ${new Date(lastRun).toLocaleString('en-US', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', timeZone:'America/New_York' })} ET — ${c.startDate} to ${c.endDate} (${c.tradingDays}d)`;
+  }
+
+  // Summary stats
+  $('sTotalSigs').textContent = s.totalSignals;
+  $('sPerDay').textContent = `${s.signalsPerDay}/day`;
+  $('sWinRate').textContent = `${s.winRate}%`;
+  $('sWinRate').style.color = s.winRate >= 55 ? 'var(--green)' : s.winRate >= 45 ? 'var(--amber)' : 'var(--red)';
+  $('sPnl').textContent = dollarFmt(s.totalPnlDollars);
+  $('sPnl').style.color = s.totalPnlDollars >= 0 ? 'var(--green)' : 'var(--red)';
+  $('sPnlPct').textContent = pctFmt(s.totalPnlPct);
+  $('sPF').textContent = s.profitFactor >= 999 ? '∞' : s.profitFactor.toFixed(2);
+  $('sPF').style.color = s.profitFactor >= 1.5 ? 'var(--green)' : s.profitFactor >= 1.0 ? 'var(--amber)' : 'var(--red)';
+  $('sDD').textContent = dollarFmt(s.maxDrawdownDollars);
+  $('sDD').style.color = 'var(--red)';
+  $('sDDPct').textContent = pctFmt(s.maxDrawdownPct);
+  $('sHold').textContent = `${s.avgHoldMinutes}m`;
+  $('sDir').textContent = `${s.calls || 0} / ${s.puts || 0}`;
+  $('sDirWR').textContent = `${s.callWinRate || 0}% / ${s.putWinRate || 0}%`;
+
+  // Equity curve
+  renderEquityCurve(data.equityCurve);
+
+  // By grade
+  const grades = ['A+','A','A-','B+','B'];
+  const gt = $('gradeTable').querySelector('tbody');
+  gt.innerHTML = grades.filter(g => data.byGrade[g]?.count > 0).map(g => {
+    const d = data.byGrade[g];
+    return `<tr>
+      <td class="grade-col" style="color:${gradeColor(g)}">${g}</td>
+      <td>${d.count}</td>
+      <td>${d.winRate}%</td>
+      <td class="${pnlClass(d.avgPnl)}">${dollarFmt(d.avgPnl)}</td>
+      <td class="${pnlClass(d.pnl)}">${dollarFmt(d.pnl)}</td>
+    </tr>`;
+  }).join('');
+
+  // By exit type
+  const et = $('exitTable').querySelector('tbody');
+  et.innerHTML = ['T1','T2','T3','STOP','EOD'].filter(e => data.byExit[e]?.count > 0).map(e => {
+    const d = data.byExit[e];
+    return `<tr>
+      <td style="color:${e==='STOP'?'var(--red)':e==='EOD'?'var(--text3)':'var(--green)'}">${e}</td>
+      <td>${d.count}</td>
+      <td>${d.pct}%</td>
+      <td class="${pnlClass(d.pnl)}">${dollarFmt(d.pnl)}</td>
+    </tr>`;
+  }).join('');
+
+  // By ticker (top 15)
+  const tt = $('tickerTable').querySelector('tbody');
+  tt.innerHTML = (data.byTicker || []).slice(0, 15).map(t => `<tr>
+    <td style="color:var(--amber);font-weight:600">${t.ticker}</td>
+    <td>${t.count}</td>
+    <td>${t.winRate}%</td>
+    <td class="${pnlClass(t.pnl)}">${dollarFmt(t.pnl)}</td>
+  </tr>`).join('');
+
+  // By hour
+  const ht = $('hourTable').querySelector('tbody');
+  ht.innerHTML = (data.byHour || []).map(h => `<tr>
+    <td>${h.hour}:00</td>
+    <td>${h.count}</td>
+    <td>${h.winRate}%</td>
+    <td class="${pnlClass(h.pnl)}">${dollarFmt(h.pnl)}</td>
+  </tr>`).join('');
+
+  // Signals table
+  const st = $('signalsTable').querySelector('tbody');
+  st.innerHTML = (data.signals || []).map(s => `<tr>
+    <td>${s.date}</td>
+    <td>${s.time?.slice(11,16) || ''}</td>
+    <td style="color:var(--amber);font-weight:600">${s.ticker}</td>
+    <td style="color:${s.direction==='CALL'?'var(--green)':'var(--red)'}">${s.direction}</td>
+    <td class="grade-col" style="color:${gradeColor(s.grade)}">${s.grade}</td>
+    <td>${s.composite}</td>
+    <td>$${s.entryPrice?.toFixed(2) || '—'}</td>
+    <td style="color:${s.exitType==='STOP'?'var(--red)':s.exitType==='EOD'?'var(--text3)':'var(--green)'}">${s.exitType}</td>
+    <td class="${pnlClass(s.pnlDollars)}">${dollarFmt(s.pnlDollars)}</td>
+    <td>${s.holdMinutes}m</td>
+  </tr>`).join('');
+}
+
+function renderEquityCurve(curve) {
+  if (!curve || curve.length === 0) {
+    $('equityChart').innerHTML = '<div style="color:var(--text3);text-align:center;padding:40px">No data</div>';
+    return;
+  }
+
+  const W = 1160, H = 180, PAD = 40;
+  const values = curve.map(c => c.cumPnl);
+  const minV = Math.min(0, ...values);
+  const maxV = Math.max(0, ...values);
+  const range = Math.max(1, maxV - minV);
+
+  function x(i) { return PAD + (i / Math.max(1, curve.length - 1)) * (W - PAD * 2); }
+  function y(v) { return H - PAD - ((v - minV) / range) * (H - PAD * 2); }
+
+  const zeroY = y(0);
+  const points = curve.map((c, i) => `${x(i)},${y(c.cumPnl)}`).join(' ');
+  const areaPoints = `${x(0)},${zeroY} ${points} ${x(curve.length-1)},${zeroY}`;
+
+  // Color: green if ending positive, red if negative
+  const endColor = values[values.length - 1] >= 0 ? '#10b981' : '#ef4444';
+  const fillColor = values[values.length - 1] >= 0 ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)';
+
+  // Y-axis labels
+  const yLabels = [minV, minV + range/2, maxV].map(v =>
+    `<text x="${PAD-4}" y="${y(v)+3}" fill="#6b7f94" font-size="9" text-anchor="end" font-family="IBM Plex Mono">$${Math.round(v)}</text>`
+  ).join('');
+
+  // X-axis labels (first, middle, last)
+  const xIdxs = [0, Math.floor(curve.length/2), curve.length-1];
+  const xLabels = xIdxs.map(i =>
+    `<text x="${x(i)}" y="${H-5}" fill="#6b7f94" font-size="9" text-anchor="middle" font-family="IBM Plex Mono">${curve[i]?.date?.slice(5) || ''}</text>`
+  ).join('');
+
+  $('equityChart').innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" width="100%" height="100%">
+      <!-- Zero line -->
+      <line x1="${PAD}" y1="${zeroY}" x2="${W-PAD}" y2="${zeroY}" stroke="#1e2d3d" stroke-width="1" stroke-dasharray="4"/>
+      <!-- Grid -->
+      <line x1="${PAD}" y1="${y(maxV)}" x2="${W-PAD}" y2="${y(maxV)}" stroke="#111a24" stroke-width="0.5"/>
+      <line x1="${PAD}" y1="${y(minV)}" x2="${W-PAD}" y2="${y(minV)}" stroke="#111a24" stroke-width="0.5"/>
+      <!-- Area fill -->
+      <polygon points="${areaPoints}" fill="${fillColor}"/>
+      <!-- Line -->
+      <polyline points="${points}" fill="none" stroke="${endColor}" stroke-width="2"/>
+      <!-- Dots on each day -->
+      ${curve.map((c, i) => `<circle cx="${x(i)}" cy="${y(c.cumPnl)}" r="3" fill="${c.cumPnl >= 0 ? '#10b981' : '#ef4444'}" stroke="var(--bg1)" stroke-width="1.5"/>`).join('')}
+      ${yLabels}
+      ${xLabels}
+    </svg>`;
+}
+
+async function triggerRun() {
+  const btn = $('runBtn');
+  btn.disabled = true;
+  btn.textContent = 'RUNNING...';
+  $('runStatus').textContent = 'Backtest running — this may take several minutes...';
+
+  try {
+    await fetch('/api/backtest/run', { method: 'POST' });
+
+    // Poll for completion
+    const poll = setInterval(async () => {
+      const status = await fetch('/api/backtest/status').then(r => r.json());
+      if (!status.running) {
+        clearInterval(poll);
+        btn.disabled = false;
+        btn.textContent = 'RUN NOW';
+        loadResults();
+      }
+    }, 10000);
+  } catch(e) {
+    btn.disabled = false;
+    btn.textContent = 'RUN NOW';
+    $('runStatus').textContent = 'Run failed: ' + e.message;
+  }
+}
+
+// Init
+loadResults();
+</script>
+</body>
+</html>
