@@ -79,28 +79,54 @@ function dteLabel(expiryDate) {
 }
 
 /**
- * Fetch options chain from Alpaca — try multiple expiries to find real contracts.
- * Tries nearest expiry first (today), then upcoming dates.
+ * Fetch real expiration dates from Alpaca's options contracts endpoint,
+ * then fetch snapshots for the nearest valid expiry.
  */
 async function fetchChainWithExpiry(ticker, direction) {
   const type = direction === 'CALL' ? 'call' : 'put';
 
-  // Build candidate expiry dates: today, +1 through +14 (skipping weekends)
-  const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  // Step 1: Ask Alpaca what expiry dates actually exist for this ticker
+  const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
   const pad = n => String(n).padStart(2, '0');
-  const fmt = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  const todayStr = `${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`;
 
-  const candidates = [];
-  const d = new Date(etNow);
-  for (let i = 0; i < 21; i++) {
-    if (d.getDay() !== 0 && d.getDay() !== 6) {
-      candidates.push(fmt(d));
+  let realExpiries = [];
+  try {
+    const res = await axios.get(`${DATA_URL}/v1beta1/options/contracts`, {
+      headers,
+      params: {
+        underlying_symbols: ticker,
+        type,
+        expiration_date_gte: todayStr,
+        limit: 100,
+        status: 'active',
+      },
+      timeout: 8000,
+    });
+
+    const contracts = res.data?.option_contracts || res.data?.contracts || [];
+    console.log(`[contract] ${ticker}: contracts endpoint returned ${contracts.length} results`);
+
+    // Extract unique expiry dates
+    const expirySet = new Set();
+    for (const c of contracts) {
+      const exp = c.expiration_date || c.expiry_date;
+      if (exp && exp >= todayStr) expirySet.add(exp);
     }
-    d.setDate(d.getDate() + 1);
+    realExpiries = [...expirySet].sort();
+    console.log(`[contract] ${ticker}: real expiries = [${realExpiries.join(', ')}]`);
+  } catch (err) {
+    console.error(`[contract] ${ticker} contracts lookup failed:`, err.response?.status, err.message);
+    return { snapshots: {}, expiryDate: null };
   }
 
-  // Try each expiry date until we find one with contracts
-  for (const expiry of candidates) {
+  if (realExpiries.length === 0) {
+    console.log(`[contract] ${ticker}: no real expiry dates found`);
+    return { snapshots: {}, expiryDate: null };
+  }
+
+  // Step 2: Fetch snapshots for the nearest real expiry (try up to 3 nearest)
+  for (const expiry of realExpiries.slice(0, 3)) {
     try {
       const res = await axios.get(`${DATA_URL}/v1beta1/options/snapshots/${ticker}`, {
         headers,
@@ -113,18 +139,15 @@ async function fetchChainWithExpiry(ticker, direction) {
       });
       const snapshots = res.data?.snapshots || {};
       if (Object.keys(snapshots).length > 0) {
-        console.log(`[contract] ${ticker}: found ${Object.keys(snapshots).length} contracts for ${expiry}`);
+        console.log(`[contract] ${ticker}: found ${Object.keys(snapshots).length} snapshots for ${expiry}`);
         return { snapshots, expiryDate: expiry };
       }
     } catch (err) {
-      // 404 or no data for this expiry — try next
-      if (err.response?.status !== 404) {
-        console.error(`[contract] ${ticker} chain error (${expiry}):`, err.message);
-      }
+      console.error(`[contract] ${ticker} snapshot error (${expiry}):`, err.message);
     }
   }
 
-  console.log(`[contract] ${ticker}: no contracts found in next 14 trading days`);
+  console.log(`[contract] ${ticker}: no snapshots found for any real expiry`);
   return { snapshots: {}, expiryDate: null };
 }
 
