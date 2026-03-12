@@ -661,6 +661,33 @@ async function monitorActiveSignals(alpacaHdrs, dataUrl, profiles) {
 
         console.log(`[MONITOR] ${signal.ticker} ${signal.direction} → ${result.status}: ${result.note}`);
       }
+
+      // Refresh contract prices every cycle for active signals
+      try {
+        const contract = await selectOptionsContract(signal.ticker, signal.direction, signal.grade, price, atr);
+        if (contract) {
+          await db.query(`
+            UPDATE lc_v3.signals SET
+              contract_symbol = $1, contract_strike = $2, contract_expiry = $3,
+              contract_expiry_label = $4, contract_bid = $5, contract_ask = $6,
+              contract_mid = $7, contract_entry_lo = $8, contract_entry_hi = $9,
+              contract_delta = $10, contract_iv = $11,
+              contract_t1 = $12, contract_t2 = $13, contract_t3 = $14, contract_stop = $15,
+              contract_estimated = $16
+            WHERE signal_id = $17
+          `, [
+            contract.symbol, contract.strike, contract.expiry,
+            contract.expiry_label, contract.bid, contract.ask,
+            contract.mid, contract.entry_lo, contract.entry_hi,
+            contract.delta, contract.iv,
+            contract.t1, contract.t2, contract.t3, contract.stop,
+            contract.estimated || false,
+            signal.signal_id,
+          ]);
+        }
+      } catch (ce) {
+        // Don't log every cycle — only on first failure
+      }
     }
   } catch(err) {
     console.error('[MONITOR] Error:', err.message);
