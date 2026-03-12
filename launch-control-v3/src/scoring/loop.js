@@ -106,6 +106,7 @@ export async function scoreTicker(ticker) {
   // Get ticker state
   const tickerState = getTickerState(ticker);
   if (!tickerState || !tickerState.close || !tickerState.prevClose) return;
+  console.log('[SCORE]', ticker, 'close=', tickerState.close, 'prevClose=', tickerState.prevClose, 'session=', session);
 
   // Get profile
   const profiles = await getProfiles();
