@@ -450,7 +450,7 @@ app.post('/api/seed-iv', async (req, res) => {
       cwd: process.cwd(), timeout: 600000, encoding: 'utf-8',
       env: { ...process.env },
     });
-    ivResult = { ok: true, output: output.slice(-3000) };
+    ivResult = { ok: true, output: output.slice(0, 3000) + '\n...\n' + output.slice(-2000) };
     console.log('[IV] Seed complete');
   } catch (err) {
     ivResult = { ok: false, error: err.message, output: (err.stdout || '').slice(-3000) };
