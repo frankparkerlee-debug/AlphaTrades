@@ -88,14 +88,39 @@ export async function fetchAllDataFromDB(config, tickers) {
   }
 
   // ETF minute bars (SPY/QQQ if they're in the bars table)
+  // If not in bars table, synthesize from a high-volume ticker (e.g., AAPL or NVDA)
   const etfMinuteBars = {};
   for (const etf of ['SPY', 'QQQ']) {
     etfMinuteBars[etf] = minuteBars[etf] || {};
   }
 
-  // If no SPY/QQQ in bars, fetch from Alpaca snapshots as daily approximation
+  // If no SPY/QQQ bars, use the first ticker with the most bars as time reference
+  // and create synthetic SPY/QQQ entries so the replay engine can iterate
   if (Object.keys(etfMinuteBars.SPY).length === 0) {
-    console.log('[DATA-DB] No SPY/QQQ bars in DB — backtest will have limited market context');
+    console.log('[DATA-DB] No SPY/QQQ bars in DB — synthesizing time reference from ticker bars');
+    // Find ticker with most bars
+    let refTicker = null, maxBars = 0;
+    for (const [ticker, idx] of Object.entries(minuteBars)) {
+      const count = Object.keys(idx).length;
+      if (count > maxBars) { maxBars = count; refTicker = ticker; }
+    }
+    if (refTicker) {
+      console.log(`[DATA-DB] Using ${refTicker} (${maxBars} bars) as time reference`);
+      // Copy the reference ticker's bars as synthetic SPY/QQQ
+      // with c=0 so market scores default to neutral
+      for (const [key, bar] of Object.entries(minuteBars[refTicker])) {
+        const synthBar = { t: bar.t, o: 100, h: 100, l: 100, c: 100, v: 0 };
+        if (!etfMinuteBars.SPY[key]) etfMinuteBars.SPY[key] = synthBar;
+        if (!etfMinuteBars.QQQ[key]) etfMinuteBars.QQQ[key] = synthBar;
+      }
+      // Synthetic daily bars for prevClose
+      if (!dailyBars.SPY) dailyBars.SPY = {};
+      if (!dailyBars.QQQ) dailyBars.QQQ = {};
+      for (const [date, agg] of Object.entries(dailyByTicker[refTicker] || {})) {
+        if (!dailyBars.SPY[date]) dailyBars.SPY[date] = { t: `${date}T16:00:00Z`, o: 100, h: 100, l: 100, c: 100, v: 0 };
+        if (!dailyBars.QQQ[date]) dailyBars.QQQ[date] = { t: `${date}T16:00:00Z`, o: 100, h: 100, l: 100, c: 100, v: 0 };
+      }
+    }
   }
 
   // VIX — not in DB, use default
@@ -105,7 +130,7 @@ export async function fetchAllDataFromDB(config, tickers) {
   // News — not in DB for backtest, will return empty
   const newsByTickerDate = {};
 
-  // Trading days from available data
+  // Trading days from available data (use all tickers, not just SPY)
   const allDates = new Set();
   for (const ticker of tickers) {
     if (minuteBars[ticker]) {
