@@ -15,9 +15,9 @@ const HEADERS    = {
 };
 const FEED       = process.env.ALPACA_FEED || 'sip';
 const BATCH_SIZE = 5;
-const BATCH_DELAY = 500; // ms between batches
+const BATCH_DELAY = 300; // ms between batches
 
-// ── Create tables if needed ──────────────────────────────────────────────────
+// ── Create / migrate tables ─────────────────────────────────────────────────
 
 async function migrate() {
   await query(`
@@ -38,31 +38,33 @@ async function migrate() {
   `);
   await query(`CREATE INDEX IF NOT EXISTS idx_bars_ticker_ts ON lc_v3.bars(ticker, ts)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_bars_ticker_window ON lc_v3.bars(ticker, window_key)`);
+  // Unique constraint to prevent duplicate bars
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_bars_ticker_ts_uniq ON lc_v3.bars(ticker, ts)`);
 
+  // Volume baselines — updated schema with median + sample_count
   await query(`
     CREATE TABLE IF NOT EXISTS lc_v3.volume_baselines (
       ticker TEXT NOT NULL,
       window_key TEXT NOT NULL,
-      avg_volume NUMERIC NOT NULL,
-      sample_days INT NOT NULL,
-      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      avg_volume BIGINT NOT NULL DEFAULT 0,
+      median_volume BIGINT NOT NULL DEFAULT 0,
+      sample_count INT NOT NULL DEFAULT 0,
+      last_updated TIMESTAMPTZ DEFAULT NOW(),
       PRIMARY KEY (ticker, window_key)
     )
   `);
+
+  // Add columns if they don't exist (migrate from old schema)
+  await query(`ALTER TABLE lc_v3.volume_baselines ADD COLUMN IF NOT EXISTS median_volume BIGINT NOT NULL DEFAULT 0`);
+  await query(`ALTER TABLE lc_v3.volume_baselines ADD COLUMN IF NOT EXISTS sample_count INT NOT NULL DEFAULT 0`);
+  await query(`ALTER TABLE lc_v3.volume_baselines ADD COLUMN IF NOT EXISTS last_updated TIMESTAMPTZ DEFAULT NOW()`);
 
   console.log('[SEED] Tables ready');
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function floorTo15Min(date) {
-  const h = date.getUTCHours().toString().padStart(2, '0');
-  const m = (Math.floor(date.getUTCMinutes() / 15) * 15).toString().padStart(2, '0');
-  return `${h}:${m}`;
-}
-
 function toETWindowKey(isoTimestamp) {
-  // Convert to ET and floor to 15 min
   const d = new Date(isoTimestamp);
   const et = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
   const h = et.getHours().toString().padStart(2, '0');
@@ -70,11 +72,14 @@ function toETWindowKey(isoTimestamp) {
   return `${h}:${m}`;
 }
 
-function isRegularHoursET(isoTimestamp) {
+function classifySession(isoTimestamp) {
   const d = new Date(isoTimestamp);
   const et = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
   const mins = et.getHours() * 60 + et.getMinutes();
-  return mins >= 570 && mins < 960; // 9:30 - 16:00
+  if (mins >= 240 && mins < 570)  return 'PRE_MARKET';   // 04:00-09:30
+  if (mins >= 570 && mins < 960)  return 'REGULAR';       // 09:30-16:00
+  if (mins >= 960 && mins < 1200) return 'POST_MARKET';   // 16:00-20:00
+  return null; // outside tradeable hours — skip
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -88,9 +93,10 @@ async function fetchBars(ticker, start, end) {
   do {
     const params = {
       timeframe: '1Min',
-      start: `${start}T00:00:00Z`,
-      end: `${end}T23:59:59Z`,
+      start,
+      end,
       feed: FEED,
+      adjustment: 'raw',
       limit: 10000,
     };
     if (pageToken) params.page_token = pageToken;
@@ -111,53 +117,60 @@ async function fetchBars(ticker, start, end) {
 async function seedTicker(ticker, start, end) {
   const bars = await fetchBars(ticker, start, end);
 
-  // Filter to regular hours only
-  const regularBars = bars.filter(b => isRegularHoursET(b.t));
+  // Classify session and filter to tradeable hours only
+  const tradeBars = [];
+  for (const b of bars) {
+    const session = classifySession(b.t);
+    if (session) tradeBars.push({ ...b, session });
+  }
 
-  if (regularBars.length === 0) return 0;
+  if (tradeBars.length === 0) return 0;
 
-  // Batch insert (100 at a time to avoid huge queries)
-  for (let i = 0; i < regularBars.length; i += 100) {
-    const batch = regularBars.slice(i, i + 100);
+  // Batch insert (100 at a time)
+  for (let i = 0; i < tradeBars.length; i += 100) {
+    const batch = tradeBars.slice(i, i + 100);
     const values = [];
     const params = [];
     let idx = 1;
 
     for (const b of batch) {
       const windowKey = toETWindowKey(b.t);
-      values.push(`($${idx},$${idx+1},$${idx+2},$${idx+3},$${idx+4},$${idx+5},$${idx+6},$${idx+7},'REGULAR',$${idx+8})`);
-      params.push(ticker, b.t, b.o, b.h, b.l, b.c, b.v || 0, b.vw || b.c, windowKey);
-      idx += 9;
+      values.push(`($${idx},$${idx+1},$${idx+2},$${idx+3},$${idx+4},$${idx+5},$${idx+6},$${idx+7},$${idx+8},$${idx+9})`);
+      params.push(ticker, b.t, b.o, b.h, b.l, b.c, b.v || 0, b.vw || b.c, b.session, windowKey);
+      idx += 10;
     }
 
     await query(`
       INSERT INTO lc_v3.bars (ticker, ts, open, high, low, close, volume, vwap, session, window_key)
       VALUES ${values.join(',')}
-      ON CONFLICT DO NOTHING
+      ON CONFLICT (ticker, ts) DO NOTHING
     `, params);
   }
 
-  return regularBars.length;
+  return tradeBars.length;
 }
 
 // ── Compute volume baselines ─────────────────────────────────────────────────
 
 async function computeBaselines() {
   const res = await query(`
-    INSERT INTO lc_v3.volume_baselines (ticker, window_key, avg_volume, sample_days, updated_at)
+    INSERT INTO lc_v3.volume_baselines (ticker, window_key, avg_volume, median_volume, sample_count)
     SELECT
       ticker,
       window_key,
-      AVG(volume)::NUMERIC(12,2),
-      COUNT(DISTINCT ts::date),
-      NOW()
+      ROUND(AVG(volume))::BIGINT,
+      PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY volume)::BIGINT,
+      COUNT(DISTINCT DATE(ts))
     FROM lc_v3.bars
     WHERE session = 'REGULAR'
+      AND window_key IS NOT NULL
     GROUP BY ticker, window_key
+    HAVING COUNT(*) >= 3
     ON CONFLICT (ticker, window_key) DO UPDATE SET
       avg_volume = EXCLUDED.avg_volume,
-      sample_days = EXCLUDED.sample_days,
-      updated_at = NOW()
+      median_volume = EXCLUDED.median_volume,
+      sample_count = EXCLUDED.sample_count,
+      last_updated = NOW()
     RETURNING ticker, window_key
   `);
   return res.rowCount;
@@ -177,9 +190,13 @@ async function main() {
   const end = new Date();
   const start = new Date();
   start.setDate(start.getDate() - 30);
-  const startDate = start.toISOString().split('T')[0];
-  const endDate = end.toISOString().split('T')[0];
-  console.log(`[SEED] Range: ${startDate} → ${endDate}`);
+  const startDate = start.toISOString();
+  const endDate = end.toISOString();
+  console.log(`[SEED] Range: ${startDate.split('T')[0]} → ${endDate.split('T')[0]}`);
+
+  // Clear old bars to avoid bloat on re-runs
+  const delRes = await query(`DELETE FROM lc_v3.bars WHERE ts < NOW() - INTERVAL '31 days'`);
+  if (delRes.rowCount > 0) console.log(`[SEED] Cleaned ${delRes.rowCount} old bars`);
 
   let totalBars = 0;
 
@@ -189,7 +206,7 @@ async function main() {
     const results = await Promise.all(batch.map(async (ticker) => {
       try {
         const count = await seedTicker(ticker, startDate, endDate);
-        console.log(`[SEED] ${ticker} — ${count} bars inserted`);
+        console.log(`[SEED] ${ticker} — ${count} bars`);
         return count;
       } catch (err) {
         console.error(`[SEED] ${ticker} — FAILED: ${err.message}`);
