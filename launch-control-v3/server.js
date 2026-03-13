@@ -291,6 +291,33 @@ app.post('/api/backtest/run', async (req, res) => {
   }
 });
 
+// ── SEED BARS (one-shot, triggered via POST) ─────────────────────────────────
+let seedRunning = false;
+let seedResult = null;
+app.post('/api/seed-bars', async (req, res) => {
+  if (seedRunning) return res.json({ ok: false, error: 'Already running' });
+  seedRunning = true;
+  seedResult = null;
+  res.json({ ok: true, message: 'Seed started' });
+  try {
+    const { execSync } = await import('child_process');
+    const output = execSync('node scripts/seed-bars-historical.js', {
+      cwd: process.cwd(), timeout: 600000, encoding: 'utf-8',
+      env: { ...process.env },
+    });
+    seedResult = { ok: true, output: output.slice(-2000) };
+    console.log('[SEED] Complete');
+  } catch (err) {
+    seedResult = { ok: false, error: err.message, output: (err.stdout || '').slice(-2000) };
+    console.error('[SEED] Failed:', err.message);
+  } finally {
+    seedRunning = false;
+  }
+});
+app.get('/api/seed-bars/status', (req, res) => {
+  res.json({ running: seedRunning, result: seedResult });
+});
+
 // Backtest status
 let backtestError = null;
 app.get('/api/backtest/status', (req, res) => {
