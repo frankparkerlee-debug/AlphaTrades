@@ -499,6 +499,28 @@ function render() {
   list.forEach(s => { if ((s.status === 'ACTIVE' || s.status === 'WEAKENING') && s.expires_at) startCd(s); });
 }
 
+function buildIntelBar(s) {
+  const items = [];
+  // Earnings proximity
+  if (s.earnings_days_away != null && s.earnings_days_away <= 30) {
+    const urgency = s.earnings_days_away <= 3 ? 'var(--red)' : s.earnings_days_away <= 7 ? 'var(--amber)' : 'var(--text2)';
+    items.push(`<span style="color:${urgency}">ER ${s.earnings_days_away}d</span>`);
+    if (s.earnings_avg_move_pct != null) items.push(`<span style="color:var(--text3)">avg±${s.earnings_avg_move_pct}%</span>`);
+    if (s.earnings_beat_rate != null) items.push(`<span style="color:var(--text3)">beat ${(s.earnings_beat_rate*100).toFixed(0)}%</span>`);
+  }
+  // IV rank
+  if (s.iv_rank != null) {
+    const ivColor = s.iv_rank > 50 ? 'var(--amber)' : s.iv_rank > 80 ? 'var(--red)' : 'var(--green)';
+    items.push(`<span style="color:${ivColor}">IV ${s.iv_rank.toFixed(0)}%</span>`);
+  }
+  // Analyst price target
+  if (s.analyst_price_target != null) {
+    items.push(`<span style="color:var(--text3)">PT $${s.analyst_price_target}</span>`);
+  }
+  if (items.length === 0) return '';
+  return `<div style="display:flex;gap:8px;flex-wrap:wrap;font-family:var(--mono);font-size:9px;margin:3px 0;padding:3px 6px;background:rgba(255,255,255,0.03);border-radius:3px">${items.join('<span style="color:var(--text4)">·</span>')}</div>`;
+}
+
 function buildCard(s) {
   const g = gc(s.grade);
   const c = col(s.grade);
@@ -630,6 +652,7 @@ function buildCard(s) {
       return `<div class="news-line">${s.news_headline}</div>`;
     })() : ''}
     ${mkt?`<div class="ctx-line">${mkt}</div>`:''}
+    ${buildIntelBar(s)}
     ${contract}
     <div class="position-row">
       <span class="pos-label">Position</span>

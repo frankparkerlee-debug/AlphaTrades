@@ -31,28 +31,32 @@ app.get('/api/signals', async (req, res) => {
   try {
     const result = await db.query(`
       SELECT
-        signal_id, ticker, direction, grade, status,
-        composite_raw, signal_tier,
-        score_price_action, score_volume, score_news,
-        score_market, score_timing,
-        position_size_pct, position_size_dollars,
-        confluence_score, news_headline,
-        leader_ticker, propagation_lag_min,
-        spy_change_pct, qqq_change_pct, sector_change_pct,
-        relative_volume, atr_multiple,
-        human_taken, human_pnl_pct, human_entry_price, human_exit_price, human_notes,
-        contract_symbol, contract_strike, contract_expiry, contract_expiry_label,
-        contract_bid, contract_ask, contract_mid,
-        contract_entry_lo, contract_entry_hi,
-        contract_delta, contract_iv,
-        contract_t1, contract_t2, contract_t3, contract_stop,
-        contract_estimated,
-        first_seen_at, last_confirmed_at, confirmation_count,
-        peak_composite, peak_grade, composite_history, momentum_trend,
-        expires_at, created_at
-      FROM lc_v3.signals
-      WHERE DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
-      ORDER BY created_at DESC
+        s.signal_id, s.ticker, s.direction, s.grade, s.status,
+        s.composite_raw, s.signal_tier,
+        s.score_price_action, s.score_volume, s.score_news,
+        s.score_market, s.score_timing,
+        s.position_size_pct, s.position_size_dollars,
+        s.confluence_score, s.news_headline,
+        s.leader_ticker, s.propagation_lag_min,
+        s.spy_change_pct, s.qqq_change_pct, s.sector_change_pct,
+        s.relative_volume, s.atr_multiple,
+        s.human_taken, s.human_pnl_pct, s.human_entry_price, s.human_exit_price, s.human_notes,
+        s.contract_symbol, s.contract_strike, s.contract_expiry, s.contract_expiry_label,
+        s.contract_bid, s.contract_ask, s.contract_mid,
+        s.contract_entry_lo, s.contract_entry_hi,
+        s.contract_delta, s.contract_iv,
+        s.contract_t1, s.contract_t2, s.contract_t3, s.contract_stop,
+        s.contract_estimated,
+        s.first_seen_at, s.last_confirmed_at, s.confirmation_count,
+        s.peak_composite, s.peak_grade, s.composite_history, s.momentum_trend,
+        s.expires_at, s.created_at,
+        ti.earnings_date, ti.earnings_days_away, ti.earnings_avg_move_pct,
+        ti.earnings_beat_rate, ti.iv_rank_30d, ti.iv_percentile,
+        ti.analyst_price_target, ti.beta_30d
+      FROM lc_v3.signals s
+      LEFT JOIN lc_v3.ticker_intelligence ti ON s.ticker = ti.ticker
+      WHERE DATE(s.created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
+      ORDER BY s.created_at DESC
       LIMIT 200
     `);
     const signals = result.rows.map(s => ({
@@ -95,6 +99,15 @@ app.get('/api/signals', async (req, res) => {
       peak_grade:        s.peak_grade                  || null,
       composite_history: s.composite_history            || [],
       momentum_trend:    s.momentum_trend              || null,
+      // Intelligence overlay
+      earnings_date:     s.earnings_date               || null,
+      earnings_days_away: s.earnings_days_away != null ? Number(s.earnings_days_away) : null,
+      earnings_avg_move_pct: s.earnings_avg_move_pct != null ? Number(s.earnings_avg_move_pct) : null,
+      earnings_beat_rate: s.earnings_beat_rate != null ? Number(s.earnings_beat_rate) : null,
+      iv_rank:           s.iv_rank_30d != null ? Number(s.iv_rank_30d) : null,
+      iv_percentile:     s.iv_percentile != null ? Number(s.iv_percentile) : null,
+      analyst_price_target: s.analyst_price_target != null ? Number(s.analyst_price_target) : null,
+      beta:              s.beta_30d != null ? Number(s.beta_30d) : null,
     }));
     res.json({ signals, count: signals.length });
   } catch (err) {
@@ -461,6 +474,60 @@ app.post('/api/seed-iv', async (req, res) => {
 });
 app.get('/api/seed-iv/status', (req, res) => {
   res.json({ running: ivRunning, result: ivResult });
+});
+
+// Seed contagion map
+let contagionRunning = false;
+let contagionResult = null;
+app.post('/api/seed-contagion', async (req, res) => {
+  if (contagionRunning) return res.json({ ok: false, error: 'Already running' });
+  contagionRunning = true;
+  contagionResult = null;
+  res.json({ ok: true, message: 'Contagion seed started' });
+  try {
+    const { execSync } = await import('child_process');
+    const output = execSync('node scripts/seed-contagion.js', {
+      cwd: process.cwd(), timeout: 600000, encoding: 'utf-8',
+      env: { ...process.env },
+    });
+    contagionResult = { ok: true, output: output.slice(-3000) };
+    console.log('[CONTAGION] Seed complete');
+  } catch (err) {
+    contagionResult = { ok: false, error: err.message, output: (err.stdout || '').slice(-3000) };
+    console.error('[CONTAGION] Seed failed:', err.message);
+  } finally {
+    contagionRunning = false;
+  }
+});
+app.get('/api/seed-contagion/status', (req, res) => {
+  res.json({ running: contagionRunning, result: contagionResult });
+});
+
+// Seed macro sensitivity
+let macroRunning = false;
+let macroResult = null;
+app.post('/api/seed-macro', async (req, res) => {
+  if (macroRunning) return res.json({ ok: false, error: 'Already running' });
+  macroRunning = true;
+  macroResult = null;
+  res.json({ ok: true, message: 'Macro seed started' });
+  try {
+    const { execSync } = await import('child_process');
+    const output = execSync('node scripts/seed-macro.js', {
+      cwd: process.cwd(), timeout: 600000, encoding: 'utf-8',
+      env: { ...process.env },
+    });
+    macroResult = { ok: true, output: output.slice(-3000) };
+    console.log('[MACRO] Seed complete');
+  } catch (err) {
+    macroResult = { ok: false, error: err.message, output: (err.stdout || '').slice(-3000) };
+    console.error('[MACRO] Seed failed:', err.message);
+  } finally {
+    macroRunning = false;
+  }
+});
+app.get('/api/seed-macro/status', (req, res) => {
+  res.json({ running: macroRunning, result: macroResult });
 });
 
 // Backtest status
