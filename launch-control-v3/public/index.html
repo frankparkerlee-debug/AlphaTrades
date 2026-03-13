@@ -844,12 +844,13 @@ async function loadAll() {
     updateSession(statusRes.session||'OVERNIGHT');
     renderClusters(statusRes.propagation||[]);
 
-    // Market ETFs from latest signal
+    // Market ETFs — prefer signal data, fall back to live poller data
     const latest = signals.find(s=>s.spy_change_pct!=null);
+    const mktCtx = statusRes.market||{};
     const etfs = [
-      {label:'SPY', val:latest?.spy_change_pct},
-      {label:'QQQ', val:latest?.qqq_change_pct},
-      {label:'SMH', val:latest?.sector_change_pct},
+      {label:'SPY', val:latest?.spy_change_pct ?? mktCtx.spyPct ?? null},
+      {label:'QQQ', val:latest?.qqq_change_pct ?? mktCtx.qqqPct ?? null},
+      {label:'SMH', val:latest?.sector_change_pct ?? null},
     ];
     document.getElementById('etfRows').innerHTML = etfs.map(e=>`
       <div class="etf-row">

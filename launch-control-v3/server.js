@@ -137,7 +137,8 @@ app.get('/api/status', async (req, res) => {
     const streams = global.streamStatus || { bars: 'unknown', news: 'unknown' };
     const regime  = global.currentRegime || { regime: 'NEUTRAL', regimeNote: '', sizeMult: 1.0 };
 
-    res.json({ session, propagation: prop, streams, regime: regime.regime, regimeNote: regime.regimeNote, time: now.toISOString() });
+    const mktCtx = global.marketContext || {};
+    res.json({ session, propagation: prop, streams, regime: regime.regime, regimeNote: regime.regimeNote, market: mktCtx, time: now.toISOString() });
   } catch (err) {
     res.json({ session: 'UNKNOWN', propagation: [], streams: {}, error: err.message });
   }
@@ -532,6 +533,7 @@ async function startRestPoller() {
         console.log(`[REGIME] ${regime.regime} — ${regime.regimeNote}`);
       }
       global.currentRegime = regime;
+      global.marketContext = { spyPct, qqqPct, vix, updatedAt: new Date().toISOString() };
 
       console.log(`[POLL] ${Object.keys(allSnaps).length} snaps SPY=${(spyPct*100).toFixed(2)}% QQQ=${(qqqPct*100).toFixed(2)}% VIX=${vix} REGIME=${regime.regime}`);
 
@@ -585,13 +587,30 @@ async function startRestPoller() {
           bars: syntheticBars,
         };
 
-        // Momentum analysis (replaces inline freshness + PA score)
-        const momentum = analyzeMomentum(syntheticBars, openPrice, prevClose, atr, direction);
-        const freshness = momentum.freshness;
+        // Momentum analysis — use full scorer if enough bars, else inline fallback
+        let momentum, freshness, paScore;
+        const atrMult = atr > 0 ? absRecent / atr : 0;
 
-        // Hard gate on exhausted/late moves
-        if (shouldSkipOnFreshness(freshness, momentum.entryRisk)) {
-          continue;
+        if (syntheticBars.length >= 5) {
+          momentum = analyzeMomentum(syntheticBars, openPrice, prevClose, atr, direction);
+          freshness = momentum.freshness;
+          paScore = momentum.momentumScore;
+
+          if (shouldSkipOnFreshness(freshness, momentum.entryRisk)) {
+            continue;
+          }
+        } else {
+          // REST poller fallback — only 2 bars from snapshot
+          freshness = moveInATRs < 0.5 ? 'FRESH'
+                    : moveInATRs < 1.0 ? 'DEVELOPING'
+                    : moveInATRs < 1.5 ? 'EXTENDED'
+                    : moveInATRs < 2.0 ? 'LATE'
+                    : 'EXHAUSTED';
+          if (freshness === 'EXHAUSTED') continue;
+
+          const freshnessPenalty = moveInATRs > 1.5 ? 0.5 : moveInATRs > 1.0 ? 0.75 : 1.0;
+          paScore = Math.min(35, Math.round(atrMult * 20 * freshnessPenalty));
+          momentum = { momentumScore: paScore, freshness, entryRisk: freshness === 'FRESH' ? 'LOW' : 'MODERATE', barsInMove: 0, moveFromOpen: parseFloat((moveFromOpen * 100).toFixed(3)), recentAccel: parseFloat((absRecent * 100).toFixed(3)), volSurge: 1, exhaustion: false, moveInATRs: parseFloat(moveInATRs.toFixed(2)) };
         }
 
         // Run intelligence analysis
@@ -605,10 +624,6 @@ async function startRestPoller() {
           console.log(`[GATE] ${ticker} ${direction} rejected — ${gate.reason}`);
           continue;
         }
-
-        // PA score from momentum scorer (0-35)
-        const paScore  = momentum.momentumScore;
-        const atrMult  = atr > 0 ? absRecent / atr : 0;
 
         const avgDayVol = snap.dailyBar?.v || 0;
         const minsOpen  = Math.max(1, (() => {
