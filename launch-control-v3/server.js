@@ -248,6 +248,66 @@ app.get('/api/debug/contract/:ticker/:direction', async (req, res) => {
   }
 });
 
+// Debug: see why signals aren't firing for a ticker
+app.get('/api/debug/scoring/:ticker', async (req, res) => {
+  try {
+    const { ticker } = req.params;
+    const alpacaHdrs = {
+      'APCA-API-KEY-ID': process.env.ALPACA_API_KEY,
+      'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY,
+    };
+    const dataUrl = process.env.ALPACA_DATA_URL || 'https://data.alpaca.markets';
+    const { analyzeMomentum, shouldSkipOnFreshness } = await import('./src/scoring/momentum.js');
+    const { analyzeLevels, analyzeTrend, gateSignal, classifyRegime } = await import('./src/scoring/intelligence.js');
+
+    const snapRes = await axios.get(`${dataUrl}/v2/stocks/snapshots`, {
+      headers: alpacaHdrs, params: { symbols: `${ticker},SPY,QQQ`, feed: ALPACA_FEED }, timeout: 10000,
+    });
+    const snap = snapRes.data?.[ticker];
+    if (!snap) return res.json({ error: 'No snapshot for ticker' });
+
+    const price = snap.latestTrade?.p || 0;
+    const prevClose = snap.prevDailyBar?.c || 0;
+    const openPrice = snap.dailyBar?.o || price;
+    const latestBar = snap.minuteBar;
+    const prevBar = snap.prevMinuteBar;
+    const recentMove = latestBar?.c > 0 && prevBar?.c > 0 ? (latestBar.c - prevBar.c) / prevBar.c : 0;
+    const direction = recentMove >= 0 ? 'CALL' : 'PUT';
+    const atr = 0.025;
+    const absRecent = Math.abs(recentMove);
+    const minAtrThreshold = atr * 0.1;
+
+    const syntheticBars = [prevBar, latestBar].filter(Boolean).map(b => ({ o: b.o, h: b.h, l: b.l, c: b.c, v: b.v || 0 }));
+    const momentum = analyzeMomentum(syntheticBars, openPrice, prevClose, atr, direction);
+    const skipFreshness = shouldSkipOnFreshness(momentum.freshness, momentum.entryRisk);
+
+    const mkt = snapRes.data;
+    const spyPct = mkt.SPY ? ((mkt.SPY.latestTrade?.p||0)-(mkt.SPY.prevDailyBar?.c||0))/(mkt.SPY.prevDailyBar?.c||1) : 0;
+    const qqqPct = mkt.QQQ ? ((mkt.QQQ.latestTrade?.p||0)-(mkt.QQQ.prevDailyBar?.c||0))/(mkt.QQQ.prevDailyBar?.c||1) : 0;
+    const regime = classifyRegime({ spyPct, qqqPct }, 18, []);
+
+    const mockState = { close: price, vwap: latestBar?.vw || price, sessionHigh: snap.dailyBar?.h || price, sessionLow: snap.dailyBar?.l || price, prevDayHigh: snap.prevDailyBar?.h || prevClose * 1.01, prevDayLow: snap.prevDailyBar?.l || prevClose * 0.99, sessionOpen: openPrice, bars: syntheticBars };
+    const levels = analyzeLevels(mockState, atr);
+    const trend = analyzeTrend(syntheticBars, direction);
+    const gate = gateSignal(direction, trend, levels, regime, momentum.freshness);
+
+    const paScore = momentum.momentumScore;
+    const volScore = Math.min(30, Math.round((latestBar?.v || 0) / Math.max(1, (snap.dailyBar?.v || 1) / 30) * 12));
+
+    res.json({
+      ticker, price, prevClose, openPrice, direction, recentMove, absRecent, minAtrThreshold,
+      passesMinMove: absRecent >= minAtrThreshold,
+      syntheticBarsCount: syntheticBars.length,
+      momentum, skipFreshness,
+      paScore, volScore,
+      passesPA: paScore >= 15, passesVOL: volScore >= 12,
+      gate, regime: regime.regime,
+    });
+  } catch (err) {
+    res.json({ error: err.message });
+  }
+});
+
 // ── BACKTEST ROUTES ──────────────────────────────────────────────────────────
 
 // Serve backtest dashboard
