@@ -409,6 +409,33 @@ app.get('/api/seed-bars/status', (req, res) => {
   res.json({ running: seedRunning, result: seedResult });
 });
 
+// Seed earnings intelligence
+let earningsRunning = false;
+let earningsResult = null;
+app.post('/api/seed-earnings', async (req, res) => {
+  if (earningsRunning) return res.json({ ok: false, error: 'Already running' });
+  earningsRunning = true;
+  earningsResult = null;
+  res.json({ ok: true, message: 'Earnings seed started' });
+  try {
+    const { execSync } = await import('child_process');
+    const output = execSync('node scripts/seed-earnings.js', {
+      cwd: process.cwd(), timeout: 600000, encoding: 'utf-8',
+      env: { ...process.env },
+    });
+    earningsResult = { ok: true, output: output.slice(-2000) };
+    console.log('[EARNINGS] Seed complete');
+  } catch (err) {
+    earningsResult = { ok: false, error: err.message, output: (err.stdout || '').slice(-2000) };
+    console.error('[EARNINGS] Seed failed:', err.message);
+  } finally {
+    earningsRunning = false;
+  }
+});
+app.get('/api/seed-earnings/status', (req, res) => {
+  res.json({ running: earningsRunning, result: earningsResult });
+});
+
 // Backtest status
 let backtestError = null;
 app.get('/api/backtest/status', (req, res) => {
