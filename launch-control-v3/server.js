@@ -299,7 +299,7 @@ app.get('/api/debug/scoring/:ticker', async (req, res) => {
                 : moveInATRs < 2.0 ? 'LATE'
                 : 'EXHAUSTED';
       const freshnessPenalty = moveInATRs > 1.5 ? 0.5 : moveInATRs > 1.0 ? 0.75 : 1.0;
-      paScore = Math.min(35, Math.round(moveInATRs * 20 * freshnessPenalty));
+      paScore = Math.min(35, Math.round(moveInATRs * 35 * freshnessPenalty));
     }
 
     const mkt = snapRes.data;
@@ -312,7 +312,17 @@ app.get('/api/debug/scoring/:ticker', async (req, res) => {
     const trend = analyzeTrend(syntheticBars, direction);
     const gate = gateSignal(direction, trend, levels, regime, freshness);
 
-    const volScore = Math.min(30, Math.round((latestBar?.v || 0) / Math.max(1, (snap.dailyBar?.v || 1) / 30) * 12));
+    // Volume: daily pace vs yesterday
+    const todayVol = snap.dailyBar?.v || 0;
+    const prevDayVol = snap.prevDailyBar?.v || 1;
+    const debugMinsOpen = Math.max(1, (() => {
+      const et = new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
+      return Math.max(1, (et.getHours() * 60 + et.getMinutes()) - 570);
+    })());
+    const debugFraction = Math.min(1, debugMinsOpen / 390);
+    const debugProjected = debugFraction > 0 ? todayVol / debugFraction : todayVol;
+    const debugRelVol = prevDayVol > 0 ? debugProjected / prevDayVol : 1;
+    const volScore = Math.min(30, Math.round(debugRelVol * 12));
 
     res.json({
       ticker, price, prevClose, openPrice, direction,
@@ -629,7 +639,7 @@ async function startRestPoller() {
           if (freshness === 'EXHAUSTED') continue;
 
           const freshnessPenalty = moveInATRs > 1.5 ? 0.5 : moveInATRs > 1.0 ? 0.75 : 1.0;
-          paScore = Math.min(35, Math.round(moveInATRs * 20 * freshnessPenalty));
+          paScore = Math.min(35, Math.round(moveInATRs * 35 * freshnessPenalty));
           momentum = { momentumScore: paScore, freshness, entryRisk: freshness === 'FRESH' ? 'LOW' : 'MODERATE', barsInMove: 0, moveFromOpen: parseFloat((moveFromOpen * 100).toFixed(3)), recentAccel: parseFloat((absRecent * 100).toFixed(3)), volSurge: 1, exhaustion: false, moveInATRs: parseFloat(moveInATRs.toFixed(2)) };
         }
 
@@ -645,14 +655,16 @@ async function startRestPoller() {
           continue;
         }
 
-        const avgDayVol = snap.dailyBar?.v || 0;
+        // Volume scoring — daily pace vs yesterday (more stable than single-minute comparison)
+        const todayVol  = snap.dailyBar?.v || 0;
+        const prevDayVol = snap.prevDailyBar?.v || 1;
         const minsOpen  = Math.max(1, (() => {
           const et = new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
           return Math.max(1, (et.getHours() * 60 + et.getMinutes()) - 570);
         })());
-        const avgMinVol = avgDayVol / minsOpen;
-        const curMinVol = latestBar.v || 0;
-        const relVol    = avgMinVol > 0 ? curMinVol / avgMinVol : 1;
+        const fractionOfDay = Math.min(1, minsOpen / 390);
+        const projectedVol  = fractionOfDay > 0 ? todayVol / fractionOfDay : todayVol;
+        const relVol    = prevDayVol > 0 ? projectedVol / prevDayVol : 1;
         const volScore  = Math.min(30, Math.round(relVol * 12));
 
         const spyOk    = direction === 'CALL' ? spyPct > 0 : spyPct < 0;
