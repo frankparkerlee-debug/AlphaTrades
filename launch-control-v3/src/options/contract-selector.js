@@ -54,14 +54,26 @@ function parseExpiryFromOCC(symbol) {
 async function fetchAllSnapshots(ticker, direction) {
   try {
     const type = direction === 'CALL' ? 'call' : 'put';
-    const res = await axios.get(`${DATA_URL}/v1beta1/options/snapshots/${ticker}`, {
-      headers,
-      params: { type, limit: 100 },
-      timeout: 10000,
-    });
-    const snaps = res.data?.snapshots || {};
-    const symbols = Object.keys(snaps);
-    console.log(`[contract] ${ticker}: got ${symbols.length} snapshots (no expiry filter)`);
+    let allSnaps = {};
+    let pageToken = null;
+
+    // Paginate to get all contracts (Alpaca caps at 100 per page, max 5 pages)
+    let pages = 0;
+    do {
+      const params = { type, limit: 100 };
+      if (pageToken) params.page_token = pageToken;
+      const res = await axios.get(`${DATA_URL}/v1beta1/options/snapshots/${ticker}`, {
+        headers, params, timeout: 10000,
+      });
+      const snaps = res.data?.snapshots || {};
+      Object.assign(allSnaps, snaps);
+      pageToken = res.data?.next_page_token || null;
+      pages++;
+    } while (pageToken && pages < 5);
+
+    const symbols = Object.keys(allSnaps);
+    const snaps = allSnaps;
+    console.log(`[contract] ${ticker}: got ${symbols.length} snapshots (paginated)`);
 
     if (symbols.length === 0) return { snapshots: {}, expiry: null };
 
