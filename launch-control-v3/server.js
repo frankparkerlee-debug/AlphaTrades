@@ -7,6 +7,8 @@ import { Pool } from 'pg';
 import cron from 'node-cron';
 import { createServer } from 'http';
 import { selectOptionsContract } from './src/options/contract-selector.js';
+import { getNewsEvents } from './src/data/state.js';
+import { computeNewsScore } from './src/scoring/news.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app  = express();
@@ -537,7 +539,12 @@ async function startRestPoller() {
                        : (mins2>=780 && mins2<960) ? 3
                        : 2;
 
-        const composite = paScore + volScore + mktScore + timScore;
+        // News scoring — pull events from WebSocket stream state
+        const newsEvents = getNewsEvents(ticker);
+        const newsResult = computeNewsScore({ direction, newsEvents, profile: profiles[ticker] });
+        const newsScore  = newsResult.score;
+
+        const composite = paScore + volScore + mktScore + timScore + newsScore;
 
         let grade = toGrade(composite);
         if (!grade) continue;
@@ -558,6 +565,7 @@ async function startRestPoller() {
           `From Open:${(moveFromOpen*100).toFixed(2)}%`,
           regime.regimeNote ? `Regime:${regime.regime}` : null,
           levels.nearestAbove ? `ResAt:$${levels.nearestAbove.price.toFixed(2)}(${levels.nearestAbove.name})` : null,
+          newsScore > 0 && newsResult.headline ? `News:${newsResult.headline.slice(0, 60)}` : null,
         ].filter(Boolean).join(' · ');
 
         // ── MOMENTUM UPSERT — one signal per ticker+direction per day ──
@@ -597,12 +605,12 @@ async function startRestPoller() {
           }
 
           const contractCols = contract ? `,
-            contract_symbol = $14, contract_strike = $15, contract_expiry = $16,
-            contract_expiry_label = $17, contract_bid = $18, contract_ask = $19,
-            contract_mid = $20, contract_entry_lo = $21, contract_entry_hi = $22,
-            contract_delta = $23, contract_iv = $24,
-            contract_t1 = $25, contract_t2 = $26, contract_t3 = $27, contract_stop = $28,
-            contract_estimated = $29` : '';
+            contract_symbol = $15, contract_strike = $16, contract_expiry = $17,
+            contract_expiry_label = $18, contract_bid = $19, contract_ask = $20,
+            contract_mid = $21, contract_entry_lo = $22, contract_entry_hi = $23,
+            contract_delta = $24, contract_iv = $25,
+            contract_t1 = $26, contract_t2 = $27, contract_t3 = $28, contract_stop = $29,
+            contract_estimated = $30` : '';
           const contractParams = contract ? [
             contract.symbol, contract.strike, contract.expiry,
             contract.expiry_label, contract.bid, contract.ask,
@@ -615,11 +623,12 @@ async function startRestPoller() {
           await db.query(`
             UPDATE lc_v3.signals SET
               grade = $1, composite_raw = $2,
-              score_price_action = $3, score_volume = $4, score_market = $5, score_timing = $6,
-              position_size_pct = $7, position_size_dollars = $8,
-              spy_change_pct = $9, qqq_change_pct = $10,
-              relative_volume = $11, atr_multiple = $12,
-              news_headline = $13,
+              score_price_action = $3, score_volume = $4, score_news = $5,
+              score_market = $6, score_timing = $7,
+              position_size_pct = $8, position_size_dollars = $9,
+              spy_change_pct = $10, qqq_change_pct = $11,
+              relative_volume = $12, atr_multiple = $13,
+              news_headline = $14,
               last_confirmed_at = NOW(),
               confirmation_count = COALESCE(confirmation_count, 1) + 1,
               peak_composite = ${newPeak},
@@ -631,7 +640,7 @@ async function startRestPoller() {
             WHERE signal_id = ${row.signal_id}
           `, [
             grade, composite,
-            paScore, volScore, mktScore, timScore,
+            paScore, volScore, newsScore, mktScore, timScore,
             sizePct, Math.round(ACCOUNT_SIZE * sizePct),
             spyPct, qqqPct,
             parseFloat(relVol.toFixed(2)), parseFloat(atrMult.toFixed(2)),
@@ -640,7 +649,7 @@ async function startRestPoller() {
           ]);
 
           written++;
-          console.log(`[SIGNAL] ${ticker} ${direction} ${grade} composite=${composite} (CONFIRM #${(row.confirmation_count||1)+1}, peak=${newPeakGrade}/${newPeak}, ${trend}) ${freshness} type=${gate.signalType}`);
+          console.log(`[SIGNAL] ${ticker} ${direction} ${grade} composite=${composite} PA=${paScore} VOL=${volScore} NEWS=${newsScore} MKT=${mktScore} TIM=${timScore} (CONFIRM #${(row.confirmation_count||1)+1}, peak=${newPeakGrade}/${newPeak}, ${trend}) ${freshness} type=${gate.signalType}`);
         } else {
           // NEW signal
           const contractCols = contract ? `,
@@ -650,7 +659,7 @@ async function startRestPoller() {
             contract_delta, contract_iv,
             contract_t1, contract_t2, contract_t3, contract_stop,
             contract_estimated` : '';
-          const contractPlaceholders = contract ? ',$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31' : '';
+          const contractPlaceholders = contract ? ',$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32' : '';
           const contractParams = contract ? [
             contract.symbol, contract.strike, contract.expiry,
             contract.expiry_label, contract.bid, contract.ask,
@@ -671,13 +680,13 @@ async function startRestPoller() {
               peak_composite, peak_grade, composite_history, momentum_trend,
               expires_at, created_at
               ${contractCols}
-            ) VALUES ($1,$2,$3,'ACTIVE',$4,'primary',$5,$6,0,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+            ) VALUES ($1,$2,$3,'ACTIVE',$4,'primary',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
               NOW(), NOW(), 1, $4, $3, '[]'::jsonb, 'NEW',
               NOW() + INTERVAL '10 minutes', NOW()
               ${contractPlaceholders})
           `, [
             ticker, direction, grade, composite,
-            paScore, volScore, mktScore, timScore,
+            paScore, volScore, newsScore, mktScore, timScore,
             sizePct, Math.round(ACCOUNT_SIZE * sizePct),
             spyPct, qqqPct,
             parseFloat(relVol.toFixed(2)), parseFloat(atrMult.toFixed(2)),
@@ -686,7 +695,7 @@ async function startRestPoller() {
           ]);
 
           written++;
-          console.log(`[SIGNAL] ${ticker} ${direction} ${grade} composite=${composite} (NEW) ${freshness} type=${gate.signalType} regime=${regime.regime}`);
+          console.log(`[SIGNAL] ${ticker} ${direction} ${grade} composite=${composite} PA=${paScore} VOL=${volScore} NEWS=${newsScore} MKT=${mktScore} TIM=${timScore} (NEW) ${freshness} type=${gate.signalType} regime=${regime.regime}`);
         }
       }
 

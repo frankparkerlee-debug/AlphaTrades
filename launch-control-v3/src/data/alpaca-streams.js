@@ -2,12 +2,81 @@ import WebSocket from 'ws';
 import dotenv from 'dotenv';
 dotenv.config();
 
+import Anthropic from '@anthropic-ai/sdk';
 import {
   updateTickerBar, updateMarketEtf, addNewsEvent,
   setStreamStatus, initTicker,
 } from './state.js';
 import { classifyCatalyst } from '../scoring/news.js';
 import logger from '../utils/logger.js';
+
+// ── CLAUDE HAIKU NEWS CLASSIFIER ─────────────────────────
+const anthropicKey = process.env.ANTHROPIC_API_KEY;
+const haikuClient = anthropicKey ? new Anthropic({ apiKey: anthropicKey }) : null;
+
+/**
+ * Classify a headline using Claude Haiku.
+ * Falls back to keyword-based classifyCatalyst if no API key or on error.
+ */
+async function classifyWithHaiku(headline, ticker) {
+  if (!haikuClient) {
+    return classifyWithKeywords(headline, ticker);
+  }
+
+  try {
+    const response = await haikuClient.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: `Classify this news headline about ${ticker} for options trading impact. Respond with ONLY a JSON object, no other text.
+
+{
+  "polarity": <integer -2 to +2, where -2=strongly bearish, -1=bearish, 0=neutral, 1=bullish, 2=strongly bullish>,
+  "catalyst_type": <one of: "earnings_beat", "earnings_miss", "analyst_upgrade", "analyst_downgrade", "regulatory", "macro_rate_cut", "macro_rate_hike", "ai_capex", "product", "partnership", "sector", "other">,
+  "relevance": <float 0.0 to 1.0, how material is this to ${ticker}'s stock price?>
+}
+
+Headline: "${headline.replace(/"/g, '\\"')}"`,
+      }],
+    });
+
+    const text = response.content[0]?.text || '';
+    const json = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || '{}');
+    const polarity = Math.max(-2, Math.min(2, parseInt(json.polarity) || 0));
+    const catalystType = json.catalyst_type || 'other';
+    const relevance = Math.max(0, Math.min(1, parseFloat(json.relevance) || 0.5));
+
+    logger.info(`[HAIKU] ${ticker}: polarity=${polarity} catalyst=${catalystType} relevance=${relevance}`);
+
+    return {
+      polarity,
+      catalyst: { type: catalystType, sensitivity: relevance >= 0.7 ? 1.2 : 1.0, affectsCluster: false, decayHours: Math.abs(polarity) >= 2 ? 8 : 4 },
+    };
+  } catch (err) {
+    logger.error(`[HAIKU] Classification failed for ${ticker}: ${err.message} — falling back to keywords`);
+    return classifyWithKeywords(headline, ticker);
+  }
+}
+
+async function classifyWithKeywords(headline, ticker) {
+  const catalyst = await classifyCatalyst(headline, ticker);
+  const POLARITY_MAP = {
+    earnings_beat: 2, earnings_miss: -2,
+    analyst_upgrade: 2, analyst_downgrade: -2,
+    hyperscaler_capex: 2, ai_chip_export_restriction: -2,
+    ai_model_release: 1, memory_pricing: 1, hbm_demand: 2,
+    delivery_numbers: 1, elon_event: 1, fsd_update: 1,
+    ai_accelerator: 2, cpu_share_gain: 1, iphone_cycle: 1,
+    services_growth: 1, ad_revenue: 1, ai_capex: 1,
+    azure_growth: 2, openai_news: 1, search_revenue: 1,
+    cloud_growth: 2, fab_capex: 2,
+    macro_rate_cut: 1, macro_rate_hike: -1,
+    macro_cpi: 0, macro_fomc: 0,
+    regulatory: -2, other: 0,
+  };
+  return { polarity: POLARITY_MAP[catalyst.type] ?? 0, catalyst };
+}
 
 const STREAM_URL  = process.env.ALPACA_STREAM_URL || 'wss://stream.data.alpaca.markets';
 const API_KEY     = process.env.ALPACA_API_KEY;
@@ -204,25 +273,8 @@ async function processNewsItem(item) {
 
   for (const ticker of relevant) {
     try {
-      const catalyst = await classifyCatalyst(headline, ticker);
-
-      // Get polarity from catalyst type
-      const polarityMap = {
-        earnings_beat: 2, earnings_miss: -2,
-        analyst_upgrade: 2, analyst_downgrade: -2,
-        hyperscaler_capex: 2, ai_chip_export_restriction: -2,
-        ai_model_release: 1, memory_pricing: 1, hbm_demand: 2,
-        delivery_numbers: 1, elon_event: 1, fsd_update: 1,
-        ai_accelerator: 2, cpu_share_gain: 1, iphone_cycle: 1,
-        services_growth: 1, ad_revenue: 1, ai_capex: 1,
-        azure_growth: 2, openai_news: 1, search_revenue: 1,
-        cloud_growth: 2, fab_capex: 2,
-        macro_rate_cut: 1, macro_rate_hike: -1,
-        macro_cpi: 0, macro_fomc: 0,
-        regulatory: -2, other: 0,
-      };
-
-      const polarity = polarityMap[catalyst.type] ?? 0;
+      // Classify with Claude Haiku (falls back to keywords if no API key)
+      const { polarity, catalyst } = await classifyWithHaiku(headline, ticker);
 
       addNewsEvent(ticker, {
         headline,
