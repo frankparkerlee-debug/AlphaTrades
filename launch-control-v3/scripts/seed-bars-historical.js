@@ -54,10 +54,14 @@ async function migrate() {
     )
   `);
 
-  // Add columns if they don't exist (migrate from old schema)
+  // Migrate from old schema — drop deprecated columns, add new ones
   await query(`ALTER TABLE lc_v3.volume_baselines ADD COLUMN IF NOT EXISTS median_volume BIGINT NOT NULL DEFAULT 0`);
   await query(`ALTER TABLE lc_v3.volume_baselines ADD COLUMN IF NOT EXISTS sample_count INT NOT NULL DEFAULT 0`);
   await query(`ALTER TABLE lc_v3.volume_baselines ADD COLUMN IF NOT EXISTS last_updated TIMESTAMPTZ DEFAULT NOW()`);
+  await query(`ALTER TABLE lc_v3.volume_baselines DROP COLUMN IF EXISTS sample_days`);
+  await query(`ALTER TABLE lc_v3.volume_baselines DROP COLUMN IF EXISTS updated_at`);
+  // Ensure avg_volume is BIGINT (old schema used NUMERIC)
+  await query(`ALTER TABLE lc_v3.volume_baselines ALTER COLUMN avg_volume TYPE BIGINT USING avg_volume::BIGINT`);
 
   console.log('[SEED] Tables ready');
 }
