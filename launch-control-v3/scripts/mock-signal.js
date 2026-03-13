@@ -1,35 +1,10 @@
-import { query } from './src/data/db.js';
+import { query } from '../src/data/db.js';
 
-// First run the contract column migration
-await query(`
-  ALTER TABLE lc_v3.signals
-    ADD COLUMN IF NOT EXISTS contract_symbol      TEXT,
-    ADD COLUMN IF NOT EXISTS contract_strike      NUMERIC,
-    ADD COLUMN IF NOT EXISTS contract_expiry      DATE,
-    ADD COLUMN IF NOT EXISTS contract_expiry_label TEXT,
-    ADD COLUMN IF NOT EXISTS contract_bid         NUMERIC,
-    ADD COLUMN IF NOT EXISTS contract_ask         NUMERIC,
-    ADD COLUMN IF NOT EXISTS contract_mid         NUMERIC,
-    ADD COLUMN IF NOT EXISTS contract_entry_lo    NUMERIC,
-    ADD COLUMN IF NOT EXISTS contract_entry_hi    NUMERIC,
-    ADD COLUMN IF NOT EXISTS contract_delta       NUMERIC,
-    ADD COLUMN IF NOT EXISTS contract_iv          NUMERIC,
-    ADD COLUMN IF NOT EXISTS contract_t1          NUMERIC,
-    ADD COLUMN IF NOT EXISTS contract_t2          NUMERIC,
-    ADD COLUMN IF NOT EXISTS contract_t3          NUMERIC,
-    ADD COLUMN IF NOT EXISTS contract_stop        NUMERIC,
-    ADD COLUMN IF NOT EXISTS contract_estimated   BOOLEAN DEFAULT false,
-    ADD COLUMN IF NOT EXISTS human_entry_price    NUMERIC,
-    ADD COLUMN IF NOT EXISTS human_exit_price     NUMERIC,
-    ADD COLUMN IF NOT EXISTS human_notes          TEXT
-`);
+// Delete old NVDA mock signals
+const del = await query(`DELETE FROM lc_v3.signals WHERE ticker = 'NVDA' AND DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE`);
+console.log(`✓ Deleted ${del.rowCount} old NVDA signals`);
 
-console.log('✓ Contract columns ready');
-
-// Delete old mock signals
-await query(`DELETE FROM lc_v3.signals WHERE ticker = 'NVDA' AND news_headline LIKE '%JP Morgan%'`);
-
-// Insert realistic mock A+ signal with full contract data
+// Insert mock A+ signal with momentum note and full contract data
 await query(`
   INSERT INTO lc_v3.signals (
     ticker, direction, grade, status,
@@ -45,23 +20,27 @@ await query(`
     contract_delta, contract_iv,
     contract_t1, contract_t2, contract_t3, contract_stop,
     contract_estimated,
+    first_seen_at, last_confirmed_at, confirmation_count,
+    peak_composite, peak_grade, composite_history, momentum_trend,
     expires_at, created_at
   ) VALUES (
     'NVDA', 'CALL', 'A+', 'ACTIVE',
-    87, 'primary',
-    32, 27, 14, 12, 4,
+    89, 'primary',
+    30, 28, 12, 14, 5,
     0.20, 1500,
-    3, 'JP Morgan raises NVDA price target to $250, cites AI infrastructure supercycle',
+    3, 'FRESH · Risk:LOW · Type:TREND_CONTINUATION · From Open:0.82%',
     0.0082, 0.0134, 0.0198, 3.2, 1.8,
-    'NVDA240312C00188000', 188, CURRENT_DATE, '0DTE',
-    2.35, 2.65, 2.50,
-    2.35, 2.68,
-    0.48, 52.3,
-    3.75, 5.00, 7.50, 1.50,
+    'NVDA260313C00118000', 118, CURRENT_DATE + 1, '1DTE',
+    2.85, 3.15, 3.00,
+    2.85, 3.18,
+    0.52, 48.7,
+    4.50, 6.00, 9.00, 1.80,
     false,
-    NOW() + INTERVAL '5 minutes', NOW()
+    NOW(), NOW(), 1,
+    89, 'A+', '[]'::jsonb, 'NEW',
+    NOW() + INTERVAL '10 minutes', NOW()
   )
 `);
 
-console.log('✓ Mock NVDA A+ signal with contract data inserted');
+console.log('✓ Mock NVDA A+ signal inserted');
 process.exit(0);

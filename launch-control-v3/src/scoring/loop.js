@@ -3,6 +3,7 @@ import {
   getTickerState, getMarketData, getNewsEvents,
   getAnnouncementContext,
 } from '../data/state.js';
+import { getRecentBars } from '../data/bar-collector.js';
 import { computeComposite, writeSignal } from '../scoring/composite.js';
 import { getMarketSession, getSessionModifiers, isScoreable } from '../utils/session.js';
 import logger from '../utils/logger.js';
@@ -140,7 +141,8 @@ export async function scoreTicker(ticker) {
   // Get announcement context
   const announcementCtx = getAnnouncementContext();
 
-  // Build bar data
+  // Build bar data with real bar history for trend analysis
+  const bars = getRecentBars(ticker, 20);
   const barData = {
     open:        tickerState.open,
     high:        tickerState.sessionHigh,
@@ -152,6 +154,7 @@ export async function scoreTicker(ticker) {
     upVolRatio:  tickerState.upVolRatio,
     prevDayHigh: tickerState.prevDayHigh,
     prevDayLow:  tickerState.prevDayLow,
+    bars,
   };
 
   // Run composite scoring
@@ -249,12 +252,14 @@ export async function runBaseLayerScan() {
     const newsEvents = getNewsEvents(ticker);
     const announcementCtx = getAnnouncementContext();
 
+    const bars = getRecentBars(ticker, 20);
     const barData = {
       open: tickerState.open, high: tickerState.sessionHigh,
       low: tickerState.sessionLow, close: tickerState.close,
       volume: tickerState.volume, vwap: tickerState.vwap,
       prevClose: tickerState.prevClose, upVolRatio: tickerState.upVolRatio,
       prevDayHigh: tickerState.prevDayHigh, prevDayLow: tickerState.prevDayLow,
+      bars,
     };
 
     const signal = await computeComposite({
