@@ -108,6 +108,7 @@ function replayDay(day, data, profiles, config, scoredNews) {
       prevClose:   prevDayBar?.c || todayDailyBar?.o || 0,
       prevDayHigh: prevDayBar?.h || 0,
       prevDayLow:  prevDayBar?.l || 0,
+      prevDayVol:  prevDayBar?.v || 1,
       openPrice:   todayDailyBar?.o || 0,
       sessionHigh: todayDailyBar?.o || 0,
       sessionLow:  todayDailyBar?.o || Infinity,
@@ -161,20 +162,17 @@ function replayDay(day, data, profiles, config, scoredNews) {
 
       if (!prevBar) continue; // Need at least 2 bars
 
-      // ── Scoring (mirrors server.js exactly) ──
-      const recentMove = prevBar.c > 0 ? (bar.c - prevBar.c) / prevBar.c : 0;
-      const direction  = recentMove >= 0 ? 'CALL' : 'PUT';
-      const mult       = direction === 'CALL' ? 1 : -1;
-      const absRecent  = Math.abs(recentMove);
-      const atr        = parseFloat(profiles[ticker]?.atr_20d || 0.025);
+      // ── Scoring (mirrors corrected server.js) ──
+      const atr = parseFloat(profiles[ticker]?.atr_20d || 0.025);
 
-      const moveFromOpen = ss.openPrice > 0
-        ? ((price - ss.openPrice) / ss.openPrice) * mult
-        : 0;
-      const moveInATRs = atr > 0 ? Math.abs(moveFromOpen) / atr : 0;
+      // Session move from open (not minute-to-minute)
+      const sessionMove = ss.openPrice > 0 ? (price - ss.openPrice) / ss.openPrice : 0;
+      const direction   = sessionMove >= 0 ? 'CALL' : 'PUT';
+      const mult        = direction === 'CALL' ? 1 : -1;
+      const moveInATRs  = atr > 0 ? Math.abs(sessionMove) / atr : 0;
 
-      // Gate: minimum momentum
-      if (absRecent < atr * 0.1) continue;
+      // Gate: minimum session move
+      if (moveInATRs < 0.1) continue;
 
       // Freshness
       const freshness = moveInATRs < 0.5  ? 'FRESH'
@@ -204,12 +202,13 @@ function replayDay(day, data, profiles, config, scoredNews) {
 
       // ── Pillar Scores ──
       const freshnessPenalty = moveInATRs > 1.5 ? 0.5 : moveInATRs > 1.0 ? 0.75 : 1.0;
-      const atrMult  = atr > 0 ? absRecent / atr : 0;
-      const paScore  = Math.min(35, Math.round(atrMult * 20 * freshnessPenalty));
+      const paScore  = Math.min(35, Math.round(moveInATRs * 35 * freshnessPenalty));
 
-      const avgMinVol = ss.barCount > 0 ? ss.cumVolume / ss.barCount : 1;
-      const curMinVol = bar.v || 0;
-      const relVol    = avgMinVol > 0 ? curMinVol / avgMinVol : 1;
+      // Volume: projected daily pace vs previous day
+      const prevDayVol = ss.prevDayVol || 1;
+      const fractionOfDay = Math.min(1, minsOpen / 390);
+      const projectedVol = fractionOfDay > 0 ? ss.cumVolume / fractionOfDay : ss.cumVolume;
+      const relVol    = prevDayVol > 0 ? projectedVol / prevDayVol : 1;
       const volScore  = Math.min(30, Math.round(relVol * 12));
 
       const spyOk    = direction === 'CALL' ? spyPct > 0 : spyPct < 0;

@@ -539,6 +539,19 @@ app.get('/api/backtest/status', (req, res) => {
 async function executeBacktest() {
   backtestError = null;
   try {
+    // Ensure backtest_results table exists
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS lc_v3.backtest_results (
+        id SERIAL PRIMARY KEY,
+        run_date DATE NOT NULL,
+        start_date DATE NOT NULL,
+        end_date DATE NOT NULL,
+        results JSONB NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_bt_run_date ON lc_v3.backtest_results(run_date DESC)`);
+
     const { runBacktest } = await import('./scripts/backtest/run.js');
 
     // Last 20 trading days

@@ -5,6 +5,7 @@
  */
 
 import { fetchAllData } from './data-fetcher.js';
+import { fetchAllDataFromDB } from './data-fetcher-db.js';
 import { classifyAllNews } from './news-scorer.js';
 import { replayAllDays } from './bar-replay.js';
 import { simulateAll } from './pnl-simulator.js';
@@ -48,10 +49,21 @@ export async function runBacktest(startDate, endDate, accountSize = 7500, ticker
   tickers = tickers.filter(t => profiles[t]);
   console.log(`[BACKTEST] ${tickers.length} tickers`);
 
-  // 2. Fetch historical data
-  const data = await fetchAllData(config, tickers);
+  // 2. Fetch historical data — try DB first, fall back to API
+  let data;
+  try {
+    console.log('[BACKTEST] Trying DB-backed data fetch...');
+    data = await fetchAllDataFromDB(config, tickers);
+    if (data.tradingDays.length === 0) {
+      console.log('[BACKTEST] No bars in DB — falling back to Alpaca API...');
+      data = await fetchAllData(config, tickers);
+    }
+  } catch (err) {
+    console.log(`[BACKTEST] DB fetch failed (${err.message}) — falling back to Alpaca API...`);
+    data = await fetchAllData(config, tickers);
+  }
 
-  // 3. Classify news
+  // 3. Classify news (skipped if no ANTHROPIC_API_KEY — news scores will be 0)
   console.log('[BACKTEST] Classifying news...');
   const scoredNews = await classifyAllNews(data.newsByTickerDate);
 
