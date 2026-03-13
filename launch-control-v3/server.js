@@ -494,6 +494,18 @@ const POSITION_SZ  = {'A+':0.20,'A':0.15,'A-':0.10,'B+':0.075,'B':0.05};
 const ACCOUNT_SIZE = parseFloat(process.env.ACCOUNT_SIZE || '7500');
 const ALPACA_FEED  = process.env.ALPACA_FEED || 'sip';
 
+// Catalyst type → polarity for REST news classification
+const GENERIC_POLARITY_MAP = {
+  earnings_beat: 2, earnings_miss: -2, analyst_upgrade: 2, analyst_downgrade: -2,
+  hyperscaler_capex: 2, ai_chip_export_restriction: -2, ai_model_release: 1,
+  memory_pricing: 1, hbm_demand: 2, delivery_numbers: 1, elon_event: 1,
+  fsd_update: 1, ai_accelerator: 2, cpu_share_gain: 1, iphone_cycle: 1,
+  services_growth: 1, ad_revenue: 1, ai_capex: 1, azure_growth: 2,
+  openai_news: 1, search_revenue: 1, cloud_growth: 2, fab_capex: 2,
+  macro_rate_cut: 1, macro_rate_hike: -1, macro_cpi: 0, macro_fomc: 0,
+  regulatory: -2, other: 0,
+};
+
 function toGrade(score) {
   for (const [t, g] of GRADE_SCALE) if (score >= t) return g;
   return null;
@@ -554,6 +566,43 @@ async function startRestPoller() {
         });
         vix = vixRes.data?.bar?.c || 18;
       } catch(e) {}
+
+      // Fetch recent news via REST to supplement WebSocket stream
+      try {
+        const { addNewsEvent } = await import('./src/data/state.js');
+        const { classifyCatalyst } = await import('./src/scoring/news.js');
+        const since = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(); // last 4 hours
+        const newsRes = await axios.get(`${dataUrl}/v1beta1/news`, {
+          headers: alpacaHdrs,
+          params: { symbols: tickers.join(','), start: since, limit: 50, sort: 'desc' },
+          timeout: 10000,
+        });
+        const articles = newsRes.data?.news || [];
+        let newsAdded = 0;
+        for (const article of articles) {
+          const headline = article.headline || '';
+          const timestamp = article.created_at || article.updated_at || new Date().toISOString();
+          const symbols = article.symbols || [];
+          const relevant = symbols.filter(s => profiles[s]);
+          for (const ticker of relevant) {
+            const existing = getNewsEvents(ticker);
+            if (existing.some(e => e.headline === headline)) continue; // skip duplicates
+            const classified = await classifyCatalyst(headline, ticker);
+            addNewsEvent(ticker, {
+              headline,
+              catalyst: classified,
+              polarity: GENERIC_POLARITY_MAP[classified.type] ?? 0,
+              timestamp,
+              symbols,
+              source: article.source || 'alpaca-rest',
+            });
+            newsAdded++;
+          }
+        }
+        if (newsAdded > 0) console.log(`[POLL] Added ${newsAdded} news events from REST (${articles.length} articles)`);
+      } catch (newsErr) {
+        console.error('[POLL] News fetch error:', newsErr.message);
+      }
 
       // Classify market regime once for all signals this cycle
       const { classifyRegime } = await import('./src/scoring/intelligence.js');
