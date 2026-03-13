@@ -52,26 +52,20 @@ async function fetchOptionSnapshots(tickers) {
     const batch = tickers.slice(i, i + BATCH_SIZE);
     console.log(`[IV] Fetching options batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(tickers.length / BATCH_SIZE)}: ${batch.join(',')}`);
 
-    try {
-      let pageToken = null;
-      do {
-        const params = {
-          underlying_symbols: batch.join(','),
-          feed: 'indicative',
-          limit: 1000,
-        };
-        if (pageToken) params.page_token = pageToken;
-
-        const res = await axios.get(`${DATA_URL}/v1beta1/options/snapshots`, {
-          headers: HEADERS, params, timeout: 15000,
+    // Fetch per-ticker (Alpaca's working endpoint)
+    await Promise.all(batch.map(async (ticker) => {
+      try {
+        const res = await axios.get(`${DATA_URL}/v1beta1/options/snapshots/${ticker}`, {
+          headers: HEADERS,
+          params: { feed: 'indicative', limit: 250 },
+          timeout: 15000,
         });
 
         const snapshots = res.data?.snapshots || {};
+        allSnapshots[ticker] = [];
         for (const [sym, snap] of Object.entries(snapshots)) {
           const parsed = parseOCC(sym);
           if (!parsed) continue;
-          const ticker = parsed.ticker;
-          if (!allSnapshots[ticker]) allSnapshots[ticker] = [];
           allSnapshots[ticker].push({
             symbol: sym,
             ...parsed,
@@ -81,12 +75,10 @@ async function fetchOptionSnapshots(tickers) {
             ask: snap.latestQuote?.ap || 0,
           });
         }
-
-        pageToken = res.data?.next_page_token || null;
-      } while (pageToken);
-    } catch (err) {
-      console.error(`[IV] Options fetch error for ${batch.join(',')}: ${err.message}`);
-    }
+      } catch (err) {
+        console.error(`[IV] Options fetch error for ${ticker}: ${err.message}`);
+      }
+    }));
 
     if (i + BATCH_SIZE < tickers.length) {
       await sleep(BATCH_DELAY);
