@@ -450,6 +450,7 @@ async function startRestPoller() {
 
       // Import intelligence functions
       const { analyzeLevels, analyzeTrend, gateSignal } = await import('./src/scoring/intelligence.js');
+      const { analyzeMomentum, shouldSkipOnFreshness } = await import('./src/scoring/momentum.js');
 
       let written = 0;
       const today = new Date().toISOString().split('T')[0];
@@ -497,16 +498,18 @@ async function startRestPoller() {
           bars: syntheticBars,
         };
 
-        // Freshness classification
-        const freshness = moveInATRs < 0.5 ? 'FRESH'
-                        : moveInATRs < 1.0 ? 'DEVELOPING'
-                        : moveInATRs < 1.5 ? 'EXTENDED'
-                        : moveInATRs < 2.0 ? 'LATE'
-                        : 'EXHAUSTED';
+        // Momentum analysis (replaces inline freshness + PA score)
+        const momentum = analyzeMomentum(syntheticBars, openPrice, prevClose, atr, direction);
+        const freshness = momentum.freshness;
+
+        // Hard gate on exhausted/late moves
+        if (shouldSkipOnFreshness(freshness, momentum.entryRisk)) {
+          continue;
+        }
 
         // Run intelligence analysis
         const levels = analyzeLevels(mockState, atr);
-        const trend  = analyzeTrend(syntheticBars, direction); // limited without full bar history
+        const trend  = analyzeTrend(syntheticBars, direction);
 
         // Gate signal through full intelligence check
         const gate = gateSignal(direction, trend, levels, regime, freshness);
@@ -516,10 +519,9 @@ async function startRestPoller() {
           continue;
         }
 
-        // Scoring
-        const freshnessPenalty = moveInATRs > 1.5 ? 0.5 : moveInATRs > 1.0 ? 0.75 : 1.0;
+        // PA score from momentum scorer (0-35)
+        const paScore  = momentum.momentumScore;
         const atrMult  = atr > 0 ? absRecent / atr : 0;
-        const paScore  = Math.min(35, Math.round(atrMult * 20 * freshnessPenalty));
 
         const avgDayVol = snap.dailyBar?.v || 0;
         const minsOpen  = Math.max(1, (() => {
@@ -564,9 +566,11 @@ async function startRestPoller() {
         // Build signal note with full context
         const signalNote = [
           freshness,
-          `Risk:${freshness === 'FRESH' ? 'LOW' : freshness === 'DEVELOPING' ? 'MOD' : 'HIGH'}`,
+          `Risk:${momentum.entryRisk}`,
           `Type:${gate.signalType || 'NEUTRAL'}`,
-          `From Open:${(moveFromOpen*100).toFixed(2)}%`,
+          `Bars:${momentum.barsInMove}`,
+          `Accel:${momentum.recentAccel.toFixed(3)}%`,
+          `From Open:${momentum.moveFromOpen.toFixed(2)}%`,
           regime.regimeNote ? `Regime:${regime.regime}` : null,
           levels.nearestAbove ? `ResAt:$${levels.nearestAbove.price.toFixed(2)}(${levels.nearestAbove.name})` : null,
           newsScore > 0 && newsResult.headline ? `News:${newsResult.headline.slice(0, 60)}` : null,
