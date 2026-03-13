@@ -270,17 +270,37 @@ app.get('/api/debug/scoring/:ticker', async (req, res) => {
     const price = snap.latestTrade?.p || 0;
     const prevClose = snap.prevDailyBar?.c || 0;
     const openPrice = snap.dailyBar?.o || price;
+    const profileRes = await db.query('SELECT atr_20d FROM lc_v3.equity_profiles WHERE ticker = $1', [ticker]);
+    const atr = parseFloat(profileRes.rows[0]?.atr_20d || 0.025);
+
+    // Session move (same logic as poller)
+    const sessionMove = openPrice > 0 ? (price - openPrice) / openPrice : 0;
+    const direction = sessionMove >= 0 ? 'CALL' : 'PUT';
+    const moveInATRs = atr > 0 ? Math.abs(sessionMove) / atr : 0;
+    const passesMinMove = moveInATRs >= 0.1;
+
     const latestBar = snap.minuteBar;
     const prevBar = snap.prevMinuteBar;
-    const recentMove = latestBar?.c > 0 && prevBar?.c > 0 ? (latestBar.c - prevBar.c) / prevBar.c : 0;
-    const direction = recentMove >= 0 ? 'CALL' : 'PUT';
-    const atr = 0.025;
-    const absRecent = Math.abs(recentMove);
-    const minAtrThreshold = atr * 0.1;
+    const absRecent = (latestBar && prevBar && prevBar.c > 0)
+      ? Math.abs((latestBar.c - prevBar.c) / prevBar.c) : 0;
 
     const syntheticBars = [prevBar, latestBar].filter(Boolean).map(b => ({ o: b.o, h: b.h, l: b.l, c: b.c, v: b.v || 0 }));
-    const momentum = analyzeMomentum(syntheticBars, openPrice, prevClose, atr, direction);
-    const skipFreshness = shouldSkipOnFreshness(momentum.freshness, momentum.entryRisk);
+
+    // PA score (fallback logic matching poller)
+    let paScore, freshness;
+    if (syntheticBars.length >= 5) {
+      const momentum = analyzeMomentum(syntheticBars, openPrice, prevClose, atr, direction);
+      paScore = momentum.momentumScore;
+      freshness = momentum.freshness;
+    } else {
+      freshness = moveInATRs < 0.5 ? 'FRESH'
+                : moveInATRs < 1.0 ? 'DEVELOPING'
+                : moveInATRs < 1.5 ? 'EXTENDED'
+                : moveInATRs < 2.0 ? 'LATE'
+                : 'EXHAUSTED';
+      const freshnessPenalty = moveInATRs > 1.5 ? 0.5 : moveInATRs > 1.0 ? 0.75 : 1.0;
+      paScore = Math.min(35, Math.round(moveInATRs * 20 * freshnessPenalty));
+    }
 
     const mkt = snapRes.data;
     const spyPct = mkt.SPY ? ((mkt.SPY.latestTrade?.p||0)-(mkt.SPY.prevDailyBar?.c||0))/(mkt.SPY.prevDailyBar?.c||1) : 0;
@@ -290,17 +310,17 @@ app.get('/api/debug/scoring/:ticker', async (req, res) => {
     const mockState = { close: price, vwap: latestBar?.vw || price, sessionHigh: snap.dailyBar?.h || price, sessionLow: snap.dailyBar?.l || price, prevDayHigh: snap.prevDailyBar?.h || prevClose * 1.01, prevDayLow: snap.prevDailyBar?.l || prevClose * 0.99, sessionOpen: openPrice, bars: syntheticBars };
     const levels = analyzeLevels(mockState, atr);
     const trend = analyzeTrend(syntheticBars, direction);
-    const gate = gateSignal(direction, trend, levels, regime, momentum.freshness);
+    const gate = gateSignal(direction, trend, levels, regime, freshness);
 
-    const paScore = momentum.momentumScore;
     const volScore = Math.min(30, Math.round((latestBar?.v || 0) / Math.max(1, (snap.dailyBar?.v || 1) / 30) * 12));
 
     res.json({
-      ticker, price, prevClose, openPrice, direction, recentMove, absRecent, minAtrThreshold,
-      passesMinMove: absRecent >= minAtrThreshold,
+      ticker, price, prevClose, openPrice, direction,
+      sessionMove: parseFloat((sessionMove * 100).toFixed(3)),
+      moveInATRs: parseFloat(moveInATRs.toFixed(3)),
+      passesMinMove,
       syntheticBarsCount: syntheticBars.length,
-      momentum, skipFreshness,
-      paScore, volScore,
+      freshness, paScore, volScore,
       passesPA: paScore >= 15, passesVOL: volScore >= 12,
       gate, regime: regime.regime,
     });
@@ -550,22 +570,22 @@ async function startRestPoller() {
         const openPrice = snap.dailyBar?.o || price;
         if (!price || !prevClose) continue;
 
+        // Direction based on session move (price vs open), not minute-to-minute
+        const sessionMove = openPrice > 0 ? (price - openPrice) / openPrice : 0;
+        const direction   = sessionMove >= 0 ? 'CALL' : 'PUT';
+        const mult        = direction === 'CALL' ? 1 : -1;
+        const moveFromOpen = sessionMove * mult; // always positive for the chosen direction
+        const atr         = parseFloat(profiles[ticker]?.atr_20d || 0.025);
+        const moveInATRs  = atr > 0 ? Math.abs(sessionMove) / atr : 0;
+
+        // Gate: need at least 0.1 ATR session move to consider scoring
+        if (moveInATRs < 0.1) continue;
+
         const latestBar = snap.minuteBar;
         const prevBar   = snap.prevMinuteBar;
-        if (!latestBar || !prevBar) continue;
-
-        const recentMove = latestBar.c > 0 && prevBar.c > 0
-          ? (latestBar.c - prevBar.c) / prevBar.c
+        const absRecent = (latestBar && prevBar && prevBar.c > 0)
+          ? Math.abs((latestBar.c - prevBar.c) / prevBar.c)
           : 0;
-
-        const direction  = recentMove >= 0 ? 'CALL' : 'PUT';
-        const mult       = direction === 'CALL' ? 1 : -1;
-        const absRecent  = Math.abs(recentMove);
-        const moveFromOpen = openPrice > 0 ? ((price - openPrice) / openPrice) * mult : 0;
-        const atr        = parseFloat(profiles[ticker]?.atr_20d || 0.025);
-        const moveInATRs = atr > 0 ? Math.abs(moveFromOpen) / atr : 0;
-
-        if (absRecent < atr * 0.1) continue;
 
         // Build mock state for intelligence engine from snapshot data
         const vwap         = snap.minuteBar?.vw || price;
@@ -589,7 +609,7 @@ async function startRestPoller() {
 
         // Momentum analysis — use full scorer if enough bars, else inline fallback
         let momentum, freshness, paScore;
-        const atrMult = atr > 0 ? absRecent / atr : 0;
+        const atrMult = moveInATRs; // session move in ATRs, not minute-to-minute
 
         if (syntheticBars.length >= 5) {
           momentum = analyzeMomentum(syntheticBars, openPrice, prevClose, atr, direction);
@@ -600,7 +620,7 @@ async function startRestPoller() {
             continue;
           }
         } else {
-          // REST poller fallback — only 2 bars from snapshot
+          // REST poller fallback — score based on session move from open
           freshness = moveInATRs < 0.5 ? 'FRESH'
                     : moveInATRs < 1.0 ? 'DEVELOPING'
                     : moveInATRs < 1.5 ? 'EXTENDED'
@@ -609,7 +629,7 @@ async function startRestPoller() {
           if (freshness === 'EXHAUSTED') continue;
 
           const freshnessPenalty = moveInATRs > 1.5 ? 0.5 : moveInATRs > 1.0 ? 0.75 : 1.0;
-          paScore = Math.min(35, Math.round(atrMult * 20 * freshnessPenalty));
+          paScore = Math.min(35, Math.round(moveInATRs * 20 * freshnessPenalty));
           momentum = { momentumScore: paScore, freshness, entryRisk: freshness === 'FRESH' ? 'LOW' : 'MODERATE', barsInMove: 0, moveFromOpen: parseFloat((moveFromOpen * 100).toFixed(3)), recentAccel: parseFloat((absRecent * 100).toFixed(3)), volSurge: 1, exhaustion: false, moveInATRs: parseFloat(moveInATRs.toFixed(2)) };
         }
 
