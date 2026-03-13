@@ -536,6 +536,40 @@ app.get('/api/backtest/status', (req, res) => {
   res.json({ running: backtestRunning, error: backtestError });
 });
 
+// Debug: check what bars exist in DB
+app.get('/api/backtest/debug', async (req, res) => {
+  try {
+    const barStats = await db.query(`
+      SELECT COUNT(*) as total_bars,
+        COUNT(DISTINCT ticker) as tickers,
+        MIN(ts) as min_ts, MAX(ts) as max_ts,
+        COUNT(DISTINCT DATE(ts)) as distinct_days
+      FROM lc_v3.bars
+    `);
+    const sampleDays = await db.query(`
+      SELECT DATE(ts) as day, COUNT(*) as bars
+      FROM lc_v3.bars
+      GROUP BY DATE(ts)
+      ORDER BY day DESC
+      LIMIT 5
+    `);
+    const sampleTickers = await db.query(`
+      SELECT ticker, COUNT(*) as bars
+      FROM lc_v3.bars
+      GROUP BY ticker
+      ORDER BY bars DESC
+      LIMIT 5
+    `);
+    res.json({
+      stats: barStats.rows[0],
+      recentDays: sampleDays.rows,
+      topTickers: sampleTickers.rows,
+    });
+  } catch (err) {
+    res.json({ error: err.message });
+  }
+});
+
 async function executeBacktest() {
   backtestError = null;
   try {
