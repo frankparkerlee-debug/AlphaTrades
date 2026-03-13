@@ -57,12 +57,17 @@ async function fetchOptionSnapshots(tickers) {
       try {
         const res = await axios.get(`${DATA_URL}/v1beta1/options/snapshots/${ticker}`, {
           headers: HEADERS,
-          params: { feed: 'indicative', limit: 250 },
+          params: { limit: 250 },
           timeout: 15000,
         });
 
         const snapshots = res.data?.snapshots || {};
         allSnapshots[ticker] = [];
+        // Debug: log first contract's structure for first ticker
+        if (i === 0 && batch.indexOf(ticker) === 0) {
+          const firstKey = Object.keys(snapshots)[0];
+          if (firstKey) console.log(`[IV] DEBUG ${ticker} sample:`, JSON.stringify(snapshots[firstKey]?.greeks || 'no greeks').slice(0, 200));
+        }
         for (const [sym, snap] of Object.entries(snapshots)) {
           const parsed = parseOCC(sym);
           if (!parsed) continue;
