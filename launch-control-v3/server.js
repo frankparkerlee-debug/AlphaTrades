@@ -436,6 +436,33 @@ app.get('/api/seed-earnings/status', (req, res) => {
   res.json({ running: earningsRunning, result: earningsResult });
 });
 
+// Seed IV rank
+let ivRunning = false;
+let ivResult = null;
+app.post('/api/seed-iv', async (req, res) => {
+  if (ivRunning) return res.json({ ok: false, error: 'Already running' });
+  ivRunning = true;
+  ivResult = null;
+  res.json({ ok: true, message: 'IV seed started' });
+  try {
+    const { execSync } = await import('child_process');
+    const output = execSync('node scripts/seed-iv-rank.js', {
+      cwd: process.cwd(), timeout: 600000, encoding: 'utf-8',
+      env: { ...process.env },
+    });
+    ivResult = { ok: true, output: output.slice(-3000) };
+    console.log('[IV] Seed complete');
+  } catch (err) {
+    ivResult = { ok: false, error: err.message, output: (err.stdout || '').slice(-3000) };
+    console.error('[IV] Seed failed:', err.message);
+  } finally {
+    ivRunning = false;
+  }
+});
+app.get('/api/seed-iv/status', (req, res) => {
+  res.json({ running: ivRunning, result: ivResult });
+});
+
 // Backtest status
 let backtestError = null;
 app.get('/api/backtest/status', (req, res) => {
