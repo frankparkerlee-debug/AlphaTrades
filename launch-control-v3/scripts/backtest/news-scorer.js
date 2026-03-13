@@ -5,8 +5,9 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { createHash } from 'crypto';
+import { dirname } from 'path';
 
 const CACHE_FILE = './backtest-results/news-cache.json';
 
@@ -24,7 +25,12 @@ function loadCache() {
 }
 
 function saveCache(cache) {
-  writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2));
+  try {
+    mkdirSync(dirname(CACHE_FILE), { recursive: true });
+    writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2));
+  } catch (err) {
+    console.error('[NEWS] Failed to save cache:', err.message);
+  }
 }
 
 /**

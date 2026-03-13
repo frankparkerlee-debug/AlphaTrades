@@ -376,7 +376,13 @@ async function triggerRun() {
         clearInterval(poll);
         btn.disabled = false;
         btn.textContent = 'RUN NOW';
-        loadResults();
+        if (status.error) {
+          $('runStatus').textContent = 'Error: ' + status.error;
+          $('runStatus').style.color = 'var(--red)';
+        } else {
+          $('runStatus').style.color = '';
+          loadResults();
+        }
       }
     }, 10000);
   } catch(e) {

@@ -292,11 +292,13 @@ app.post('/api/backtest/run', async (req, res) => {
 });
 
 // Backtest status
+let backtestError = null;
 app.get('/api/backtest/status', (req, res) => {
-  res.json({ running: backtestRunning });
+  res.json({ running: backtestRunning, error: backtestError });
 });
 
 async function executeBacktest() {
+  backtestError = null;
   try {
     const { runBacktest } = await import('./scripts/backtest/run.js');
 
@@ -326,7 +328,9 @@ async function executeBacktest() {
 
     console.log(`[BACKTEST] Complete: ${results.summary?.totalSignals || 0} signals, P&L: $${results.summary?.totalPnlDollars || 0}`);
   } catch (err) {
+    backtestError = err.message;
     console.error('[BACKTEST] Failed:', err.message);
+    console.error('[BACKTEST] Stack:', err.stack);
   }
 }
 

@@ -24,3 +24,5 @@ services:
         value: https://data.alpaca.markets
       - key: ALPACA_STREAM_URL
         value: wss://stream.data.alpaca.markets
+      - key: ANTHROPIC_API_KEY
+        sync: false
