@@ -10,6 +10,9 @@ import { selectOptionsContract } from './src/options/contract-selector.js';
 import { getNewsEvents } from './src/data/state.js';
 import { computeNewsScore } from './src/scoring/news.js';
 import { runBacktest } from './scripts/backtest/run.js';
+import { scanGapReversal } from './src/strategies/gap-reversal.js';
+import { scanCapitulationBounce } from './src/strategies/capitulation-bounce.js';
+import { scanVolumeDropPut } from './src/strategies/volume-drop-put.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app  = express();
@@ -1278,6 +1281,123 @@ async function startRestPoller() {
       }
 
       if (written > 0) console.log(`[POLL] ${written} signals written/updated`);
+
+      // ── DATA-PROVEN STRATEGY SCANNERS ───────────────────────────────
+      if (session === 'REGULAR') {
+        try {
+          // Build prevCloses from snapshots
+          const prevCloses = {};
+          for (const [ticker, snap] of Object.entries(allSnaps)) {
+            if (snap.prevDailyBar?.c) prevCloses[ticker] = snap.prevDailyBar.c;
+          }
+
+          // Build snapshots object for strategy scanners
+          const stratSnapshots = {};
+          const et3 = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+          const currentMins = et3.getHours() * 60 + et3.getMinutes();
+          const windowH = Math.floor(currentMins / 15) * 15;
+          const windowKey = `${Math.floor(windowH / 60).toString().padStart(2, '0')}:${(windowH % 60).toString().padStart(2, '0')}`;
+
+          for (const [ticker, snap] of Object.entries(allSnaps)) {
+            stratSnapshots[ticker] = {
+              open: snap.dailyBar?.o || 0,
+              price: snap.latestTrade?.p || 0,
+              volume: snap.dailyBar?.v || 0,
+              windowKey,
+            };
+          }
+
+          // Build volumeBaselines from DB
+          const blRes = await db.query('SELECT ticker, window_key, avg_volume FROM lc_v3.volume_baselines');
+          const volumeBaselines = {};
+          for (const row of blRes.rows) {
+            volumeBaselines[`${row.ticker}:${row.window_key}`] = parseFloat(row.avg_volume);
+          }
+
+          // Build firstCandles — earliest bar after 9:30 ET today for each ticker
+          const firstCandles = {};
+          const fcRes = await db.query(`
+            SELECT DISTINCT ON (ticker) ticker, open, close
+            FROM lc_v3.bars
+            WHERE session = 'REGULAR'
+              AND DATE(ts AT TIME ZONE 'America/New_York') = CURRENT_DATE
+              AND EXTRACT(HOUR FROM ts AT TIME ZONE 'America/New_York') * 60
+                + EXTRACT(MINUTE FROM ts AT TIME ZONE 'America/New_York') BETWEEN 570 AND 575
+            ORDER BY ticker, ts
+          `);
+          for (const row of fcRes.rows) {
+            firstCandles[row.ticker] = { open: parseFloat(row.open), close: parseFloat(row.close) };
+          }
+
+          // If no bars in DB yet today (bars may not be seeded yet), build from snapshots
+          if (Object.keys(firstCandles).length === 0 && currentMins >= 575) {
+            for (const [ticker, snap] of Object.entries(allSnaps)) {
+              const o = snap.dailyBar?.o;
+              const firstMin = snap.prevMinuteBar || snap.minuteBar;
+              if (o && firstMin) {
+                firstCandles[ticker] = { open: o, close: firstMin.c };
+              }
+            }
+          }
+
+          // Run all three scanners
+          const gapSignals = scanGapReversal(stratSnapshots, prevCloses, firstCandles);
+          const capSignals = scanCapitulationBounce(stratSnapshots, prevCloses, volumeBaselines);
+          const putSignals = scanVolumeDropPut(stratSnapshots, prevCloses, volumeBaselines);
+          const allStratSignals = [...gapSignals, ...capSignals, ...putSignals];
+
+          for (const sig of allStratSignals) {
+            // Dedup: skip if strategy signal already exists today for this ticker+direction+strategy
+            const dupCheck = await db.query(`
+              SELECT 1 FROM lc_v3.signals
+              WHERE ticker = $1 AND direction = $2
+                AND DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
+                AND news_headline LIKE $3
+              LIMIT 1
+            `, [sig.ticker, sig.direction, `%strategy=${sig.strategy}%`]);
+            if (dupCheck.rows.length > 0) continue;
+
+            const compositeRaw = sig.strategy === 'GAP_REVERSAL' ? 85
+                               : sig.strategy === 'CAPITULATION_BOUNCE' ? 72
+                               : 57;
+
+            const signalNote = [
+              `strategy=${sig.strategy}`,
+              `confidence=${sig.confidence}%`,
+              sig.gap_pct != null ? `gap=${sig.gap_pct}%` : null,
+              sig.intraday_drop_pct != null ? `drop=${sig.intraday_drop_pct}%` : null,
+              sig.volume_ratio != null ? `volRatio=${sig.volume_ratio}x` : null,
+              sig.t1_target != null ? `T1=$${sig.t1_target}` : null,
+              sig.t2_target != null ? `T2=$${sig.t2_target}` : null,
+              sig.stop_price != null ? `stop=$${sig.stop_price}` : null,
+              sig.exit_by ? `exitBy=${sig.exit_by}` : null,
+              sig.exit_at ? `exitAt=${sig.exit_at}` : null,
+              sig.hold ? `hold=${sig.hold}` : null,
+              sig.note || null,
+            ].filter(Boolean).join(' · ');
+
+            await db.query(`
+              INSERT INTO lc_v3.signals (
+                ticker, direction, grade, status, composite_raw, signal_tier,
+                price_at_signal, news_headline,
+                first_seen_at, last_confirmed_at, confirmation_count,
+                peak_composite, peak_grade, composite_history, momentum_trend,
+                expires_at, created_at
+              ) VALUES ($1,$2,'A','ACTIVE',$3,'primary',$4,$5,
+                NOW(), NOW(), 1, $3, 'A', '[]'::jsonb, 'NEW',
+                NOW() + INTERVAL '4 hours', NOW())
+            `, [sig.ticker, sig.direction, compositeRaw, sig.entry_price, signalNote]);
+
+            console.log(`[STRATEGY] ${sig.ticker} ${sig.direction} ${sig.strategy} ${sig.confidence}%`);
+          }
+
+          if (allStratSignals.length > 0) {
+            console.log(`[STRATEGY] ${allStratSignals.length} strategy signals fired`);
+          }
+        } catch (stratErr) {
+          console.error('[STRATEGY] Scanner error:', stratErr.message);
+        }
+      }
 
       // Post-signal monitoring — check active signals for breakdowns
       await monitorActiveSignals(alpacaHdrs, dataUrl, profiles);

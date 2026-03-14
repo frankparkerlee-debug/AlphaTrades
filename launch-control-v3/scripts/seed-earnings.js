@@ -1,10 +1,14 @@
 /**
  * Seed earnings intelligence for all tracked tickers
+ * Uses FMP /stable endpoints
  * Run: node scripts/seed-earnings.js
  */
 import 'dotenv/config';
 import { query } from '../src/data/db.js';
-import { getEarningsCalendar, getHistoricalEarnings, sleep } from '../src/data/fmp.js';
+import {
+  getEarningsCalendar, getHistoricalEarnings,
+  getPriceTargetConsensus, sleep,
+} from '../src/data/fmp.js';
 
 const today = new Date();
 const todayStr = today.toISOString().split('T')[0];
@@ -18,12 +22,12 @@ async function main() {
   const tickers = new Set(profileRes.rows.map(r => r.ticker));
   console.log(`[EARNINGS] ${tickers.size} tickers loaded`);
 
-  // Fetch earnings calendar for next 90 days
+  // Fetch forward earnings calendar (next 90 days)
   console.log(`[EARNINGS] Fetching calendar ${todayStr} → ${futureStr}`);
   const calendar = await getEarningsCalendar(todayStr, futureStr);
   console.log(`[EARNINGS] Calendar returned ${calendar.length} entries`);
 
-  // Map our tickers to their next earnings date
+  // Map our tickers to their next earnings date + estimates
   const earningsMap = {};
   for (const entry of calendar) {
     const sym = entry.symbol;
@@ -31,61 +35,82 @@ async function main() {
     const eDate = entry.date;
     if (!eDate) continue;
     // Keep the earliest upcoming date per ticker
-    if (!earningsMap[sym] || eDate < earningsMap[sym]) {
-      earningsMap[sym] = eDate;
+    if (!earningsMap[sym] || eDate < earningsMap[sym].date) {
+      earningsMap[sym] = {
+        date: eDate,
+        epsEstimated: entry.epsEstimated,
+        epsActual: entry.epsActual,
+      };
     }
   }
   console.log(`[EARNINGS] ${Object.keys(earningsMap).length} of our tickers have upcoming earnings`);
 
+  // Try to fetch historical earnings for beat rate calculation
+  // (may be limited by plan — past dates might 403)
+  console.log(`[EARNINGS] Fetching historical earnings for beat rate...`);
+  const historicalMap = {};
+  for (const ticker of tickers) {
+    const history = await getHistoricalEarnings(ticker);
+    if (history.length > 0) {
+      historicalMap[ticker] = history;
+    }
+  }
+  console.log(`[EARNINGS] Got historical data for ${Object.keys(historicalMap).length} tickers`);
+
   let count = 0;
 
   for (const ticker of tickers) {
-    const earningsDate = earningsMap[ticker] || null;
+    const earnings = earningsMap[ticker] || null;
+    const earningsDate = earnings?.date || null;
     const daysAway = earningsDate
       ? Math.round((new Date(earningsDate) - today) / 86400000)
       : null;
 
-    // Fetch historical earnings
-    const history = await getHistoricalEarnings(ticker);
-
+    // Compute beat rate and avg move from historical data
     let avgMovePct = null;
     let beatRate = null;
+    const history = historicalMap[ticker] || [];
 
     if (history.length > 0) {
-      const validQuarters = history.filter(q =>
-        q.actualEarningResult != null && q.estimatedEarning != null && q.estimatedEarning !== 0
+      const valid = history.filter(q =>
+        q.epsActual != null && q.epsEstimated != null && q.epsEstimated !== 0
       );
-
-      if (validQuarters.length > 0) {
-        const moves = validQuarters.map(q =>
-          Math.abs(q.actualEarningResult - q.estimatedEarning) / Math.abs(q.estimatedEarning)
+      if (valid.length > 0) {
+        const moves = valid.map(q =>
+          Math.abs(q.epsActual - q.epsEstimated) / Math.abs(q.epsEstimated)
         );
         avgMovePct = parseFloat((moves.reduce((a, b) => a + b, 0) / moves.length * 100).toFixed(2));
-
-        const beats = validQuarters.filter(q => q.actualEarningResult > q.estimatedEarning).length;
-        beatRate = parseFloat((beats / validQuarters.length).toFixed(3));
+        const beats = valid.filter(q => q.epsActual > q.epsEstimated).length;
+        beatRate = parseFloat((beats / valid.length).toFixed(3));
       }
     }
 
+    // Get price target consensus
+    const ptData = await getPriceTargetConsensus(ticker);
+    const pt = Array.isArray(ptData) ? ptData[0] : ptData;
+    const priceTarget = pt?.targetConsensus || null;
+
     await query(`
-      INSERT INTO lc_v3.ticker_intelligence (ticker, earnings_date, earnings_days_away, earnings_avg_move_pct, earnings_beat_rate, last_updated)
-      VALUES ($1, $2, $3, $4, $5, NOW())
+      INSERT INTO lc_v3.ticker_intelligence
+        (ticker, earnings_date, earnings_days_away, earnings_avg_move_pct,
+         earnings_beat_rate, analyst_price_target, last_updated)
+      VALUES ($1, $2, $3, $4, $5, $6, NOW())
       ON CONFLICT (ticker) DO UPDATE SET
         earnings_date = EXCLUDED.earnings_date,
         earnings_days_away = EXCLUDED.earnings_days_away,
         earnings_avg_move_pct = EXCLUDED.earnings_avg_move_pct,
         earnings_beat_rate = EXCLUDED.earnings_beat_rate,
+        analyst_price_target = EXCLUDED.analyst_price_target,
         last_updated = NOW()
-    `, [ticker, earningsDate, daysAway, avgMovePct, beatRate]);
+    `, [ticker, earningsDate, daysAway, avgMovePct, beatRate, priceTarget]);
 
     const dateLabel = earningsDate || 'none';
     const daysLabel = daysAway != null ? daysAway : '—';
     const moveLabel = avgMovePct != null ? `${avgMovePct}%` : '—';
     const beatLabel = beatRate != null ? `${(beatRate * 100).toFixed(1)}%` : '—';
-    console.log(`[EARNINGS] ${ticker} — next: ${dateLabel} days_away: ${daysLabel} avg_move: ${moveLabel} beat_rate: ${beatLabel}`);
+    const ptLabel = priceTarget != null ? `$${priceTarget}` : '—';
+    console.log(`[EARNINGS] ${ticker} — next: ${dateLabel} days_away: ${daysLabel} avg_move: ${moveLabel} beat_rate: ${beatLabel} target: ${ptLabel}`);
     count++;
-
-    await sleep(200);
   }
 
   console.log(`\n[EARNINGS] Done — ${count} tickers processed`);

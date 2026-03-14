@@ -1,9 +1,9 @@
 /**
- * FMP (Financial Modeling Prep) API client
+ * FMP (Financial Modeling Prep) API client — uses /stable endpoints
  */
 import axios from 'axios';
 
-const BASE_URL = 'https://financialmodelingprep.com/api/v3';
+const BASE_URL = 'https://financialmodelingprep.com/stable';
 const API_KEY  = process.env.FMP_API_KEY;
 
 export function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -21,11 +21,18 @@ async function fmpGet(path, ticker) {
 }
 
 export async function getEarningsCalendar(from, to) {
-  return fmpGet(`/earning_calendar?from=${from}&to=${to}`, 'calendar');
+  return fmpGet(`/earnings-calendar?from=${from}&to=${to}`, 'calendar');
 }
 
 export async function getHistoricalEarnings(ticker) {
-  return fmpGet(`/historical/earning_calendar/${ticker}?limit=8`, ticker);
+  // Use past earnings from calendar (last 2 years)
+  const twoYearsAgo = new Date();
+  twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
+  const from = twoYearsAgo.toISOString().split('T')[0];
+  const to = new Date().toISOString().split('T')[0];
+  const all = await fmpGet(`/earnings-calendar?from=${from}&to=${to}`, ticker);
+  if (!Array.isArray(all)) return [];
+  return all.filter(e => e.symbol === ticker && e.epsActual != null);
 }
 
 export async function getInsiderTransactions(ticker) {
@@ -33,5 +40,9 @@ export async function getInsiderTransactions(ticker) {
 }
 
 export async function getAnalystEstimates(ticker) {
-  return fmpGet(`/analyst-estimates/${ticker}?limit=2`, ticker);
+  return fmpGet(`/analyst-estimates?symbol=${ticker}&period=annual&limit=2`, ticker);
+}
+
+export async function getPriceTargetConsensus(ticker) {
+  return fmpGet(`/price-target-consensus?symbol=${ticker}`, ticker);
 }
