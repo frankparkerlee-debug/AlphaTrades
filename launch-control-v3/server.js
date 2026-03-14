@@ -597,6 +597,7 @@ async function executeBacktest() {
 
     console.log(`[BACKTEST] Starting: ${startDate} → ${endDate}`);
     const results = await runBacktest(startDate, endDate, parseFloat(process.env.ACCOUNT_SIZE || '7500'));
+    console.log(`[BACKTEST] Results: ${results?.summary?.totalSignals || 0} signals, ${results?.config?.tradingDays || 0} days`);
 
     // Store in DB
     await db.query(`
@@ -614,7 +615,7 @@ async function executeBacktest() {
 
     console.log(`[BACKTEST] Complete: ${results.summary?.totalSignals || 0} signals, P&L: $${results.summary?.totalPnlDollars || 0}`);
   } catch (err) {
-    backtestError = err.message;
+    backtestError = `${err.message}\n${err.stack}`;
     console.error('[BACKTEST] Failed:', err.message);
     console.error('[BACKTEST] Stack:', err.stack);
   }
