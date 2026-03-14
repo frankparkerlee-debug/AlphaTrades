@@ -364,7 +364,7 @@ app.get('/backtest', (req, res) => {
 app.get('/api/backtest', async (req, res) => {
   try {
     const result = await db.query(
-      'SELECT results, run_date, created_at FROM lc_v3.backtest_results ORDER BY run_date DESC LIMIT 1'
+      'SELECT results, run_date, created_at FROM lc_v3.backtest_results ORDER BY created_at DESC LIMIT 1'
     );
     if (result.rows.length === 0) {
       return res.json({ results: null, lastRun: null });
