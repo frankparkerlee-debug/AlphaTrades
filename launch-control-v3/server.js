@@ -733,6 +733,121 @@ cron.schedule('0 17 * * 1-5', () => {
   }
 }, { timezone: 'America/New_York' });
 
+// ── RALLY EXHAUSTION ANALYSIS (6mo daily bars from Alpaca) ──────────────────
+app.get('/api/analysis/rally-exhaustion', async (req, res) => {
+  try {
+    const profileRes = await db.query('SELECT ticker FROM lc_v3.equity_profiles ORDER BY ticker');
+    const tickers = profileRes.rows.map(r => r.ticker);
+
+    const API_KEY = process.env.ALPACA_API_KEY;
+    const API_SECRET = process.env.ALPACA_SECRET_KEY;
+    if (!API_KEY || !API_SECRET) return res.status(500).json({ error: 'No Alpaca keys' });
+
+    const headers = { 'APCA-API-KEY-ID': API_KEY, 'APCA-API-SECRET-KEY': API_SECRET };
+    const allBars = {}; // ticker -> [{day, o, h, l, c, v}]
+    const batchSize = 40;
+
+    for (let i = 0; i < tickers.length; i += batchSize) {
+      const batch = tickers.slice(i, i + batchSize);
+      let pageToken = null;
+      do {
+        const params = {
+          symbols: batch.join(','), timeframe: '1Day',
+          start: '2025-09-01', end: new Date().toISOString().slice(0, 10),
+          limit: 10000, feed: 'sip', adjustment: 'split',
+        };
+        if (pageToken) params.page_token = pageToken;
+        const resp = await axios.get('https://data.alpaca.markets/v2/stocks/bars', { headers, params });
+        for (const [ticker, bars] of Object.entries(resp.data.bars || {})) {
+          if (!allBars[ticker]) allBars[ticker] = [];
+          for (const b of bars) allBars[ticker].push({ day: b.t.slice(0, 10), o: b.o, h: b.h, l: b.l, c: b.c, v: b.v });
+        }
+        pageToken = resp.data.next_page_token || null;
+      } while (pageToken);
+    }
+
+    // Sort
+    for (const t of Object.keys(allBars)) allBars[t].sort((a, b) => a.day.localeCompare(b.day));
+
+    const totalBars = Object.values(allBars).reduce((s, v) => s + v.length, 0);
+    const tickerCount = Object.keys(allBars).length;
+
+    // 3-day rally exhaustion
+    const b3Order = ['+1% to +2%', '+2% to +3%', '+3% to +5%', '+5% to +8%', '+8%+'];
+    const b3 = {}, b3High = {}, b3NotHigh = {};
+    for (const k of b3Order) { b3[k] = { total: 0, nextDown: 0, rets: [] }; b3High[k] = { total: 0, nextDown: 0, rets: [] }; b3NotHigh[k] = { total: 0, nextDown: 0, rets: [] }; }
+
+    // 10-day rally exhaustion
+    const b10Order = ['+3% to +5%', '+5% to +8%', '+8% to +12%', '+12%+'];
+    const b10 = {};
+    for (const k of b10Order) b10[k] = { total: 0, nextDown: 0, rets: [] };
+
+    for (const [ticker, days] of Object.entries(allBars)) {
+      for (let i = 20; i < days.length - 1; i++) {
+        const curr = days[i], next = days[i + 1];
+        if (curr.c === 0) continue;
+        const nextRet = (next.c - curr.c) / curr.c * 100;
+
+        // 3-day
+        if (i >= 3) {
+          const prev3 = days[i - 3];
+          if (prev3.c > 0) {
+            const ret3 = (curr.c - prev3.c) / prev3.c * 100;
+            if (ret3 > 1) {
+              const bk = ret3 <= 2 ? '+1% to +2%' : ret3 <= 3 ? '+2% to +3%' : ret3 <= 5 ? '+3% to +5%' : ret3 <= 8 ? '+5% to +8%' : '+8%+';
+              b3[bk].total++; if (nextRet < 0) b3[bk].nextDown++; b3[bk].rets.push(nextRet);
+              const high20 = Math.max(...days.slice(i - 19, i + 1).map(d => d.h));
+              const atHigh = curr.c >= high20 * 0.99;
+              const t = atHigh ? b3High : b3NotHigh;
+              t[bk].total++; if (nextRet < 0) t[bk].nextDown++; t[bk].rets.push(nextRet);
+            }
+          }
+        }
+
+        // 10-day
+        if (i >= 10) {
+          const prev10 = days[i - 10];
+          if (prev10.c > 0) {
+            const ret10 = (curr.c - prev10.c) / prev10.c * 100;
+            if (ret10 > 3) {
+              const bk = ret10 <= 5 ? '+3% to +5%' : ret10 <= 8 ? '+5% to +8%' : ret10 <= 12 ? '+8% to +12%' : '+12%+';
+              b10[bk].total++; if (nextRet < 0) b10[bk].nextDown++; b10[bk].rets.push(nextRet);
+            }
+          }
+        }
+      }
+    }
+
+    function stats(buckets, order) {
+      return order.map(k => {
+        const d = buckets[k];
+        if (d.total === 0) return { bucket: k, total: 0 };
+        const mean = d.rets.reduce((a, b) => a + b, 0) / d.total;
+        const variance = d.rets.reduce((a, b) => a + (b - mean) ** 2, 0) / (d.total - 1 || 1);
+        const se = Math.sqrt(variance / d.total);
+        const tStat = se > 0 ? mean / se : 0;
+        return {
+          bucket: k, total: d.total, nextDown: d.nextDown,
+          downPct: +(d.nextDown / d.total * 100).toFixed(1),
+          avgNext: +mean.toFixed(4), tStat: +tStat.toFixed(2),
+          sig: Math.abs(tStat) > 2.58 ? '**' : Math.abs(tStat) > 1.96 ? '*' : '',
+        };
+      }).filter(x => x.total > 0);
+    }
+
+    res.json({
+      totalBars, tickerCount,
+      rally3d: stats(b3, b3Order),
+      rally3dHigh: stats(b3High, b3Order),
+      rally3dNotHigh: stats(b3NotHigh, b3Order),
+      rally10d: stats(b10, b10Order),
+    });
+  } catch (err) {
+    console.error('[ANALYSIS]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Catch-all — serve dashboard
 app.get('*', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'index.html'));
