@@ -48,13 +48,15 @@ export async function getPriceTargetConsensus(ticker) {
 }
 
 export async function getHistoricalEarningCalendar(ticker, limit = 8) {
-  try {
-    const url = `https://financialmodelingprep.com/api/v3/historical/earning_calendar/${ticker}?limit=${limit}&apikey=${API_KEY}`;
-    await sleep(200);
-    const res = await axios.get(url, { timeout: 10000 });
-    return res.data || [];
-  } catch (err) {
-    console.error(`[FMP] ERROR historical earnings ${ticker}: ${err.message}`);
-    return [];
-  }
+  // Use stable earnings-calendar with past 3 years, filter to this ticker
+  const threeYearsAgo = new Date();
+  threeYearsAgo.setFullYear(threeYearsAgo.getFullYear() - 3);
+  const from = threeYearsAgo.toISOString().split('T')[0];
+  const to = new Date().toISOString().split('T')[0];
+  const all = await fmpGet(`/earnings-calendar?from=${from}&to=${to}`, ticker);
+  if (!Array.isArray(all)) return [];
+  return all
+    .filter(e => e.symbol === ticker && e.date)
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .slice(0, limit);
 }

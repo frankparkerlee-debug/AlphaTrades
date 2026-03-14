@@ -115,10 +115,10 @@ async function main() {
     let histEarnings = null;
     if (Array.isArray(histCal) && histCal.length > 0) {
       histEarnings = histCal
-        .filter(e => e.date && e.eps != null)
+        .filter(e => e.date && e.epsActual != null)
         .map(e => ({
           date: e.date,
-          eps_actual: e.eps,
+          eps_actual: e.epsActual,
           eps_estimated: e.epsEstimated ?? null,
           revenue: e.revenue ?? null,
           revenue_estimated: e.revenueEstimated ?? null,
