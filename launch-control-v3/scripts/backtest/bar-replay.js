@@ -39,7 +39,7 @@ function timingScore(isoStr) {
 function isMarketHour(isoStr) {
   const et = toET(isoStr);
   const mins = et.getHours() * 60 + et.getMinutes();
-  return mins >= 571 && mins < 960; // 9:31 - 3:59 (need prevBar so start at 9:31)
+  return mins >= 600 && mins < 720; // 10:00 AM - 12:00 PM ET only
 }
 
 // ── VIX Lookup ────────────────────────────────────────────────────
