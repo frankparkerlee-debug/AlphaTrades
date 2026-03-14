@@ -119,9 +119,9 @@ async function main() {
         .map(e => ({
           date: e.date,
           eps_actual: e.epsActual,
-          eps_estimated: e.epsEstimated ?? null,
           revenue: e.revenue ?? null,
-          revenue_estimated: e.revenueEstimated ?? null,
+          period: e.period ?? null,
+          fiscal_year: e.fiscalYear ?? null,
         }));
 
       if (histEarnings.length > 0) {

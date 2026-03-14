@@ -48,15 +48,14 @@ export async function getPriceTargetConsensus(ticker) {
 }
 
 export async function getHistoricalEarningCalendar(ticker, limit = 8) {
-  // Use stable earnings-calendar with past 3 years, filter to this ticker
-  const threeYearsAgo = new Date();
-  threeYearsAgo.setFullYear(threeYearsAgo.getFullYear() - 3);
-  const from = threeYearsAgo.toISOString().split('T')[0];
-  const to = new Date().toISOString().split('T')[0];
-  const all = await fmpGet(`/earnings-calendar?from=${from}&to=${to}`, ticker);
-  if (!Array.isArray(all)) return [];
-  return all
-    .filter(e => e.symbol === ticker && e.date)
-    .sort((a, b) => b.date.localeCompare(a.date))
-    .slice(0, limit);
+  // Use income-statement endpoint for quarterly EPS history
+  const data = await fmpGet(`/income-statement?symbol=${ticker}&period=quarter&limit=${limit}`, ticker);
+  if (!Array.isArray(data)) return [];
+  return data.map(q => ({
+    date: q.date,
+    epsActual: q.eps,
+    revenue: q.revenue,
+    period: q.period,
+    fiscalYear: q.calendarYear,
+  }));
 }
