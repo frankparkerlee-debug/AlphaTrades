@@ -537,6 +537,47 @@ app.get('/api/backtest/status', (req, res) => {
   res.json({ running: backtestRunning, error: backtestError });
 });
 
+// Directional accuracy check
+app.get('/api/backtest/direction-check', async (req, res) => {
+  try {
+    const btRes = await db.query(
+      'SELECT results FROM lc_v3.backtest_results ORDER BY created_at DESC LIMIT 1'
+    );
+    if (!btRes.rows[0]) return res.json({ error: 'no backtest results' });
+    const signals = btRes.rows[0].results.signals || [];
+
+    let checked = 0, correct = 0;
+    for (const sig of signals) {
+      const ticker = sig.ticker;
+      const sigTime = sig.time + ':00Z'; // e.g. 2026-02-12T15:01:00Z
+      const oneHourLater = new Date(new Date(sigTime).getTime() + 3600000).toISOString();
+
+      // Get bar closest to signal time and 1 hour later
+      const entryBar = await db.query(
+        `SELECT close FROM lc_v3.bars WHERE ticker = $1 AND ts >= $2::timestamptz AND ts < $2::timestamptz + interval '2 minutes' LIMIT 1`,
+        [ticker, sigTime]
+      );
+      const exitBar = await db.query(
+        `SELECT close FROM lc_v3.bars WHERE ticker = $1 AND ts >= $2::timestamptz AND ts < $2::timestamptz + interval '2 minutes' LIMIT 1`,
+        [ticker, oneHourLater]
+      );
+
+      if (!entryBar.rows[0] || !exitBar.rows[0]) continue;
+      const entryPrice = parseFloat(entryBar.rows[0].close);
+      const exitPrice = parseFloat(exitBar.rows[0].close);
+      checked++;
+
+      const moved = exitPrice - entryPrice;
+      if (sig.direction === 'CALL' && moved > 0) correct++;
+      else if (sig.direction === 'PUT' && moved < 0) correct++;
+    }
+
+    res.json({ checked, correct, accuracy: checked > 0 ? parseFloat((correct / checked * 100).toFixed(1)) : 0 });
+  } catch (err) {
+    res.json({ error: err.message });
+  }
+});
+
 // Debug: check what bars exist in DB
 app.get('/api/backtest/debug', async (req, res) => {
   try {
