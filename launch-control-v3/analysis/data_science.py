@@ -1979,11 +1979,321 @@ def extended_down():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 17) PRE-MARKET GAP PREDICTION — after-hours move vs no move
+# ─────────────────────────────────────────────────────────────────────────────
+def premarket_gap():
+    print('=' * 70)
+    print('17) PRE-MARKET GAP PREDICTION — after-hours move impact')
+    print('=' * 70)
+
+    cur.execute("""
+        WITH daily AS (
+            SELECT ticker, DATE(ts) AS day,
+                   (ARRAY_AGG(open ORDER BY ts))[1] AS day_open,
+                   (ARRAY_AGG(close ORDER BY ts DESC))[1] AS day_close
+            FROM lc_v3.bars
+            WHERE session = 'REGULAR'
+            GROUP BY ticker, DATE(ts)
+            ORDER BY ticker, day
+        ),
+        with_neighbors AS (
+            SELECT d.*,
+                   LAG(day_close) OVER w AS prev_close
+            FROM daily d
+            WINDOW w AS (PARTITION BY ticker ORDER BY day)
+        )
+        SELECT * FROM with_neighbors WHERE prev_close IS NOT NULL
+    """)
+    rows = cur.fetchall()
+
+    # Gap = (open - prev_close) / prev_close = after-hours move proxy
+    buckets = {
+        'Gap down >1%':   {'total': 0, 'intraday_up': 0, 'ret_sum': 0.0},
+        'No AH move (±1%)': {'total': 0, 'intraday_up': 0, 'ret_sum': 0.0},
+        'Gap up >1%':     {'total': 0, 'intraday_up': 0, 'ret_sum': 0.0},
+    }
+    # Finer buckets
+    fine = {
+        'Gap down >3%': {'total': 0, 'intraday_up': 0, 'ret_sum': 0.0},
+        'Gap down 2-3%': {'total': 0, 'intraday_up': 0, 'ret_sum': 0.0},
+        'Gap down 1-2%': {'total': 0, 'intraday_up': 0, 'ret_sum': 0.0},
+        'Flat (±0.5%)':  {'total': 0, 'intraday_up': 0, 'ret_sum': 0.0},
+        'Gap up 1-2%':   {'total': 0, 'intraday_up': 0, 'ret_sum': 0.0},
+        'Gap up 2-3%':   {'total': 0, 'intraday_up': 0, 'ret_sum': 0.0},
+        'Gap up >3%':    {'total': 0, 'intraday_up': 0, 'ret_sum': 0.0},
+    }
+
+    for r in rows:
+        prev_close = float(r['prev_close'])
+        day_open = float(r['day_open'])
+        day_close = float(r['day_close'])
+        if prev_close == 0 or day_open == 0:
+            continue
+
+        gap_pct = (day_open - prev_close) / prev_close * 100
+        intraday_ret = (day_close - day_open) / day_open * 100
+        intraday_up = day_close > day_open
+
+        # Coarse buckets
+        if gap_pct < -1:
+            bk = 'Gap down >1%'
+        elif gap_pct > 1:
+            bk = 'Gap up >1%'
+        else:
+            bk = 'No AH move (±1%)'
+        buckets[bk]['total'] += 1
+        if intraday_up:
+            buckets[bk]['intraday_up'] += 1
+        buckets[bk]['ret_sum'] += intraday_ret
+
+        # Fine buckets
+        if gap_pct < -3:
+            fk = 'Gap down >3%'
+        elif gap_pct < -2:
+            fk = 'Gap down 2-3%'
+        elif gap_pct < -1:
+            fk = 'Gap down 1-2%'
+        elif gap_pct <= 0.5 and gap_pct >= -0.5:
+            fk = 'Flat (±0.5%)'
+        elif gap_pct > 3:
+            fk = 'Gap up >3%'
+        elif gap_pct > 2:
+            fk = 'Gap up 2-3%'
+        elif gap_pct > 1:
+            fk = 'Gap up 1-2%'
+        else:
+            continue  # 0.5-1% gap, skip
+        fine[fk]['total'] += 1
+        if intraday_up:
+            fine[fk]['intraday_up'] += 1
+        fine[fk]['ret_sum'] += intraday_ret
+
+    print(f'\n  Coarse Buckets:')
+    print(f'  {"Bucket":<25} {"Days":>8} {"Intraday Up":>12} {"Up%":>8} {"Avg Intraday":>13}')
+    print(f'  {"-"*68}')
+    for bk in ['Gap down >1%', 'No AH move (±1%)', 'Gap up >1%']:
+        d = buckets[bk]
+        if d['total'] == 0:
+            continue
+        up_pct = d['intraday_up'] / d['total'] * 100
+        avg = d['ret_sum'] / d['total']
+        print(f'  {bk:<25} {d["total"]:>8,} {d["intraday_up"]:>12,} {up_pct:>7.1f}% {avg:>+12.3f}%')
+
+    print(f'\n  Fine Buckets:')
+    print(f'  {"Bucket":<25} {"Days":>8} {"Intraday Up":>12} {"Up%":>8} {"Avg Intraday":>13}')
+    print(f'  {"-"*68}')
+    for fk in ['Gap down >3%', 'Gap down 2-3%', 'Gap down 1-2%', 'Flat (±0.5%)',
+                'Gap up 1-2%', 'Gap up 2-3%', 'Gap up >3%']:
+        d = fine[fk]
+        if d['total'] == 0:
+            continue
+        up_pct = d['intraday_up'] / d['total'] * 100
+        avg = d['ret_sum'] / d['total']
+        print(f'  {fk:<25} {d["total"]:>8,} {d["intraday_up"]:>12,} {up_pct:>7.1f}% {avg:>+12.3f}%')
+
+    print()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 18) IV EXPANSION PRE-EARNINGS — daily return volatility into earnings
+# ─────────────────────────────────────────────────────────────────────────────
+def iv_expansion_earnings():
+    import math
+
+    print('=' * 70)
+    print('18) IV EXPANSION PRE-EARNINGS — daily volatility ramp')
+    print('=' * 70)
+
+    # Get earnings dates from ticker_intelligence
+    cur.execute("SELECT ticker, earnings_date FROM lc_v3.ticker_intelligence WHERE earnings_date IS NOT NULL")
+    earnings = cur.fetchall()
+    print(f'\n  Tickers with earnings dates: {len(earnings)}')
+
+    if not earnings:
+        print('  No earnings data found.')
+        return
+
+    # Get daily closes for all tickers
+    cur.execute("""
+        SELECT ticker, DATE(ts) AS day,
+               (ARRAY_AGG(close ORDER BY ts DESC))[1] AS day_close
+        FROM lc_v3.bars
+        WHERE session = 'REGULAR'
+        GROUP BY ticker, DATE(ts)
+        ORDER BY ticker, day
+    """)
+
+    daily_by_ticker = {}
+    for r in cur.fetchall():
+        t = r['ticker']
+        if t not in daily_by_ticker:
+            daily_by_ticker[t] = []
+        daily_by_ticker[t].append({'day': str(r['day']), 'close': float(r['day_close'])})
+
+    # For each earnings date, compute daily return volatility at various lookbacks
+    windows = [10, 7, 5, 3, 1]
+    vol_by_window = {w: [] for w in windows}
+    baseline_vols = []
+
+    for er in earnings:
+        ticker = er['ticker']
+        edate = str(er['earnings_date'])
+
+        days = daily_by_ticker.get(ticker, [])
+        if len(days) < 25:
+            continue
+
+        # Build day index
+        day_list = [d['day'] for d in days]
+        close_list = [d['close'] for d in days]
+
+        # Find earnings date position
+        if edate not in day_list:
+            # Find nearest trading day before earnings
+            candidates = [d for d in day_list if d <= edate]
+            if not candidates:
+                continue
+            edate = candidates[-1]
+
+        ei = day_list.index(edate)
+        if ei < 20:
+            continue
+
+        # Compute daily return volatility over trailing N days for each window
+        for w in windows:
+            start = ei - w
+            if start < 1:
+                continue
+            rets = []
+            for j in range(start, ei):
+                if close_list[j - 1] > 0:
+                    rets.append((close_list[j] - close_list[j - 1]) / close_list[j - 1] * 100)
+            if len(rets) >= 2:
+                mean = sum(rets) / len(rets)
+                var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
+                vol = math.sqrt(var)
+                vol_by_window[w].append(vol)
+
+        # Baseline: 20-day vol ending 20 days before earnings
+        baseline_start = max(1, ei - 40)
+        baseline_end = ei - 20
+        if baseline_end > baseline_start:
+            brets = []
+            for j in range(baseline_start, baseline_end):
+                if close_list[j - 1] > 0:
+                    brets.append((close_list[j] - close_list[j - 1]) / close_list[j - 1] * 100)
+            if len(brets) >= 2:
+                mean = sum(brets) / len(brets)
+                var = sum((r - mean) ** 2 for r in brets) / (len(brets) - 1)
+                baseline_vols.append(math.sqrt(var))
+
+    baseline_avg = sum(baseline_vols) / len(baseline_vols) if baseline_vols else 0
+
+    print(f'\n  Baseline daily vol (20d before earnings window): {baseline_avg:.3f}%')
+    print(f'\n  {"Days to ER":<15} {"Samples":>10} {"Avg Vol":>10} {"vs Baseline":>12}')
+    print(f'  {"-"*49}')
+    for w in windows:
+        vols = vol_by_window[w]
+        if not vols:
+            continue
+        avg = sum(vols) / len(vols)
+        ratio = avg / baseline_avg * 100 if baseline_avg > 0 else 0
+        print(f'  {w:>3}d out        {len(vols):>10} {avg:>9.3f}% {ratio:>10.0f}%')
+
+    print()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 19) VIX REGIME IMPACT — signal quality by VIX level
+# ─────────────────────────────────────────────────────────────────────────────
+def vix_regime():
+    print('=' * 70)
+    print('19) VIX REGIME — signal quality by VIX level')
+    print('=' * 70)
+
+    # Get signals with VIX and direction
+    cur.execute("""
+        SELECT s.signal_id, s.ticker, s.direction, s.created_at,
+               s.composite_raw, s.vix_at_signal, s.price_at_signal
+        FROM lc_v3.signals s
+        WHERE s.vix_at_signal IS NOT NULL
+          AND s.price_at_signal IS NOT NULL
+          AND s.price_at_signal > 0
+    """)
+    signals = cur.fetchall()
+
+    print(f'\n  Total signals with VIX data: {len(signals)}')
+
+    if not signals:
+        print('  No signals with VIX data found.')
+        return
+
+    vix_buckets = {
+        'VIX < 15':    {'total': 0, 'correct': 0, 'comp_sum': 0, 'checked': 0},
+        'VIX 15-20':   {'total': 0, 'correct': 0, 'comp_sum': 0, 'checked': 0},
+        'VIX > 20':    {'total': 0, 'correct': 0, 'comp_sum': 0, 'checked': 0},
+    }
+
+    for sig in signals:
+        vix = float(sig['vix_at_signal'])
+        comp = int(sig['composite_raw']) if sig['composite_raw'] else 0
+
+        if vix < 15:
+            bk = 'VIX < 15'
+        elif vix <= 20:
+            bk = 'VIX 15-20'
+        else:
+            bk = 'VIX > 20'
+
+        vix_buckets[bk]['total'] += 1
+        vix_buckets[bk]['comp_sum'] += comp
+
+        # Check directional accuracy at 1 hour
+        ticker = sig['ticker']
+        signal_time = sig['created_at']
+        direction = sig['direction']
+        entry_price = float(sig['price_at_signal'])
+
+        # Find price 1 hour later from bars
+        cur.execute("""
+            SELECT close FROM lc_v3.bars
+            WHERE ticker = %s
+              AND ts BETWEEN %s + interval '55 minutes' AND %s + interval '65 minutes'
+              AND session = 'REGULAR'
+            ORDER BY ts LIMIT 1
+        """, (ticker, signal_time, signal_time))
+        future = cur.fetchone()
+
+        if future:
+            future_price = float(future['close'])
+            vix_buckets[bk]['checked'] += 1
+            if direction == 'CALL' and future_price > entry_price:
+                vix_buckets[bk]['correct'] += 1
+            elif direction == 'PUT' and future_price < entry_price:
+                vix_buckets[bk]['correct'] += 1
+
+    print(f'\n  {"VIX Bucket":<15} {"Signals":>10} {"Avg Comp":>10} {"Checked":>10} {"Correct":>10} {"Accuracy":>10}')
+    print(f'  {"-"*67}')
+    for bk in ['VIX < 15', 'VIX 15-20', 'VIX > 20']:
+        d = vix_buckets[bk]
+        if d['total'] == 0:
+            continue
+        avg_comp = d['comp_sum'] / d['total']
+        if d['checked'] > 0:
+            acc = d['correct'] / d['checked'] * 100
+            print(f'  {bk:<15} {d["total"]:>10} {avg_comp:>9.1f} {d["checked"]:>10} {d["correct"]:>10} {acc:>9.1f}%')
+        else:
+            print(f'  {bk:<15} {d["total"]:>10} {avg_comp:>9.1f} {d["checked"]:>10} {"—":>10} {"—":>10}')
+
+    print()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     try:
-        overnight_hold()
-        put_edge()
-        extended_down()
+        premarket_gap()
+        iv_expansion_earnings()
+        vix_regime()
     finally:
         cur.close()
         conn.close()

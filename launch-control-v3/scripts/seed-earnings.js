@@ -7,7 +7,7 @@ import 'dotenv/config';
 import { query } from '../src/data/db.js';
 import {
   getEarningsCalendar, getHistoricalEarnings,
-  getPriceTargetConsensus, sleep,
+  getHistoricalEarningCalendar, getPriceTargetConsensus, sleep,
 } from '../src/data/fmp.js';
 
 const today = new Date();
@@ -17,6 +17,12 @@ futureDate.setDate(futureDate.getDate() + 90);
 const futureStr = futureDate.toISOString().split('T')[0];
 
 async function main() {
+  // Ensure historical_earnings column exists
+  await query(`
+    ALTER TABLE lc_v3.ticker_intelligence
+    ADD COLUMN IF NOT EXISTS historical_earnings JSONB
+  `);
+
   // Get our tickers
   const profileRes = await query('SELECT ticker FROM lc_v3.equity_profiles ORDER BY ticker');
   const tickers = new Set(profileRes.rows.map(r => r.ticker));
@@ -104,12 +110,36 @@ async function main() {
         last_updated = NOW()
     `, [ticker, earningsDate, daysAway, avgMovePct, beatRate, priceTarget]);
 
+    // Fetch historical earning calendar (past 8 quarters)
+    const histCal = await getHistoricalEarningCalendar(ticker, 8);
+    let histEarnings = null;
+    if (Array.isArray(histCal) && histCal.length > 0) {
+      histEarnings = histCal
+        .filter(e => e.date && e.eps != null)
+        .map(e => ({
+          date: e.date,
+          eps_actual: e.eps,
+          eps_estimated: e.epsEstimated ?? null,
+          revenue: e.revenue ?? null,
+          revenue_estimated: e.revenueEstimated ?? null,
+        }));
+
+      if (histEarnings.length > 0) {
+        await query(`
+          UPDATE lc_v3.ticker_intelligence
+          SET historical_earnings = $2, last_updated = NOW()
+          WHERE ticker = $1
+        `, [ticker, JSON.stringify(histEarnings)]);
+      }
+    }
+
     const dateLabel = earningsDate || 'none';
     const daysLabel = daysAway != null ? daysAway : '—';
     const moveLabel = avgMovePct != null ? `${avgMovePct}%` : '—';
     const beatLabel = beatRate != null ? `${(beatRate * 100).toFixed(1)}%` : '—';
     const ptLabel = priceTarget != null ? `$${priceTarget}` : '—';
-    console.log(`[EARNINGS] ${ticker} — next: ${dateLabel} days_away: ${daysLabel} avg_move: ${moveLabel} beat_rate: ${beatLabel} target: ${ptLabel}`);
+    const histLabel = histEarnings ? `${histEarnings.length}q` : '—';
+    console.log(`[EARNINGS] ${ticker} — next: ${dateLabel} days_away: ${daysLabel} avg_move: ${moveLabel} beat_rate: ${beatLabel} target: ${ptLabel} hist: ${histLabel}`);
     count++;
   }
 

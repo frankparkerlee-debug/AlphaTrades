@@ -1186,12 +1186,12 @@ async function startRestPoller() {
           }
 
           const contractCols = contract ? `,
-            contract_symbol = $15, contract_strike = $16, contract_expiry = $17,
-            contract_expiry_label = $18, contract_bid = $19, contract_ask = $20,
-            contract_mid = $21, contract_entry_lo = $22, contract_entry_hi = $23,
-            contract_delta = $24, contract_iv = $25,
-            contract_t1 = $26, contract_t2 = $27, contract_t3 = $28, contract_stop = $29,
-            contract_estimated = $30` : '';
+            contract_symbol = $16, contract_strike = $17, contract_expiry = $18,
+            contract_expiry_label = $19, contract_bid = $20, contract_ask = $21,
+            contract_mid = $22, contract_entry_lo = $23, contract_entry_hi = $24,
+            contract_delta = $25, contract_iv = $26,
+            contract_t1 = $27, contract_t2 = $28, contract_t3 = $29, contract_stop = $30,
+            contract_estimated = $31` : '';
           const contractParams = contract ? [
             contract.symbol, contract.strike, contract.expiry,
             contract.expiry_label, contract.bid, contract.ask,
@@ -1209,7 +1209,7 @@ async function startRestPoller() {
               position_size_pct = $8, position_size_dollars = $9,
               spy_change_pct = $10, qqq_change_pct = $11,
               relative_volume = $12, atr_multiple = $13,
-              news_headline = $14,
+              news_headline = $14, vix_at_signal = $15,
               last_confirmed_at = NOW(),
               confirmation_count = COALESCE(confirmation_count, 1) + 1,
               peak_composite = ${newPeak},
@@ -1225,7 +1225,7 @@ async function startRestPoller() {
             sizePct, Math.round(ACCOUNT_SIZE * sizePct),
             spyPct, qqqPct,
             parseFloat(relVol.toFixed(2)), parseFloat(atrMult.toFixed(2)),
-            signalNote,
+            signalNote, vix,
             ...contractParams,
           ]);
 
@@ -1240,7 +1240,7 @@ async function startRestPoller() {
             contract_delta, contract_iv,
             contract_t1, contract_t2, contract_t3, contract_stop,
             contract_estimated` : '';
-          const contractPlaceholders = contract ? ',$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32' : '';
+          const contractPlaceholders = contract ? ',$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33' : '';
           const contractParams = contract ? [
             contract.symbol, contract.strike, contract.expiry,
             contract.expiry_label, contract.bid, contract.ask,
@@ -1256,12 +1256,12 @@ async function startRestPoller() {
               score_price_action, score_volume, score_news, score_market, score_timing,
               position_size_pct, position_size_dollars,
               spy_change_pct, qqq_change_pct, relative_volume, atr_multiple,
-              news_headline,
+              news_headline, vix_at_signal,
               first_seen_at, last_confirmed_at, confirmation_count,
               peak_composite, peak_grade, composite_history, momentum_trend,
               expires_at, created_at
               ${contractCols}
-            ) VALUES ($1,$2,$3,'ACTIVE',$4,'primary',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
+            ) VALUES ($1,$2,$3,'ACTIVE',$4,'primary',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
               NOW(), NOW(), 1, $4, $3, '[]'::jsonb, 'NEW',
               NOW() + INTERVAL '10 minutes', NOW()
               ${contractPlaceholders})
@@ -1271,7 +1271,7 @@ async function startRestPoller() {
             sizePct, Math.round(ACCOUNT_SIZE * sizePct),
             spyPct, qqqPct,
             parseFloat(relVol.toFixed(2)), parseFloat(atrMult.toFixed(2)),
-            signalNote,
+            signalNote, vix,
             ...contractParams,
           ]);
 

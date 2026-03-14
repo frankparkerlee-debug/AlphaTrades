@@ -46,3 +46,15 @@ export async function getAnalystEstimates(ticker) {
 export async function getPriceTargetConsensus(ticker) {
   return fmpGet(`/price-target-consensus?symbol=${ticker}`, ticker);
 }
+
+export async function getHistoricalEarningCalendar(ticker, limit = 8) {
+  try {
+    const url = `https://financialmodelingprep.com/api/v3/historical/earning_calendar/${ticker}?limit=${limit}&apikey=${API_KEY}`;
+    await sleep(200);
+    const res = await axios.get(url, { timeout: 10000 });
+    return res.data || [];
+  } catch (err) {
+    console.error(`[FMP] ERROR historical earnings ${ticker}: ${err.message}`);
+    return [];
+  }
+}
