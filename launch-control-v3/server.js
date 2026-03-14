@@ -9,6 +9,7 @@ import { createServer } from 'http';
 import { selectOptionsContract } from './src/options/contract-selector.js';
 import { getNewsEvents } from './src/data/state.js';
 import { computeNewsScore } from './src/scoring/news.js';
+import { runBacktest } from './scripts/backtest/run.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app  = express();
@@ -585,8 +586,6 @@ async function executeBacktest() {
       )
     `);
     await db.query(`CREATE INDEX IF NOT EXISTS idx_bt_run_date ON lc_v3.backtest_results(run_date DESC)`);
-
-    const { runBacktest } = await import('./scripts/backtest/run.js');
 
     // Last 20 trading days
     const end = new Date();
