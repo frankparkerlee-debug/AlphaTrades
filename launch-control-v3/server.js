@@ -537,7 +537,7 @@ app.get('/api/backtest/status', (req, res) => {
   res.json({ running: backtestRunning, error: backtestError });
 });
 
-// Directional accuracy check
+// Directional accuracy check — multi-horizon
 app.get('/api/backtest/direction-check', async (req, res) => {
   try {
     const btRes = await db.query(
@@ -546,33 +546,96 @@ app.get('/api/backtest/direction-check', async (req, res) => {
     if (!btRes.rows[0]) return res.json({ error: 'no backtest results' });
     const signals = btRes.rows[0].results.signals || [];
 
-    let checked = 0, correct = 0;
+    const horizons = [
+      { label: '30min', ms: 30 * 60000 },
+      { label: '1hr',   ms: 60 * 60000 },
+      { label: '2hr',   ms: 120 * 60000 },
+      { label: '4hr',   ms: 240 * 60000 },
+    ];
+
+    const results = {};
+    for (const h of horizons) results[h.label] = { checked: 0, correct: 0 };
+    results['next_day_close'] = { checked: 0, correct: 0 };
+
+    // Track per-signal correctness for "wrong at 1hr but right later" analysis
+    const perSignal = []; // { correct_1hr, correct_2hr, correct_4hr }
+
     for (const sig of signals) {
       const ticker = sig.ticker;
-      const sigTime = sig.time + ':00Z'; // e.g. 2026-02-12T15:01:00Z
-      const oneHourLater = new Date(new Date(sigTime).getTime() + 3600000).toISOString();
+      const sigTime = sig.time + ':00Z';
+      const sigDate = sig.date;
 
-      // Get bar closest to signal time and 1 hour later
+      // Get entry price
       const entryBar = await db.query(
         `SELECT close FROM lc_v3.bars WHERE ticker = $1 AND ts >= $2::timestamptz AND ts < $2::timestamptz + interval '2 minutes' LIMIT 1`,
         [ticker, sigTime]
       );
-      const exitBar = await db.query(
-        `SELECT close FROM lc_v3.bars WHERE ticker = $1 AND ts >= $2::timestamptz AND ts < $2::timestamptz + interval '2 minutes' LIMIT 1`,
-        [ticker, oneHourLater]
-      );
-
-      if (!entryBar.rows[0] || !exitBar.rows[0]) continue;
+      if (!entryBar.rows[0]) continue;
       const entryPrice = parseFloat(entryBar.rows[0].close);
-      const exitPrice = parseFloat(exitBar.rows[0].close);
-      checked++;
 
-      const moved = exitPrice - entryPrice;
-      if (sig.direction === 'CALL' && moved > 0) correct++;
-      else if (sig.direction === 'PUT' && moved < 0) correct++;
+      const sigRecord = { correct_1hr: null, correct_2hr: null, correct_4hr: null };
+
+      // Check each time horizon
+      for (const h of horizons) {
+        const checkTime = new Date(new Date(sigTime).getTime() + h.ms).toISOString();
+        const exitBar = await db.query(
+          `SELECT close FROM lc_v3.bars WHERE ticker = $1 AND ts >= $2::timestamptz AND ts < $2::timestamptz + interval '2 minutes' LIMIT 1`,
+          [ticker, checkTime]
+        );
+        if (!exitBar.rows[0]) continue;
+        const exitPrice = parseFloat(exitBar.rows[0].close);
+        results[h.label].checked++;
+        const moved = exitPrice - entryPrice;
+        const isCorrect = (sig.direction === 'CALL' && moved > 0) || (sig.direction === 'PUT' && moved < 0);
+        if (isCorrect) results[h.label].correct++;
+
+        if (h.label === '1hr') sigRecord.correct_1hr = isCorrect;
+        if (h.label === '2hr') sigRecord.correct_2hr = isCorrect;
+        if (h.label === '4hr') sigRecord.correct_4hr = isCorrect;
+      }
+
+      // Next day close: find last bar of the next trading day
+      const nextDayBar = await db.query(
+        `SELECT close FROM lc_v3.bars WHERE ticker = $1 AND DATE(ts) > $2::date AND session = 'REGULAR' ORDER BY ts DESC LIMIT 1`,
+        [ticker, sigDate]
+      );
+      if (nextDayBar.rows[0]) {
+        const exitPrice = parseFloat(nextDayBar.rows[0].close);
+        results['next_day_close'].checked++;
+        const moved = exitPrice - entryPrice;
+        if ((sig.direction === 'CALL' && moved > 0) || (sig.direction === 'PUT' && moved < 0)) {
+          results['next_day_close'].correct++;
+        }
+      }
+
+      perSignal.push(sigRecord);
     }
 
-    res.json({ checked, correct, accuracy: checked > 0 ? parseFloat((correct / checked * 100).toFixed(1)) : 0 });
+    // Compute accuracies
+    const horizonResults = {};
+    for (const [label, data] of Object.entries(results)) {
+      horizonResults[label] = {
+        ...data,
+        accuracy: data.checked > 0 ? parseFloat((data.correct / data.checked * 100).toFixed(1)) : 0,
+      };
+    }
+
+    // Wrong at 1hr but right later
+    const wrong1hr = perSignal.filter(s => s.correct_1hr === false);
+    const wrong1hr_right2hr = wrong1hr.filter(s => s.correct_2hr === true).length;
+    const wrong1hr_right4hr = wrong1hr.filter(s => s.correct_4hr === true).length;
+    const wrong1hr_right2or4 = wrong1hr.filter(s => s.correct_2hr === true || s.correct_4hr === true).length;
+
+    res.json({
+      horizons: horizonResults,
+      earlyTiming: {
+        wrong_at_1hr: wrong1hr.length,
+        right_at_2hr: wrong1hr_right2hr,
+        right_at_4hr: wrong1hr_right4hr,
+        right_at_2hr_or_4hr: wrong1hr_right2or4,
+        recovery_rate: wrong1hr.length > 0 ? parseFloat((wrong1hr_right2or4 / wrong1hr.length * 100).toFixed(1)) : 0,
+      },
+    });
   } catch (err) {
     res.json({ error: err.message });
   }
