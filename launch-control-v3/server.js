@@ -226,21 +226,6 @@ app.post('/api/edit', async (req, res) => {
 // Health check
 app.get('/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
-// Temporary: one-shot stale signal cleanup
-app.post('/api/debug/cleanup-stale', async (req, res) => {
-  try {
-    const result = await db.query(`
-      UPDATE lc_v3.signals SET status = 'EXPIRED',
-        human_notes = COALESCE(human_notes, '') || ' | AUTO: BULK_CLEANUP'
-      WHERE status = 'ACTIVE'
-        AND human_taken IS NULL
-        AND created_at < NOW() - INTERVAL '4 hours'
-      RETURNING ticker, created_at
-    `);
-    res.json({ expired: result.rows.length, tickers: result.rows.map(r => r.ticker) });
-  } catch (err) { res.json({ error: err.message }); }
-});
-
 // Debug endpoint — test contract selector on live Render
 // Snapshot scan — intraday movers
 app.get('/api/snapshots', async (req, res) => {
