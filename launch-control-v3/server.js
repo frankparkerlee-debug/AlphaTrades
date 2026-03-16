@@ -1469,6 +1469,13 @@ async function startRestPoller() {
           newsScore > 0 && newsResult.headline ? `News:${newsResult.headline.slice(0, 60)}` : null,
         ].filter(Boolean).join(' · ');
 
+        // ── MOMENTUM SIGNALS DISABLED — only strategy signals write to DB ──
+        // Momentum scorer still runs for composite/grade calculation but
+        // does not insert into lc_v3.signals. Only data-proven strategy
+        // scanners (GAP_REVERSAL, CAPITULATION_BOUNCE, VOL_DROP_PUT,
+        // CONSEC_BOUNCE, SECTOR_ROTATION_BOUNCE) write signals.
+        continue;
+
         // ── MOMENTUM UPSERT — one signal per ticker+direction per day ──
         const existing = await db.query(`
           SELECT signal_id, composite_raw, grade, peak_composite, peak_grade,
