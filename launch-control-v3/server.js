@@ -226,6 +226,21 @@ app.post('/api/edit', async (req, res) => {
 // Health check
 app.get('/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
+// Temporary: one-shot stale signal cleanup
+app.post('/api/debug/cleanup-stale', async (req, res) => {
+  try {
+    const result = await db.query(`
+      UPDATE lc_v3.signals SET status = 'EXPIRED',
+        human_notes = COALESCE(human_notes, '') || ' | AUTO: BULK_CLEANUP'
+      WHERE status = 'ACTIVE'
+        AND human_taken IS NULL
+        AND created_at < NOW() - INTERVAL '4 hours'
+      RETURNING ticker, created_at
+    `);
+    res.json({ expired: result.rows.length, tickers: result.rows.map(r => r.ticker) });
+  } catch (err) { res.json({ error: err.message }); }
+});
+
 // Debug endpoint — test contract selector on live Render
 // Snapshot scan — intraday movers
 app.get('/api/snapshots', async (req, res) => {
@@ -896,6 +911,26 @@ cron.schedule('0 17 * * 1-5', () => {
     executeBacktest().finally(() => { backtestRunning = false; });
   }
 }, { timezone: 'America/New_York' });
+
+// Cleanup stale signals every 5 minutes — expire anything past expires_at with no human action
+cron.schedule('*/5 * * * *', async () => {
+  try {
+    const result = await db.query(`
+      UPDATE lc_v3.signals SET status = 'EXPIRED',
+        human_notes = COALESCE(human_notes, '') || ' | AUTO: PAST_EXPIRY'
+      WHERE status = 'ACTIVE'
+        AND human_taken IS NULL
+        AND expires_at IS NOT NULL
+        AND expires_at < NOW()
+      RETURNING ticker
+    `);
+    if (result.rows.length > 0) {
+      console.log(`[CLEANUP] Expired ${result.rows.length} stale signals: ${result.rows.map(r => r.ticker).join(', ')}`);
+    }
+  } catch (err) {
+    console.error('[CLEANUP] Error:', err.message);
+  }
+});
 
 // ── RALLY EXHAUSTION ANALYSIS (6mo daily bars from Alpaca) ──────────────────
 app.get('/api/analysis/rally-exhaustion', async (req, res) => {
@@ -1750,6 +1785,9 @@ async function startRestPoller() {
           if (allStratSignals.length > 0) {
             console.log(`[STRATEGY] ${allStratSignals.length} strategy signals fired`);
           }
+
+          // Debug summary — always log so we know scanners ran
+          console.log(`[POLL SUMMARY] GAP_REVERSAL=${gapSignals.length} CAPITULATION=${capSignals.length} VOL_DROP=${putSignals.length} SECTOR_ROTATION=${sectorSignals.length} CONSEC=${consecSignals.length}`);
         } catch (stratErr) {
           console.error('[STRATEGY] Scanner error:', stratErr.message);
         }
