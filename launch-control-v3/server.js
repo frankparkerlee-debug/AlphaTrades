@@ -226,16 +226,6 @@ app.post('/api/edit', async (req, res) => {
 // Health check
 app.get('/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
-// Temporary DB query endpoint for debugging
-app.get('/api/debug/query', async (req, res) => {
-  const q = req.query.q;
-  if (!q || !q.trim().toUpperCase().startsWith('SELECT')) return res.json({ error: 'SELECT only' });
-  try {
-    const result = await db.query(q);
-    res.json({ rows: result.rows, count: result.rows.length });
-  } catch (err) { res.json({ error: err.message }); }
-});
-
 // Debug endpoint — test contract selector on live Render
 // Snapshot scan — intraday movers
 app.get('/api/snapshots', async (req, res) => {
