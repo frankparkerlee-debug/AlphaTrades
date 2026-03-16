@@ -293,18 +293,23 @@ body::after {
 }
 .btn:hover { opacity: 0.85; }
 .btn-take   { background: var(--green); color: #000; }
-.btn-paper  { background: var(--blue); color: #fff; }
+.btn-paper  { background: var(--purple); color: #fff; }
 .btn-skip   { background: var(--bg3); color: var(--text3); border: 1px solid var(--border); }
-.btn-late   { background: rgba(245,158,11,0.15); color: var(--amber); border: 1px solid var(--amber); }
-.btn-missed { background: rgba(139,92,246,0.15); color: var(--purple); border: 1px solid var(--purple); }
-.btn-invalid{ background: rgba(239,68,68,0.1); color: var(--red); border: 1px solid rgba(239,68,68,0.3); }
 .btn-taken  { background: #065f4640; color: var(--green); border: 1px solid var(--green); cursor: default; }
 .btn-skipped{ background: var(--bg3); color: var(--text4); cursor: default; }
 .btn-edit   { background: transparent; color: var(--amber); border: 1px solid var(--amber); font-size: 10px; padding: 10px; }
 .action-row-primary { display: flex; gap: 6px; width: 100%; }
 .action-row-primary .btn { flex: 1; width: auto; }
-.action-row-secondary { display: flex; gap: 6px; width: 100%; }
-.action-row-secondary .btn { flex: 1; width: auto; font-size: 9px; padding: 8px; }
+
+/* Machine-set status banners */
+.auto-status-banner {
+  border-radius: 3px; padding: 6px 10px; margin-bottom: 8px;
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  text-align: center; letter-spacing: 0.5px;
+}
+.auto-expired { background: rgba(107,127,148,0.1); border: 1px solid var(--text3); color: var(--text3); }
+.auto-missed  { background: rgba(107,127,148,0.1); border: 1px solid var(--text3); color: var(--text3); }
+.auto-invalid { background: rgba(245,158,11,0.1); border: 1px solid var(--amber); color: var(--amber); }
 
 /* Record form */
 .record-form { margin-top: 8px; padding: 8px; background: var(--bg3); border-radius: 4px; border: 1px solid var(--border); }
@@ -685,22 +690,31 @@ function buildCard(s) {
   const propCtx = s.signal_tier==='propagation' && s.leader_ticker
     ? `<div class="ctx-line">🔗 Propagation from ${s.leader_ticker} · lag ${s.propagation_lag_min||'?'}min</div>` : '';
 
-  // Actions
-  const actions = stale
-    ? `<div class="action-row-primary"><button class="btn ${s.human_taken?'btn-taken':'btn-skipped'}" disabled>${s.human_taken?'✓ TOOK IT':'SKIPPED'}</button></div>
-       ${s.human_taken?`<div class="action-row-secondary"><button class="btn btn-edit" onclick="editTrade('${s.signal_id}',${s.human_entry_price||0},${s.human_exit_price||0})">EDIT</button></div>`:''}`
+  // Machine-set status banner
+  const isAutoExpired = s.status === 'EXPIRED';
+  const isAutoMissed  = s.status === 'MISSED';
+  const isAutoInvalid = s.status === 'INVALID';
+  const autoStatusBanner = isAutoExpired
+    ? `<div class="auto-status-banner auto-expired">EXPIRED — WINDOW CLOSED</div>`
+    : isAutoMissed
+    ? `<div class="auto-status-banner auto-missed">MISSED — NO ACTION TAKEN</div>`
+    : isAutoInvalid
+    ? `<div class="auto-status-banner auto-invalid">INVALID — ${(s.human_notes||'').includes('CONDITIONS_CHANGED') ? 'CONDITIONS CHANGED' : 'SETUP INVALIDATED'}</div>`
+    : '';
+
+  // Actions — only 3 human buttons: TOOK IT, PAPER, SKIP
+  const actions = (stale || isAutoExpired || isAutoMissed || isAutoInvalid)
+    ? (s.human_taken
+      ? `<div class="action-row-primary"><button class="btn btn-taken" disabled>✓ TOOK IT</button></div>
+         <div class="action-row-primary"><button class="btn btn-edit" onclick="editTrade('${s.signal_id}',${s.human_entry_price||0},${s.human_exit_price||0})">EDIT</button></div>`
+      : `${autoStatusBanner}`)
     : s.human_taken===true
       ? `<div class="action-row-primary"><button class="btn btn-taken" disabled>✓ TOOK IT</button></div>
-         <div class="action-row-secondary"><button class="btn btn-edit" onclick="editTrade('${s.signal_id}',${s.human_entry_price||0},${s.human_exit_price||0})">EDIT</button></div>`
+         <div class="action-row-primary"><button class="btn btn-edit" onclick="editTrade('${s.signal_id}',${s.human_entry_price||0},${s.human_exit_price||0})">EDIT</button></div>`
       : `<div class="action-row-primary">
            <button class="btn btn-take" onclick="takeSignal('${s.signal_id}',this)">TOOK IT</button>
            <button class="btn btn-paper" onclick="paperSignal('${s.signal_id}',this)">PAPER</button>
-         </div>
-         <div class="action-row-secondary">
            <button class="btn btn-skip" onclick="skipSignal('${s.signal_id}',this)">SKIP</button>
-           <button class="btn btn-late" onclick="outcomeSignal('${s.signal_id}','late',this)">LATE</button>
-           <button class="btn btn-missed" onclick="outcomeSignal('${s.signal_id}','missed',this)">MISSED</button>
-           <button class="btn btn-invalid" onclick="outcomeSignal('${s.signal_id}','invalid',this)">INVALID</button>
          </div>`;
 
   return `
@@ -848,15 +862,6 @@ async function paperSignal(id, btn) {
     body:JSON.stringify({signal_id:id,taken:true,notes:'PAPER'})});
   btn.textContent='PAPERED'; btn.className='btn btn-paper'; btn.style.opacity='0.6';
   loadAll();
-}
-
-async function outcomeSignal(id, outcome, btn) {
-  btn.disabled=true;
-  const notes = outcome.toUpperCase();
-  await fetch('/api/outcome',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({signal_id:id,taken:false,notes})});
-  const actDiv = document.getElementById(`act-${id}`);
-  if (actDiv) actDiv.innerHTML=`<div class="action-row-primary"><button class="btn btn-skipped" disabled>${notes}</button></div>`;
 }
 
 function editTrade(id, currentEntry, currentExit) {

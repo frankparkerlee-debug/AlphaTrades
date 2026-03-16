@@ -1706,6 +1706,68 @@ async function startRestPoller() {
       // Post-signal monitoring — check active signals for breakdowns
       await monitorActiveSignals(alpacaHdrs, dataUrl, profiles);
 
+      // ── AUTO-STATUS: expire, miss, and invalidate signals ────────────
+      try {
+        const et = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        const etMins = et.getHours() * 60 + et.getMinutes();
+
+        // 1) GAP_REVERSAL past 9:45am with no human action → EXPIRED
+        if (etMins >= 585) { // 9:45 ET
+          const gapExpired = await db.query(`
+            UPDATE lc_v3.signals SET status = 'EXPIRED',
+              human_notes = COALESCE(human_notes, '') || ' | AUTO: WINDOW_CLOSED'
+            WHERE status = 'ACTIVE'
+              AND human_taken IS NULL
+              AND news_headline LIKE '%strategy=GAP_REVERSAL%'
+              AND DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
+            RETURNING ticker
+          `);
+          for (const r of gapExpired.rows) {
+            console.log(`[AUTO] ${r.ticker} GAP_REVERSAL → EXPIRED (window closed)`);
+          }
+        }
+
+        // 2) Any ACTIVE signal with no human action and >15 min old → MISSED
+        const missed = await db.query(`
+          UPDATE lc_v3.signals SET status = 'MISSED',
+            human_notes = COALESCE(human_notes, '') || ' | AUTO: NO_ACTION_15MIN'
+          WHERE status = 'ACTIVE'
+            AND human_taken IS NULL
+            AND created_at < NOW() - INTERVAL '15 minutes'
+            AND DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
+          RETURNING ticker
+        `);
+        for (const r of missed.rows) {
+          console.log(`[AUTO] ${r.ticker} → MISSED (no action 15min)`);
+        }
+
+        // 3) GAP_REVERSAL where stock dropped below stop → INVALID
+        const gapSignals = await db.query(`
+          SELECT signal_id, ticker, news_headline
+          FROM lc_v3.signals
+          WHERE status IN ('ACTIVE', 'WEAKENING')
+            AND news_headline LIKE '%strategy=GAP_REVERSAL%'
+            AND DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
+        `);
+        for (const sig of gapSignals.rows) {
+          const stopMatch = (sig.news_headline || '').match(/stop=\$?([\d.]+)/);
+          if (!stopMatch) continue;
+          const stopPrice = parseFloat(stopMatch[1]);
+          const snap = allSnaps[sig.ticker];
+          const curPrice = snap?.latestTrade?.p || 0;
+          if (curPrice > 0 && curPrice < stopPrice) {
+            await db.query(`
+              UPDATE lc_v3.signals SET status = 'INVALID',
+                human_notes = COALESCE(human_notes, '') || ' | AUTO: CONDITIONS_CHANGED (price $' || $2 || ' < stop $' || $3 || ')'
+              WHERE signal_id = $1
+            `, [sig.signal_id, curPrice.toFixed(2), stopPrice.toFixed(2)]);
+            console.log(`[AUTO] ${sig.ticker} GAP_REVERSAL → INVALID (price $${curPrice.toFixed(2)} < stop $${stopPrice.toFixed(2)})`);
+          }
+        }
+      } catch (autoErr) {
+        console.error('[AUTO] Status update error:', autoErr.message);
+      }
+
     } catch(err) {
       console.error('[POLL] Error:', err.message);
     }
