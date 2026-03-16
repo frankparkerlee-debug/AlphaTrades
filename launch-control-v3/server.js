@@ -15,6 +15,7 @@ import { scanCapitulationBounce } from './src/strategies/capitulation-bounce.js'
 import { scanVolumeDropPut } from './src/strategies/volume-drop-put.js';
 import { scanConsecutiveDrop } from './src/strategies/consecutive-drop.js';
 import { scanSectorRotationBounce } from './src/strategies/sector-rotation-bounce.js';
+import { scanGapUpReversal } from './src/strategies/gap-up-reversal.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app  = express();
@@ -1699,7 +1700,8 @@ async function startRestPoller() {
           const putSignals = scanVolumeDropPut(stratSnapshots, prevCloses, volumeBaselines);
           const consecSignals = scanConsecutiveDrop(Object.keys(allSnaps), dailyBars);
           const sectorSignals = scanSectorRotationBounce(stratSnapshots, prevCloses, spyPct, firstCandles);
-          const allStratSignals = [...gapSignals, ...capSignals, ...putSignals, ...consecSignals, ...sectorSignals];
+          const gapUpSignals = scanGapUpReversal(stratSnapshots, prevCloses, firstCandles);
+          const allStratSignals = [...gapSignals, ...capSignals, ...putSignals, ...consecSignals, ...sectorSignals, ...gapUpSignals];
 
           for (const sig of allStratSignals) {
             // Dedup: skip if strategy signal already exists today for this ticker+direction+strategy
@@ -1715,6 +1717,7 @@ async function startRestPoller() {
             let compositeRaw = sig.strategy === 'GAP_REVERSAL' ? 85
                              : sig.strategy === 'CAPITULATION_BOUNCE' ? 72
                              : sig.strategy === 'SECTOR_ROTATION_BOUNCE' ? 88
+                             : sig.strategy === 'GAP_UP_REVERSAL' ? 88
                              : sig.strategy === 'CONSEC_BOUNCE' ? (sig.consecutive_days >= 3 ? 85 : 64)
                              : 57;
 
@@ -1779,7 +1782,7 @@ async function startRestPoller() {
           }
 
           // Debug summary — always log so we know scanners ran
-          console.log(`[POLL SUMMARY] checked=${Object.keys(stratSnapshots).length} GAP_DOWN=${gapSignals.length} SECTOR_ROTATION=${sectorSignals.length} CAPITULATION=${capSignals.length} VOL_DROP=${putSignals.length} CONSEC=${consecSignals.length}`);
+          console.log(`[POLL SUMMARY] checked=${Object.keys(stratSnapshots).length} GAP_DOWN=${gapSignals.length} GAP_UP=${gapUpSignals.length} SECTOR_ROTATION=${sectorSignals.length} CAPITULATION=${capSignals.length} VOL_DROP=${putSignals.length} CONSEC=${consecSignals.length}`);
         } catch (stratErr) {
           console.error('[STRATEGY] Scanner error:', stratErr.message);
         }

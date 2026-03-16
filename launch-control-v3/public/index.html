@@ -215,6 +215,7 @@ body::after {
 .strat-cap     { background: rgba(59,130,246,0.1); color: var(--blue); border-bottom: 3px solid var(--blue); }
 .strat-vdp     { background: rgba(239,68,68,0.1); color: var(--red); border-bottom: 3px solid var(--red); }
 .strat-consec  { background: rgba(139,92,246,0.1); color: var(--purple); border-bottom: 3px solid var(--purple); }
+.strat-gapup   { background: rgba(249,115,22,0.1); color: #f97316; border-bottom: 3px solid #f97316; }
 .strat-sector  { background: rgba(34,211,238,0.1); color: #22d3ee; border-bottom: 3px solid #22d3ee; }
 .strat-momentum{ background: rgba(245,158,11,0.08); color: var(--amber); border-bottom: 3px solid var(--amber); }
 
@@ -426,6 +427,7 @@ body::after {
       <div class="filter-divider"></div>
       <button class="filter-btn on-blue" onclick="strat('all',this)">ALL</button>
       <button class="filter-btn"         onclick="strat('GAP_REVERSAL',this)">GAP REV</button>
+      <button class="filter-btn"         onclick="strat('GAP_UP_REVERSAL',this)">GAP UP</button>
       <button class="filter-btn"         onclick="strat('CAPITULATION_BOUNCE',this)">CAPIT</button>
       <button class="filter-btn"         onclick="strat('VOL_DROP_PUT',this)">VOL PUT</button>
       <button class="filter-btn"         onclick="strat('CONSEC_BOUNCE',this)">CONSEC</button>
@@ -532,7 +534,7 @@ function grade(v, btn) {
 function strat(v, btn) {
   stratF = v;
   document.querySelectorAll('#filterBar .filter-btn').forEach(b => {
-    if (['ALL','GAP REV','CAPIT','VOL PUT','CONSEC','SECTOR'].includes(b.textContent)) b.classList.remove('on-blue');
+    if (['ALL','GAP REV','GAP UP','CAPIT','VOL PUT','CONSEC','SECTOR'].includes(b.textContent)) b.classList.remove('on-blue');
   });
   btn.classList.add('on-blue');
   render();
@@ -609,6 +611,7 @@ function parseStrategy(s) {
 function buildStratBanner(strategy) {
   const map = {
     GAP_REVERSAL:            { cls: 'strat-gap',    label: 'GAP REVERSAL', win: '83.9% WIN', hold: '' },
+    GAP_UP_REVERSAL:         { cls: 'strat-gapup',  label: 'GAP UP PUT', win: '90% WIN', hold: '' },
     CAPITULATION_BOUNCE:     { cls: 'strat-cap',    label: 'CAPITULATION', win: '72% WIN', hold: 'OVERNIGHT HOLD' },
     VOL_DROP_PUT:            { cls: 'strat-vdp',    label: 'VOL DROP PUT', win: '57% WIN', hold: 'PUT · OVERNIGHT' },
     CONSEC_BOUNCE:           { cls: 'strat-consec', label: 'CONSEC BOUNCE', win: '64-85%', hold: 'MULTI-DAY HOLD' },
@@ -630,6 +633,11 @@ function buildHoldInstruction(strategy, createdAt) {
   if (strategy === 'CAPITULATION_BOUNCE') return `<div class="hold-instruction" style="color:var(--blue)">EXIT AT TOMORROW OPEN</div>`;
   if (strategy === 'VOL_DROP_PUT') return `<div class="hold-instruction" style="color:var(--red)">EXIT AT TOMORROW OPEN</div>`;
   if (strategy === 'CONSEC_BOUNCE') return `<div class="hold-instruction" style="color:var(--purple)">EXIT WITHIN 3 DAYS</div>`;
+  if (strategy === 'GAP_UP_REVERSAL') {
+    const exit = new Date(new Date(createdAt).getTime() + 90 * 60000);
+    const exitCT = exit.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago' });
+    return `<div class="hold-instruction" style="color:#f97316">EXIT BY ${exitCT} CT</div>`;
+  }
   if (strategy === 'SECTOR_ROTATION_BOUNCE') return `<div class="hold-instruction" style="color:var(--green)">EXIT BY 2:00 PM CT</div>`;
   return '';
 }
