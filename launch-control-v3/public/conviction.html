@@ -191,6 +191,43 @@ body::after {
 }
 .trade-guidance strong { color: var(--amber); }
 
+/* Red flag filings */
+.redflag-section {
+  margin-top: 10px; padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.redflag-title {
+  font-family: var(--mono); font-size: 9px; font-weight: 700;
+  letter-spacing: 1px; color: var(--red); margin-bottom: 6px;
+}
+.redflag-item {
+  padding: 6px 8px; margin-bottom: 4px;
+  background: #7f1d1d20; border: 1px solid #7f1d1d50;
+  border-radius: 4px;
+}
+.redflag-item-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 2px;
+}
+.redflag-date {
+  font-family: var(--mono); font-size: 10px; color: var(--text3);
+}
+.redflag-severity {
+  font-family: var(--mono); font-size: 9px; font-weight: 700;
+  padding: 1px 5px; border-radius: 2px; letter-spacing: 0.5px;
+}
+.redflag-severity.HIGH   { background: #dc262640; color: #fca5a5; border: 1px solid #dc2626; }
+.redflag-severity.MEDIUM { background: #d9770640; color: #fcd34d; border: 1px solid #d97706; }
+.redflag-severity.LOW    { background: #1e40af40; color: #93c5fd; border: 1px solid #3b82f6; }
+.redflag-reason {
+  font-size: 11px; color: var(--text2); line-height: 1.4;
+}
+.redflag-link {
+  font-family: var(--mono); font-size: 9px; color: var(--text4);
+  text-decoration: none; margin-top: 2px; display: inline-block;
+}
+.redflag-link:hover { color: var(--text3); }
+
 /* Empty state */
 .empty-state {
   text-align: center; padding: 60px 20px;
@@ -395,6 +432,7 @@ function buildCard(r) {
     </div>
 
     ${riskHtml}
+    ${buildRedFlagFilingsHtml(r.eight_k_red_flags)}
 
     <div class="trade-guidance">
       <strong>TRADE:</strong> 30-45 DTE, 5-10% OTM PUT
@@ -402,6 +440,25 @@ function buildCard(r) {
   `;
 
   return card;
+}
+
+function buildRedFlagFilingsHtml(flags) {
+  if (!flags || flags.length === 0) return '';
+  const items = flags.map(f => `
+    <div class="redflag-item">
+      <div class="redflag-item-header">
+        <span class="redflag-date">${escapeHtml(f.filing_date)}</span>
+        <span class="redflag-severity ${escapeHtml(f.severity || '')}">${escapeHtml(f.severity || 'UNKNOWN')}</span>
+      </div>
+      <div class="redflag-reason">${escapeHtml(f.reason || 'Red flag detected')}</div>
+      ${f.document_url ? `<a class="redflag-link" href="${escapeHtml(f.document_url)}" target="_blank" rel="noopener">VIEW FILING &rarr;</a>` : ''}
+    </div>
+  `).join('');
+  return `
+    <div class="redflag-section">
+      <div class="redflag-title">RED FLAG FILINGS (${flags.length})</div>
+      ${items}
+    </div>`;
 }
 
 function escapeHtml(str) {

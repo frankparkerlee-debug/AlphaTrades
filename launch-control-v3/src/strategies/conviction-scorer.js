@@ -1,3 +1,5 @@
+import { getCIKMap, getRecentEightKs, analyzeEightKText } from '../data/edgar.js';
+
 /**
  * Conviction Scorer — scores tickers for put setups based on
  * fundamental deterioration, insider selling, SEC red flags,
@@ -154,6 +156,39 @@ export async function scoreConvictionSetup(ticker, db) {
     breakdown.red_flag_filings = 0;
   }
 
+  // ── EDGAR 8-K LIVE ANALYSIS (via SEC EDGAR + Claude) ───────────────────
+  const eightKRedFlags = [];
+  let edgarScore = 0;
+  try {
+    const cikMap = await getCIKMap();
+    const cik = cikMap.get(ticker.toUpperCase());
+    if (cik) {
+      const filings = await getRecentEightKs(cik, ticker, 90);
+      for (const filing of filings) {
+        const analysis = await analyzeEightKText(filing.raw_text, ticker);
+        if (analysis.is_red_flag) {
+          eightKRedFlags.push({
+            filing_date: filing.filing_date,
+            accession_number: filing.accession_number,
+            document_url: filing.document_url,
+            severity: analysis.severity,
+            reason: analysis.red_flag_reason,
+            keywords: analysis.keywords_found,
+          });
+          const sevPoints = analysis.severity === 'HIGH' ? 25
+                          : analysis.severity === 'MEDIUM' ? 15
+                          : 5;
+          edgarScore += sevPoints;
+          riskFactors.push(`8-K ${filing.filing_date}: ${analysis.red_flag_reason}`);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`[CONVICTION] EDGAR 8-K analysis failed for ${ticker}:`, err.message);
+  }
+  score += edgarScore;
+  breakdown.edgar_8k = edgarScore;
+
   // ── TICKER INTELLIGENCE ──────────────────────────────────────────────────
   const tiRes = await db.query(
     `SELECT earnings_date, iv_rank_30d, insider_signal
@@ -258,6 +293,7 @@ export async function scoreConvictionSetup(ticker, db) {
     red_flag_count: redFlagCount,
     insider_signal: ti.insider_signal || null,
     analyst_price_target: analystPriceTarget,
+    eight_k_red_flags: eightKRedFlags,
     top_risk_factors: riskFactors,
   };
 }
