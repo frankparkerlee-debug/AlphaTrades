@@ -238,29 +238,43 @@ app.get('/api/debug/accuracy', async (req, res) => {
     `);
     const signals = sigRes.rows;
 
-    // Step 2: For each signal, find closest bar ~60min later
+    // Step 2: For each signal, find bar at signal time AND ~60min later
     const results = [];
     for (const sig of signals) {
-      const barRes = await db.query(`
+      // Bar closest to signal time (entry price)
+      const entryBar = await db.query(`
         SELECT close, ts FROM lc_v3.bars
         WHERE ticker = $1
-          AND ts BETWEEN $2::timestamptz + INTERVAL '50 minutes'
-                     AND $2::timestamptz + INTERVAL '70 minutes'
+          AND ts BETWEEN $2::timestamptz - INTERVAL '2 minutes'
+                     AND $2::timestamptz + INTERVAL '2 minutes'
+        ORDER BY ABS(EXTRACT(EPOCH FROM (ts - $2::timestamptz)))
+        LIMIT 1
+      `, [sig.ticker, sig.created_at]);
+
+      // Bar ~60min later
+      const exitBar = await db.query(`
+        SELECT close, ts FROM lc_v3.bars
+        WHERE ticker = $1
+          AND ts BETWEEN $2::timestamptz + INTERVAL '55 minutes'
+                     AND $2::timestamptz + INTERVAL '65 minutes'
         ORDER BY ABS(EXTRACT(EPOCH FROM (ts - ($2::timestamptz + INTERVAL '60 minutes'))))
         LIMIT 1
       `, [sig.ticker, sig.created_at]);
 
+      const entryPrice = sig.price_at_signal ? parseFloat(sig.price_at_signal)
+        : entryBar.rows[0]?.close ? parseFloat(entryBar.rows[0].close) : null;
+
       results.push({
         ticker: sig.ticker,
         direction: sig.direction,
-        price_at_signal: sig.price_at_signal,
+        price_at_signal: entryPrice,
         created_at: sig.created_at,
-        price_60min: barRes.rows[0]?.close || null,
-        bar_ts: barRes.rows[0]?.ts || null,
+        price_60min: exitBar.rows[0]?.close ? parseFloat(exitBar.rows[0].close) : null,
       });
     }
 
-    res.json({ signals_found: signals.length, matched: results.filter(r => r.price_60min).length, rows: results });
+    const matched = results.filter(r => r.price_at_signal && r.price_60min);
+    res.json({ signals_found: signals.length, matched: matched.length, rows: matched });
   } catch (err) { res.json({ error: err.message }); }
 });
 
