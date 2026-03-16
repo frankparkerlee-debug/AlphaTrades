@@ -13,7 +13,7 @@ import {
 const today = new Date();
 const todayStr = today.toISOString().split('T')[0];
 const futureDate = new Date(today);
-futureDate.setDate(futureDate.getDate() + 90);
+futureDate.setDate(futureDate.getDate() + 180);
 const futureStr = futureDate.toISOString().split('T')[0];
 
 async function main() {
