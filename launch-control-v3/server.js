@@ -14,6 +14,7 @@ import { scanGapReversal } from './src/strategies/gap-reversal.js';
 import { scanCapitulationBounce } from './src/strategies/capitulation-bounce.js';
 import { scanVolumeDropPut } from './src/strategies/volume-drop-put.js';
 import { scanConsecutiveDrop } from './src/strategies/consecutive-drop.js';
+import { scanSectorRotationBounce } from './src/strategies/sector-rotation-bounce.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app  = express();
@@ -1669,7 +1670,8 @@ async function startRestPoller() {
           const capSignals = scanCapitulationBounce(stratSnapshots, prevCloses, volumeBaselines);
           const putSignals = scanVolumeDropPut(stratSnapshots, prevCloses, volumeBaselines);
           const consecSignals = scanConsecutiveDrop(Object.keys(allSnaps), dailyBars);
-          const allStratSignals = [...gapSignals, ...capSignals, ...putSignals, ...consecSignals];
+          const sectorSignals = scanSectorRotationBounce(stratSnapshots, prevCloses, spyPct, firstCandles);
+          const allStratSignals = [...gapSignals, ...capSignals, ...putSignals, ...consecSignals, ...sectorSignals];
 
           for (const sig of allStratSignals) {
             // Dedup: skip if strategy signal already exists today for this ticker+direction+strategy
@@ -1684,6 +1686,7 @@ async function startRestPoller() {
 
             let compositeRaw = sig.strategy === 'GAP_REVERSAL' ? 85
                              : sig.strategy === 'CAPITULATION_BOUNCE' ? 72
+                             : sig.strategy === 'SECTOR_ROTATION_BOUNCE' ? 88
                              : sig.strategy === 'CONSEC_BOUNCE' ? (sig.consecutive_days >= 3 ? 85 : 64)
                              : 57;
 

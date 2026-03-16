@@ -2663,9 +2663,1085 @@ def full_universe_deterioration():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 22) GAP UP REVERSAL — gap 2-3% above prev close, red first candle → put signal
+# ─────────────────────────────────────────────────────────────────────────────
+def gap_up_reversal():
+    print('=' * 70)
+    print('22) GAP UP REVERSAL — 2-3% gap, red first candle, EOD follow-through')
+    print('=' * 70)
+
+    # Build daily OHLC + first bar OHLC from 1-min bars
+    # prev_close = previous day's last regular bar close
+    # day_open = first regular bar open (9:30 ET)
+    # first_bar_close = first regular bar close
+    # day_close = last regular bar close
+    cur.execute("""
+        WITH daily AS (
+            SELECT ticker,
+                   DATE(ts AT TIME ZONE 'America/New_York') AS day,
+                   MIN(ts) AS first_ts,
+                   MAX(ts) AS last_ts
+            FROM lc_v3.bars
+            WHERE session = 'REGULAR'
+            GROUP BY ticker, DATE(ts AT TIME ZONE 'America/New_York')
+            HAVING COUNT(*) >= 10
+        ),
+        daily_ohlc AS (
+            SELECT d.ticker, d.day,
+                   first_bar.open  AS day_open,
+                   first_bar.close AS first_bar_close,
+                   first_bar.open  AS first_bar_open,
+                   last_bar.close  AS day_close,
+                   last_bar.high   AS day_high,
+                   LAG(last_bar.close) OVER (PARTITION BY d.ticker ORDER BY d.day) AS prev_close
+            FROM daily d
+            JOIN lc_v3.bars first_bar ON first_bar.ticker = d.ticker AND first_bar.ts = d.first_ts
+            JOIN lc_v3.bars last_bar  ON last_bar.ticker  = d.ticker AND last_bar.ts  = d.last_ts
+        )
+        SELECT * FROM daily_ohlc
+        WHERE prev_close IS NOT NULL
+        ORDER BY ticker, day
+    """)
+    rows = cur.fetchall()
+    print(f'\n  Total ticker-days with prev close: {len(rows)}')
+
+    # Filter for 2-3% gap ups
+    gap_days = []
+    for r in rows:
+        prev = float(r['prev_close'])
+        day_open = float(r['day_open'])
+        if prev <= 0:
+            continue
+        gap_pct = (day_open - prev) / prev
+        if 0.02 <= gap_pct <= 0.03:
+            gap_days.append({
+                'ticker': r['ticker'],
+                'day': r['day'],
+                'prev_close': prev,
+                'day_open': day_open,
+                'first_bar_open': float(r['first_bar_open']),
+                'first_bar_close': float(r['first_bar_close']),
+                'day_close': float(r['day_close']),
+                'gap_pct': gap_pct,
+            })
+
+    print(f'  Days with 2-3% gap up: {len(gap_days)}')
+    if not gap_days:
+        print('  (no gap-up days found in data)')
+        return
+
+    # Classify first candle
+    red_first = [d for d in gap_days if d['first_bar_close'] < d['first_bar_open']]
+    green_first = [d for d in gap_days if d['first_bar_close'] >= d['first_bar_open']]
+
+    print(f'  Red first candle:   {len(red_first)} ({len(red_first)/len(gap_days)*100:.1f}%)')
+    print(f'  Green first candle: {len(green_first)} ({len(green_first)/len(gap_days)*100:.1f}%)')
+
+    # For red-first-candle days: did stock close below the open? (put wins)
+    if red_first:
+        put_wins = sum(1 for d in red_first if d['day_close'] < d['day_open'])
+        put_wr = put_wins / len(red_first) * 100
+
+        # Average magnitude of the drop (open - close) / open
+        drops = [(d['day_open'] - d['day_close']) / d['day_open'] * 100 for d in red_first if d['day_close'] < d['day_open']]
+        avg_drop = sum(drops) / len(drops) if drops else 0
+
+        # Losses when it recovers
+        recoveries = [(d['day_close'] - d['day_open']) / d['day_open'] * 100 for d in red_first if d['day_close'] >= d['day_open']]
+        avg_recovery = sum(recoveries) / len(recoveries) if recoveries else 0
+
+        print(f'\n  RED FIRST CANDLE → PUT RESULTS:')
+        print(f'    Sample:      {len(red_first)} days')
+        print(f'    Put win rate: {put_wr:.1f}% ({put_wins}/{len(red_first)})')
+        print(f'    Avg drop when winning: {avg_drop:.2f}%')
+        print(f'    Avg recovery when losing: {avg_recovery:.2f}%')
+
+        # By gap size bucket
+        print(f'\n    By gap size:')
+        for lo, hi, label in [(0.02, 0.025, '2.0-2.5%'), (0.025, 0.03, '2.5-3.0%')]:
+            bucket = [d for d in red_first if lo <= d['gap_pct'] < hi]
+            if bucket:
+                bw = sum(1 for d in bucket if d['day_close'] < d['day_open'])
+                print(f'      {label}: {len(bucket)} days, put WR {bw/len(bucket)*100:.1f}%')
+
+    # Green first candle comparison
+    if green_first:
+        gf_put_wins = sum(1 for d in green_first if d['day_close'] < d['day_open'])
+        gf_wr = gf_put_wins / len(green_first) * 100
+        print(f'\n  GREEN FIRST CANDLE → PUT RESULTS (comparison):')
+        print(f'    Sample:      {len(green_first)} days')
+        print(f'    Put win rate: {gf_wr:.1f}% ({gf_put_wins}/{len(green_first)})')
+
+    # Show individual examples (most recent 10)
+    red_first.sort(key=lambda d: d['day'], reverse=True)
+    print(f'\n  Recent examples (red first candle):')
+    print(f"  {'DATE':<12} {'TICKER':<8} {'GAP%':>6} {'OPEN':>8} {'1st BAR':>8} {'CLOSE':>8} {'RESULT':>8}")
+    print(f"  {'-'*62}")
+    for d in red_first[:15]:
+        result = 'PUT WIN' if d['day_close'] < d['day_open'] else 'LOSS'
+        move = (d['day_open'] - d['day_close']) / d['day_open'] * 100
+        print(f"  {str(d['day']):<12} {d['ticker']:<8} {d['gap_pct']*100:>5.1f}% {d['day_open']:>8.2f} {d['first_bar_close']:>8.2f} {d['day_close']:>8.2f} {result:>8}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 23) RELATIVE STRENGTH CONTINUATION — ticker moves >1% while MKT <0.3%
+# ─────────────────────────────────────────────────────────────────────────────
+def relative_strength_continuation():
+    print('=' * 70)
+    print('23) RELATIVE STRENGTH CONTINUATION — divergent movers vs SPY')
+    print('=' * 70)
+
+    # No SPY in bars — compute market proxy as median ticker change per day
+    cur.execute("""
+        WITH daily AS (
+            SELECT ticker,
+                   DATE(ts AT TIME ZONE 'America/New_York') AS day,
+                   (ARRAY_AGG(open ORDER BY ts))[1] AS day_open,
+                   (ARRAY_AGG(close ORDER BY ts DESC))[1] AS day_close
+            FROM lc_v3.bars
+            WHERE session = 'REGULAR'
+            GROUP BY ticker, DATE(ts AT TIME ZONE 'America/New_York')
+            HAVING COUNT(*) >= 10
+        )
+        SELECT day, AVG((day_close - day_open) / NULLIF(day_open, 0)) AS mkt_change,
+               COUNT(*) AS ticker_count
+        FROM daily
+        WHERE day_open > 0
+        GROUP BY day
+        HAVING COUNT(*) >= 20
+        ORDER BY day
+    """)
+    mkt_rows = cur.fetchall()
+    spy_by_day = {r['day']: {
+        'change': float(r['mkt_change']),
+        'count': int(r['ticker_count']),
+    } for r in mkt_rows}
+    print(f'\n  Market proxy days (avg of all tickers): {len(spy_by_day)}')
+
+    # Get all tickers' daily open/close + 2hr mark close
+    # 2hr after open = 11:30 ET
+    cur.execute("""
+        WITH daily AS (
+            SELECT ticker,
+                   DATE(ts AT TIME ZONE 'America/New_York') AS day,
+                   (ARRAY_AGG(open ORDER BY ts))[1] AS day_open,
+                   (ARRAY_AGG(close ORDER BY ts DESC))[1] AS day_close
+            FROM lc_v3.bars
+            WHERE session = 'REGULAR' AND ticker != 'SPY'
+            GROUP BY ticker, DATE(ts AT TIME ZONE 'America/New_York')
+            HAVING COUNT(*) >= 10
+        )
+        SELECT * FROM daily ORDER BY ticker, day
+    """)
+    ticker_rows = cur.fetchall()
+    print(f'  Ticker-days (excl SPY): {len(ticker_rows)}')
+
+    # Also fetch the bar closest to 11:30 ET (2hr after open) for each ticker-day
+    cur.execute("""
+        SELECT DISTINCT ON (ticker, DATE(ts AT TIME ZONE 'America/New_York'))
+            ticker,
+            DATE(ts AT TIME ZONE 'America/New_York') AS day,
+            close AS two_hr_close
+        FROM lc_v3.bars
+        WHERE session = 'REGULAR'
+          AND ticker != 'SPY'
+          AND EXTRACT(HOUR FROM ts AT TIME ZONE 'America/New_York') = 11
+          AND EXTRACT(MINUTE FROM ts AT TIME ZONE 'America/New_York') BETWEEN 25 AND 34
+        ORDER BY ticker, DATE(ts AT TIME ZONE 'America/New_York'),
+                 ABS(EXTRACT(MINUTE FROM ts AT TIME ZONE 'America/New_York') - 30)
+    """)
+    two_hr_rows = cur.fetchall()
+    two_hr_map = {}
+    for r in two_hr_rows:
+        two_hr_map[(r['ticker'], r['day'])] = float(r['two_hr_close'])
+    print(f'  Ticker-days with 2hr mark: {len(two_hr_map)}')
+
+    # Find divergent days: ticker >1% move, MKT <0.3%
+    bullish_divergent = []  # ticker up >1%, MKT flat
+    bearish_divergent = []  # ticker down >1%, MKT flat
+
+    for r in ticker_rows:
+        day = r['day']
+        if day not in spy_by_day:
+            continue
+        mkt = spy_by_day[day]
+        if abs(mkt['change']) >= 0.003:
+            continue  # market moved too much, skip
+
+        day_open = float(r['day_open'])
+        day_close = float(r['day_close'])
+        if day_open <= 0:
+            continue
+        ticker_change = (day_close - day_open) / day_open
+
+        two_hr = two_hr_map.get((r['ticker'], day))
+        two_hr_change = (two_hr - day_open) / day_open if two_hr else None
+
+        entry = {
+            'ticker': r['ticker'],
+            'day': day,
+            'day_open': day_open,
+            'day_close': day_close,
+            'ticker_change': ticker_change,
+            'spy_change': mkt['change'],
+            'two_hr_close': two_hr,
+            'two_hr_change': two_hr_change,
+        }
+
+        if ticker_change > 0.01:
+            bullish_divergent.append(entry)
+        elif ticker_change < -0.01:
+            bearish_divergent.append(entry)
+
+    print(f'\n  Bullish divergent days (ticker >+1%, MKT <0.3%): {len(bullish_divergent)}')
+    print(f'  Bearish divergent days (ticker <-1%, MKT <0.3%): {len(bearish_divergent)}')
+
+    # ── BULLISH DIVERGENCE ANALYSIS ──
+    if bullish_divergent:
+        # Next-day continuation: did ticker stay up or extend?
+        # We measure at 2hr mark and EOD
+        with_2hr = [d for d in bullish_divergent if d['two_hr_change'] is not None]
+
+        # At 2hr mark: was ticker already positive?
+        two_hr_pos = sum(1 for d in with_2hr if d['two_hr_change'] > 0)
+        avg_2hr = sum(d['two_hr_change'] for d in with_2hr) / len(with_2hr) * 100 if with_2hr else 0
+
+        # EOD: positive?
+        eod_pos = sum(1 for d in bullish_divergent if d['ticker_change'] > 0)
+        avg_eod = sum(d['ticker_change'] for d in bullish_divergent) / len(bullish_divergent) * 100
+
+        print(f'\n  BULLISH DIVERGENCE (ticker up, MKT flat):')
+        print(f'    Total days:             {len(bullish_divergent)}')
+        print(f'    At 2hr: positive         {two_hr_pos}/{len(with_2hr)} ({two_hr_pos/len(with_2hr)*100:.1f}%)' if with_2hr else '    At 2hr: no data')
+        print(f'    At 2hr: avg move         {avg_2hr:+.2f}%' if with_2hr else '')
+        print(f'    At EOD: positive         {eod_pos}/{len(bullish_divergent)} ({eod_pos/len(bullish_divergent)*100:.1f}%)')
+        print(f'    At EOD: avg move         {avg_eod:+.2f}%')
+
+        # By magnitude bucket
+        print(f'\n    By intraday magnitude:')
+        for lo, hi, label in [(0.01, 0.02, '1-2%'), (0.02, 0.03, '2-3%'), (0.03, 1.0, '3%+')]:
+            bucket = [d for d in bullish_divergent if lo <= d['ticker_change'] < hi]
+            if bucket:
+                bw = sum(d['ticker_change'] for d in bucket) / len(bucket) * 100
+                print(f'      {label}: {len(bucket)} days, avg EOD move {bw:+.2f}%')
+
+    # ── BEARISH DIVERGENCE ANALYSIS ──
+    if bearish_divergent:
+        with_2hr = [d for d in bearish_divergent if d['two_hr_change'] is not None]
+
+        two_hr_neg = sum(1 for d in with_2hr if d['two_hr_change'] < 0)
+        avg_2hr = sum(d['two_hr_change'] for d in with_2hr) / len(with_2hr) * 100 if with_2hr else 0
+
+        eod_neg = sum(1 for d in bearish_divergent if d['ticker_change'] < 0)
+        avg_eod = sum(d['ticker_change'] for d in bearish_divergent) / len(bearish_divergent) * 100
+
+        print(f'\n  BEARISH DIVERGENCE (ticker down, MKT flat):')
+        print(f'    Total days:             {len(bearish_divergent)}')
+        print(f'    At 2hr: negative         {two_hr_neg}/{len(with_2hr)} ({two_hr_neg/len(with_2hr)*100:.1f}%)' if with_2hr else '    At 2hr: no data')
+        print(f'    At 2hr: avg move         {avg_2hr:+.2f}%' if with_2hr else '')
+        print(f'    At EOD: negative         {eod_neg}/{len(bearish_divergent)} ({eod_neg/len(bearish_divergent)*100:.1f}%)')
+        print(f'    At EOD: avg move         {avg_eod:+.2f}%')
+
+        # These are the green-day put candidates
+        print(f'\n    PUT OPPORTUNITY (bearish divergence on flat SPY):')
+        put_wins = sum(1 for d in bearish_divergent if d['day_close'] < d['day_open'])
+        avg_drop = sum(abs(d['ticker_change']) for d in bearish_divergent if d['day_close'] < d['day_open']) / max(1, put_wins) * 100
+        print(f'      Put win rate: {put_wins/len(bearish_divergent)*100:.1f}%')
+        print(f'      Avg drop magnitude: {avg_drop:.2f}%')
+
+        print(f'\n    By intraday magnitude:')
+        for lo, hi, label in [(0.01, 0.02, '1-2%'), (0.02, 0.03, '2-3%'), (0.03, 1.0, '3%+')]:
+            bucket = [d for d in bearish_divergent if lo <= abs(d['ticker_change']) < hi]
+            if bucket:
+                bw = sum(abs(d['ticker_change']) for d in bucket) / len(bucket) * 100
+                print(f'      {label}: {len(bucket)} days, avg magnitude {bw:.2f}%')
+
+    # Recent examples (bearish — green day candidates)
+    bearish_divergent.sort(key=lambda d: d['day'], reverse=True)
+    if bearish_divergent:
+        print(f'\n  Recent bearish divergence examples:')
+        print(f"  {'DATE':<12} {'TICKER':<8} {'TKR CHG':>8} {'MKT CHG':>8} {'2HR':>8} {'EOD':>8}")
+        print(f"  {'-'*58}")
+        for d in bearish_divergent[:15]:
+            two_hr_str = f"{d['two_hr_change']*100:+.1f}%" if d['two_hr_change'] is not None else '—'
+            print(f"  {str(d['day']):<12} {d['ticker']:<8} {d['ticker_change']*100:>+7.1f}% {d['spy_change']*100:>+7.2f}% {two_hr_str:>8} {d['ticker_change']*100:>+7.1f}%")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 24) RELATIVE STRENGTH VALIDATION — deep dive on analysis 23
+# ─────────────────────────────────────────────────────────────────────────────
+def relative_strength_validation():
+    import statistics
+
+    print('=' * 70)
+    print('24) RELATIVE STRENGTH VALIDATION — artifact check')
+    print('=' * 70)
+
+    # ── CRITICAL NOTE ────────────────────────────────────────────────────────
+    # Analysis 23 used EOD open→close to DEFINE the divergence AND measure
+    # the outcome. That's circular — 100% win rate is guaranteed by
+    # construction. The real test: if at an INTRADAY checkpoint the ticker
+    # is diverging from market, does it CONTINUE into EOD?
+    #
+    # New approach:
+    #   Signal = at 11:30 ET (2hr), ticker is down >1% from open while
+    #            market avg is flat (<0.3%)
+    #   Outcome = did ticker close below the 11:30 ET price? (continuation)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    print('\n  NOTE: Analysis 23 had a circular definition (EOD change used')
+    print('  as both signal and outcome). This analysis fixes that by using')
+    print('  the 2hr mark (11:30 ET) as the signal point and measuring')
+    print('  continuation from 2hr → EOD.\n')
+
+    # Market proxy: avg ticker change at 2hr mark AND at EOD per day
+    cur.execute("""
+        WITH daily AS (
+            SELECT ticker,
+                   DATE(ts AT TIME ZONE 'America/New_York') AS day,
+                   (ARRAY_AGG(open ORDER BY ts))[1] AS day_open,
+                   (ARRAY_AGG(close ORDER BY ts DESC))[1] AS day_close
+            FROM lc_v3.bars
+            WHERE session = 'REGULAR'
+            GROUP BY ticker, DATE(ts AT TIME ZONE 'America/New_York')
+            HAVING COUNT(*) >= 10
+        )
+        SELECT day,
+               AVG((day_close - day_open) / NULLIF(day_open, 0)) AS mkt_eod_change,
+               COUNT(*) AS ticker_count
+        FROM daily
+        WHERE day_open > 0
+        GROUP BY day
+        HAVING COUNT(*) >= 20
+        ORDER BY day
+    """)
+    mkt_rows = cur.fetchall()
+    mkt_by_day = {r['day']: {
+        'eod_change': float(r['mkt_eod_change']),
+        'count': int(r['ticker_count']),
+    } for r in mkt_rows}
+
+    # Market avg at 2hr mark
+    cur.execute("""
+        WITH bars_2hr AS (
+            SELECT DISTINCT ON (ticker, DATE(ts AT TIME ZONE 'America/New_York'))
+                ticker,
+                DATE(ts AT TIME ZONE 'America/New_York') AS day,
+                close AS two_hr_close
+            FROM lc_v3.bars
+            WHERE session = 'REGULAR'
+              AND EXTRACT(HOUR FROM ts AT TIME ZONE 'America/New_York') = 11
+              AND EXTRACT(MINUTE FROM ts AT TIME ZONE 'America/New_York') BETWEEN 25 AND 34
+            ORDER BY ticker, DATE(ts AT TIME ZONE 'America/New_York'),
+                     ABS(EXTRACT(MINUTE FROM ts AT TIME ZONE 'America/New_York') - 30)
+        ),
+        day_opens AS (
+            SELECT ticker,
+                   DATE(ts AT TIME ZONE 'America/New_York') AS day,
+                   (ARRAY_AGG(open ORDER BY ts))[1] AS day_open
+            FROM lc_v3.bars
+            WHERE session = 'REGULAR'
+            GROUP BY ticker, DATE(ts AT TIME ZONE 'America/New_York')
+        )
+        SELECT b.day,
+               AVG((b.two_hr_close - d.day_open) / NULLIF(d.day_open, 0)) AS mkt_2hr_change,
+               COUNT(*) AS cnt
+        FROM bars_2hr b
+        JOIN day_opens d ON d.ticker = b.ticker AND d.day = b.day
+        WHERE d.day_open > 0
+        GROUP BY b.day
+        HAVING COUNT(*) >= 20
+        ORDER BY b.day
+    """)
+    mkt_2hr_rows = cur.fetchall()
+    for r in mkt_2hr_rows:
+        if r['day'] in mkt_by_day:
+            mkt_by_day[r['day']]['two_hr_change'] = float(r['mkt_2hr_change'])
+
+    print(f'  Trading days with market proxy: {len(mkt_by_day)}')
+
+    # Per-ticker: open, 2hr close, EOD close
+    cur.execute("""
+        WITH day_opens AS (
+            SELECT ticker,
+                   DATE(ts AT TIME ZONE 'America/New_York') AS day,
+                   (ARRAY_AGG(open ORDER BY ts))[1] AS day_open,
+                   (ARRAY_AGG(close ORDER BY ts DESC))[1] AS day_close
+            FROM lc_v3.bars
+            WHERE session = 'REGULAR'
+            GROUP BY ticker, DATE(ts AT TIME ZONE 'America/New_York')
+            HAVING COUNT(*) >= 10
+        ),
+        bars_2hr AS (
+            SELECT DISTINCT ON (ticker, DATE(ts AT TIME ZONE 'America/New_York'))
+                ticker,
+                DATE(ts AT TIME ZONE 'America/New_York') AS day,
+                close AS two_hr_close
+            FROM lc_v3.bars
+            WHERE session = 'REGULAR'
+              AND EXTRACT(HOUR FROM ts AT TIME ZONE 'America/New_York') = 11
+              AND EXTRACT(MINUTE FROM ts AT TIME ZONE 'America/New_York') BETWEEN 25 AND 34
+            ORDER BY ticker, DATE(ts AT TIME ZONE 'America/New_York'),
+                     ABS(EXTRACT(MINUTE FROM ts AT TIME ZONE 'America/New_York') - 30)
+        )
+        SELECT d.ticker, d.day, d.day_open, d.day_close, b.two_hr_close
+        FROM day_opens d
+        JOIN bars_2hr b ON b.ticker = d.ticker AND b.day = d.day
+        WHERE d.day_open > 0
+        ORDER BY d.ticker, d.day
+    """)
+    ticker_rows = cur.fetchall()
+    print(f'  Ticker-days with 2hr data: {len(ticker_rows)}')
+
+    # ── SIGNAL: at 2hr, ticker down >1% from open, market 2hr change <0.3% ──
+    bearish_signals = []
+    bullish_signals = []
+
+    for r in ticker_rows:
+        day = r['day']
+        if day not in mkt_by_day or 'two_hr_change' not in mkt_by_day[day]:
+            continue
+        mkt = mkt_by_day[day]
+        if abs(mkt['two_hr_change']) >= 0.003:
+            continue  # market not flat at 2hr
+
+        day_open = float(r['day_open'])
+        two_hr = float(r['two_hr_close'])
+        day_close = float(r['day_close'])
+        change_at_2hr = (two_hr - day_open) / day_open
+        eod_change = (day_close - day_open) / day_open
+        continuation = (day_close - two_hr) / two_hr  # 2hr → EOD
+
+        entry = {
+            'ticker': r['ticker'],
+            'day': day,
+            'day_open': day_open,
+            'two_hr': two_hr,
+            'day_close': day_close,
+            'change_at_2hr': change_at_2hr,
+            'eod_change': eod_change,
+            'continuation': continuation,
+            'mkt_2hr': mkt['two_hr_change'],
+            'mkt_eod': mkt['eod_change'],
+        }
+
+        if change_at_2hr < -0.01:
+            bearish_signals.append(entry)
+        elif change_at_2hr > 0.01:
+            bullish_signals.append(entry)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # BEARISH DIVERGENCE VALIDATION
+    # ══════════════════════════════════════════════════════════════════════════
+    print(f'\n  {"="*60}')
+    print(f'  BEARISH: ticker down >1% at 2hr, market flat (<0.3%)')
+    print(f'  {"="*60}')
+    print(f'  Sample size: {len(bearish_signals)}')
+
+    if bearish_signals:
+        # Distribution of 2hr → EOD continuation
+        conts = [d['continuation'] * 100 for d in bearish_signals]
+        eods = [d['eod_change'] * 100 for d in bearish_signals]
+        mkt_vals = [d['mkt_2hr'] * 100 for d in bearish_signals]
+        mkt_eods = [d['mkt_eod'] * 100 for d in bearish_signals]
+
+        conts.sort()
+        eods.sort()
+
+        def pctl(arr, p):
+            k = (len(arr) - 1) * p / 100
+            f = int(k)
+            c = f + 1 if f + 1 < len(arr) else f
+            return arr[f] + (k - f) * (arr[c] - arr[f])
+
+        print(f'\n  Market confirmation (avg market change on these days):')
+        print(f'    Avg MKT at 2hr:   {sum(mkt_vals)/len(mkt_vals):+.3f}%')
+        print(f'    Avg MKT at EOD:   {sum(mkt_eods)/len(mkt_eods):+.3f}%')
+        print(f'    Max MKT at 2hr:   {max(mkt_vals):+.3f}%')
+        print(f'    Min MKT at 2hr:   {min(mkt_vals):+.3f}%')
+
+        print(f'\n  EOD return distribution (open → close):')
+        print(f'    Worst:    {eods[0]:+.2f}%')
+        print(f'    P25:      {pctl(eods, 25):+.2f}%')
+        print(f'    Median:   {pctl(eods, 50):+.2f}%')
+        print(f'    P75:      {pctl(eods, 75):+.2f}%')
+        print(f'    Best:     {eods[-1]:+.2f}%')
+        print(f'    Mean:     {sum(eods)/len(eods):+.2f}%')
+        print(f'    Std dev:  {statistics.stdev(eods):.2f}%')
+
+        print(f'\n  CONTINUATION (2hr → EOD) — THE REAL TEST:')
+        cont_neg = sum(1 for c in conts if c < 0)
+        print(f'    Continued lower:   {cont_neg}/{len(conts)} ({cont_neg/len(conts)*100:.1f}%)')
+        print(f'    Worst:    {conts[0]:+.2f}%')
+        print(f'    P25:      {pctl(conts, 25):+.2f}%')
+        print(f'    Median:   {pctl(conts, 50):+.2f}%')
+        print(f'    P75:      {pctl(conts, 75):+.2f}%')
+        print(f'    Best:     {conts[-1]:+.2f}%')
+        print(f'    Mean:     {sum(conts)/len(conts):+.2f}%')
+
+        # By how far down at 2hr
+        print(f'\n  By signal strength (how far down at 2hr):')
+        for lo, hi, label in [(-0.02, -0.01, '1-2% down'), (-0.03, -0.02, '2-3% down'), (-1.0, -0.03, '3%+ down')]:
+            bucket = [d for d in bearish_signals if lo <= d['change_at_2hr'] < hi]
+            if bucket:
+                bc = [d['continuation'] * 100 for d in bucket]
+                bc.sort()
+                cont_pct = sum(1 for c in bc if c < 0) / len(bc) * 100
+                print(f'      {label}: {len(bucket)} days, continued lower {cont_pct:.0f}%, median cont {pctl(bc, 50):+.2f}%')
+
+        # By unique date — how many distinct days?
+        unique_days = set(d['day'] for d in bearish_signals)
+        unique_tickers = set(d['ticker'] for d in bearish_signals)
+        print(f'\n  Concentration check:')
+        print(f'    Unique days:    {len(unique_days)}')
+        print(f'    Unique tickers: {len(unique_tickers)}')
+        print(f'    Avg signals/day: {len(bearish_signals)/len(unique_days):.1f}')
+
+        # Signals per day distribution
+        from collections import Counter
+        day_counts = Counter(d['day'] for d in bearish_signals)
+        print(f'    Day with most:   {max(day_counts.values())} signals on {max(day_counts, key=day_counts.get)}')
+        print(f'    Days with 1 sig: {sum(1 for v in day_counts.values() if v == 1)}')
+        print(f'    Days with 5+:    {sum(1 for v in day_counts.values() if v >= 5)}')
+
+        # Top tickers by frequency
+        ticker_counts = Counter(d['ticker'] for d in bearish_signals)
+        print(f'\n  Most frequent tickers:')
+        for tkr, cnt in ticker_counts.most_common(10):
+            subset = [d for d in bearish_signals if d['ticker'] == tkr]
+            avg_cont = sum(d['continuation'] for d in subset) / len(subset) * 100
+            print(f'    {tkr:<8} {cnt} days, avg continuation {avg_cont:+.2f}%')
+
+        # Recent examples
+        bearish_signals.sort(key=lambda d: d['day'], reverse=True)
+        print(f'\n  Recent bearish signals:')
+        print(f"  {'DATE':<12} {'TICKER':<8} {'AT 2HR':>8} {'EOD':>8} {'CONT':>8} {'MKT 2HR':>8}")
+        print(f"  {'-'*58}")
+        for d in bearish_signals[:20]:
+            result = 'v' if d['continuation'] < 0 else '^'
+            print(f"  {str(d['day']):<12} {d['ticker']:<8} {d['change_at_2hr']*100:>+7.1f}% {d['eod_change']*100:>+7.1f}% {d['continuation']*100:>+7.2f}% {d['mkt_2hr']*100:>+7.2f}% {result}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # BULLISH DIVERGENCE VALIDATION
+    # ══════════════════════════════════════════════════════════════════════════
+    print(f'\n  {"="*60}')
+    print(f'  BULLISH: ticker up >1% at 2hr, market flat (<0.3%)')
+    print(f'  {"="*60}')
+    print(f'  Sample size: {len(bullish_signals)}')
+
+    if bullish_signals:
+        conts = [d['continuation'] * 100 for d in bullish_signals]
+        eods = [d['eod_change'] * 100 for d in bullish_signals]
+        mkt_vals = [d['mkt_2hr'] * 100 for d in bullish_signals]
+        mkt_eods = [d['mkt_eod'] * 100 for d in bullish_signals]
+
+        conts.sort()
+        eods.sort()
+
+        def pctl(arr, p):
+            k = (len(arr) - 1) * p / 100
+            f = int(k)
+            c = f + 1 if f + 1 < len(arr) else f
+            return arr[f] + (k - f) * (arr[c] - arr[f])
+
+        print(f'\n  Market confirmation:')
+        print(f'    Avg MKT at 2hr:   {sum(mkt_vals)/len(mkt_vals):+.3f}%')
+        print(f'    Avg MKT at EOD:   {sum(mkt_eods)/len(mkt_eods):+.3f}%')
+
+        print(f'\n  EOD return distribution (open → close):')
+        print(f'    Worst:    {eods[0]:+.2f}%')
+        print(f'    P25:      {pctl(eods, 25):+.2f}%')
+        print(f'    Median:   {pctl(eods, 50):+.2f}%')
+        print(f'    P75:      {pctl(eods, 75):+.2f}%')
+        print(f'    Best:     {eods[-1]:+.2f}%')
+        print(f'    Mean:     {sum(eods)/len(eods):+.2f}%')
+
+        print(f'\n  CONTINUATION (2hr → EOD):')
+        cont_pos = sum(1 for c in conts if c > 0)
+        print(f'    Continued higher:  {cont_pos}/{len(conts)} ({cont_pos/len(conts)*100:.1f}%)')
+        print(f'    Worst:    {conts[0]:+.2f}%')
+        print(f'    P25:      {pctl(conts, 25):+.2f}%')
+        print(f'    Median:   {pctl(conts, 50):+.2f}%')
+        print(f'    P75:      {pctl(conts, 75):+.2f}%')
+        print(f'    Best:     {conts[-1]:+.2f}%')
+        print(f'    Mean:     {sum(conts)/len(conts):+.2f}%')
+
+        # By signal strength
+        print(f'\n  By signal strength (how far up at 2hr):')
+        for lo, hi, label in [(0.01, 0.02, '1-2% up'), (0.02, 0.03, '2-3% up'), (0.03, 1.0, '3%+ up')]:
+            bucket = [d for d in bullish_signals if lo <= d['change_at_2hr'] < hi]
+            if bucket:
+                bc = [d['continuation'] * 100 for d in bucket]
+                bc.sort()
+                cont_pct = sum(1 for c in bc if c > 0) / len(bc) * 100
+                print(f'      {label}: {len(bucket)} days, continued higher {cont_pct:.0f}%, median cont {pctl(bc, 50):+.2f}%')
+
+        # Concentration
+        unique_days = set(d['day'] for d in bullish_signals)
+        unique_tickers = set(d['ticker'] for d in bullish_signals)
+        print(f'\n  Concentration check:')
+        print(f'    Unique days:    {len(unique_days)}')
+        print(f'    Unique tickers: {len(unique_tickers)}')
+        print(f'    Avg signals/day: {len(bullish_signals)/len(unique_days):.1f}')
+
+        from collections import Counter
+        day_counts = Counter(d['day'] for d in bullish_signals)
+        print(f'    Day with most:   {max(day_counts.values())} signals on {max(day_counts, key=day_counts.get)}')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SHARED: build market proxy + per-ticker daily data for green-day analyses
+# ─────────────────────────────────────────────────────────────────────────────
+def _build_green_day_data():
+    """Returns (green_days dict, ticker_daily list, ticker_1hr dict, ticker_2hr dict)"""
+    import statistics
+
+    # Market proxy: avg ticker open→close per day
+    cur.execute("""
+        WITH daily AS (
+            SELECT ticker,
+                   DATE(ts AT TIME ZONE 'America/New_York') AS day,
+                   (ARRAY_AGG(open ORDER BY ts))[1] AS day_open,
+                   (ARRAY_AGG(close ORDER BY ts DESC))[1] AS day_close
+            FROM lc_v3.bars
+            WHERE session = 'REGULAR'
+            GROUP BY ticker, DATE(ts AT TIME ZONE 'America/New_York')
+            HAVING COUNT(*) >= 10
+        )
+        SELECT day,
+               AVG((day_close - day_open) / NULLIF(day_open, 0)) AS mkt_change,
+               COUNT(*) AS ticker_count
+        FROM daily WHERE day_open > 0
+        GROUP BY day HAVING COUNT(*) >= 20
+        ORDER BY day
+    """)
+    mkt_rows = cur.fetchall()
+    green_days = {}
+    for r in mkt_rows:
+        chg = float(r['mkt_change'])
+        if chg > 0.005:
+            green_days[r['day']] = chg
+    print(f'  Market proxy days: {len(mkt_rows)}, green days (>+0.5%): {len(green_days)}')
+    if green_days:
+        for d, c in sorted(green_days.items()):
+            print(f'    {d}  MKT: {c*100:+.2f}%')
+
+    # Per-ticker daily: open (first bar), close (last bar), prev_close, first bar OHLC
+    cur.execute("""
+        WITH daily AS (
+            SELECT ticker,
+                   DATE(ts AT TIME ZONE 'America/New_York') AS day,
+                   MIN(ts) AS first_ts,
+                   MAX(ts) AS last_ts
+            FROM lc_v3.bars
+            WHERE session = 'REGULAR'
+            GROUP BY ticker, DATE(ts AT TIME ZONE 'America/New_York')
+            HAVING COUNT(*) >= 10
+        ),
+        daily_ohlc AS (
+            SELECT d.ticker, d.day,
+                   fb.open  AS day_open,
+                   fb.close AS first_bar_close,
+                   fb.open  AS first_bar_open,
+                   fb.high  AS first_bar_high,
+                   fb.low   AS first_bar_low,
+                   lb.close AS day_close,
+                   lb.high  AS day_high,
+                   lb.low   AS day_low,
+                   LAG(lb.close) OVER (PARTITION BY d.ticker ORDER BY d.day) AS prev_close
+            FROM daily d
+            JOIN lc_v3.bars fb ON fb.ticker = d.ticker AND fb.ts = d.first_ts
+            JOIN lc_v3.bars lb ON lb.ticker = d.ticker AND lb.ts = d.last_ts
+        )
+        SELECT * FROM daily_ohlc WHERE prev_close IS NOT NULL ORDER BY ticker, day
+    """)
+    ticker_daily = cur.fetchall()
+
+    # 1hr mark (10:30 ET)
+    cur.execute("""
+        SELECT DISTINCT ON (ticker, DATE(ts AT TIME ZONE 'America/New_York'))
+            ticker,
+            DATE(ts AT TIME ZONE 'America/New_York') AS day,
+            close AS one_hr_close
+        FROM lc_v3.bars
+        WHERE session = 'REGULAR'
+          AND EXTRACT(HOUR FROM ts AT TIME ZONE 'America/New_York') = 10
+          AND EXTRACT(MINUTE FROM ts AT TIME ZONE 'America/New_York') BETWEEN 25 AND 34
+        ORDER BY ticker, DATE(ts AT TIME ZONE 'America/New_York'),
+                 ABS(EXTRACT(MINUTE FROM ts AT TIME ZONE 'America/New_York') - 30)
+    """)
+    ticker_1hr = {(r['ticker'], r['day']): float(r['one_hr_close']) for r in cur.fetchall()}
+
+    # 2hr mark (11:30 ET)
+    cur.execute("""
+        SELECT DISTINCT ON (ticker, DATE(ts AT TIME ZONE 'America/New_York'))
+            ticker,
+            DATE(ts AT TIME ZONE 'America/New_York') AS day,
+            close AS two_hr_close
+        FROM lc_v3.bars
+        WHERE session = 'REGULAR'
+          AND EXTRACT(HOUR FROM ts AT TIME ZONE 'America/New_York') = 11
+          AND EXTRACT(MINUTE FROM ts AT TIME ZONE 'America/New_York') BETWEEN 25 AND 34
+        ORDER BY ticker, DATE(ts AT TIME ZONE 'America/New_York'),
+                 ABS(EXTRACT(MINUTE FROM ts AT TIME ZONE 'America/New_York') - 30)
+    """)
+    ticker_2hr = {(r['ticker'], r['day']): float(r['two_hr_close']) for r in cur.fetchall()}
+
+    return green_days, ticker_daily, ticker_1hr, ticker_2hr
+
+
+def pctl(arr, p):
+    """Percentile from sorted array"""
+    if not arr:
+        return 0
+    k = (len(arr) - 1) * p / 100
+    f = int(k)
+    c = f + 1 if f + 1 < len(arr) else f
+    return arr[f] + (k - f) * (arr[c] - arr[f])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 25) GREEN DAY GAP UPS — ticker gaps up 2-3% on a green market day
+# ─────────────────────────────────────────────────────────────────────────────
+def green_day_gap_ups():
+    import statistics
+
+    print('=' * 70)
+    print('25) GREEN DAY GAP UPS — individual stock gap 2-3% on MKT up >0.5%')
+    print('=' * 70)
+
+    green_days, ticker_daily, ticker_1hr, ticker_2hr = _build_green_day_data()
+
+    if not green_days:
+        print('  No green days found in data.')
+        return
+
+    # Filter: ticker gapped up 2-3% from prev close AND day is green
+    gap_ups = []
+    for r in ticker_daily:
+        day = r['day']
+        if day not in green_days:
+            continue
+        prev = float(r['prev_close'])
+        day_open = float(r['day_open'])
+        if prev <= 0:
+            continue
+        gap_pct = (day_open - prev) / prev
+        if not (0.02 <= gap_pct <= 0.03):
+            continue
+
+        first_bar_open = float(r['first_bar_open'])
+        first_bar_close = float(r['first_bar_close'])
+        day_close = float(r['day_close'])
+        one_hr = ticker_1hr.get((r['ticker'], day))
+        two_hr = ticker_2hr.get((r['ticker'], day))
+
+        gap_ups.append({
+            'ticker': r['ticker'],
+            'day': day,
+            'prev_close': prev,
+            'day_open': day_open,
+            'first_bar_open': first_bar_open,
+            'first_bar_close': first_bar_close,
+            'day_close': day_close,
+            'gap_pct': gap_pct,
+            'first_candle_red': first_bar_close < first_bar_open,
+            'eod_change': (day_close - day_open) / day_open,
+            'one_hr': one_hr,
+            'two_hr': two_hr,
+            'one_hr_change': (one_hr - day_open) / day_open if one_hr else None,
+            'two_hr_change': (two_hr - day_open) / day_open if two_hr else None,
+            'mkt_change': green_days[day],
+        })
+
+    print(f'\n  Ticker-days with 2-3% gap up on green days: {len(gap_ups)}')
+    if not gap_ups:
+        print('  (none found)')
+        return
+
+    red_first = [d for d in gap_ups if d['first_candle_red']]
+    green_first = [d for d in gap_ups if not d['first_candle_red']]
+
+    print(f'  Red first candle:   {len(red_first)} ({len(red_first)/len(gap_ups)*100:.1f}%)')
+    print(f'  Green first candle: {len(green_first)} ({len(green_first)/len(gap_ups)*100:.1f}%)')
+
+    # ── RED FIRST CANDLE → PUT SIGNAL ──
+    if red_first:
+        put_wins = sum(1 for d in red_first if d['day_close'] < d['day_open'])
+        eods = sorted([d['eod_change'] * 100 for d in red_first])
+
+        print(f'\n  RED FIRST CANDLE → PUT:')
+        print(f'    Sample:       {len(red_first)}')
+        print(f'    Put win rate: {put_wins/len(red_first)*100:.1f}% ({put_wins}/{len(red_first)})')
+        print(f'    EOD return distribution:')
+        print(f'      Worst:  {eods[0]:+.2f}%  |  P25: {pctl(eods,25):+.2f}%  |  Median: {pctl(eods,50):+.2f}%')
+        print(f'      P75: {pctl(eods,75):+.2f}%  |  Best: {eods[-1]:+.2f}%  |  Mean: {sum(eods)/len(eods):+.2f}%')
+
+        # 1hr and 2hr checkpoints
+        with_1hr = [d for d in red_first if d['one_hr_change'] is not None]
+        if with_1hr:
+            down_1hr = sum(1 for d in with_1hr if d['one_hr_change'] < 0)
+            avg_1hr = sum(d['one_hr_change'] for d in with_1hr) / len(with_1hr) * 100
+            print(f'    At 1hr: {down_1hr}/{len(with_1hr)} still negative, avg {avg_1hr:+.2f}%')
+
+        print(f'\n    Examples:')
+        print(f"    {'DATE':<12} {'TICKER':<8} {'GAP':>6} {'1stBAR':>8} {'1HR':>8} {'EOD':>8} {'MKT':>8}")
+        print(f"    {'-'*62}")
+        for d in sorted(red_first, key=lambda x: x['day'], reverse=True)[:15]:
+            fb = 'RED'
+            o1 = f"{d['one_hr_change']*100:+.1f}%" if d['one_hr_change'] is not None else '—'
+            result = 'PUT WIN' if d['day_close'] < d['day_open'] else 'LOSS'
+            print(f"    {str(d['day']):<12} {d['ticker']:<8} {d['gap_pct']*100:>5.1f}% {fb:>8} {o1:>8} {d['eod_change']*100:>+7.1f}% {d['mkt_change']*100:>+7.1f}%")
+
+    # ── GREEN FIRST CANDLE → CALL SIGNAL ──
+    if green_first:
+        call_wins = sum(1 for d in green_first if d['day_close'] > d['day_open'])
+        eods = sorted([d['eod_change'] * 100 for d in green_first])
+
+        print(f'\n  GREEN FIRST CANDLE → CALL:')
+        print(f'    Sample:        {len(green_first)}')
+        print(f'    Call win rate:  {call_wins/len(green_first)*100:.1f}% ({call_wins}/{len(green_first)})')
+        print(f'    EOD return distribution:')
+        print(f'      Worst:  {eods[0]:+.2f}%  |  P25: {pctl(eods,25):+.2f}%  |  Median: {pctl(eods,50):+.2f}%')
+        print(f'      P75: {pctl(eods,75):+.2f}%  |  Best: {eods[-1]:+.2f}%  |  Mean: {sum(eods)/len(eods):+.2f}%')
+
+        print(f'\n    Examples:')
+        print(f"    {'DATE':<12} {'TICKER':<8} {'GAP':>6} {'1stBAR':>8} {'1HR':>8} {'EOD':>8} {'MKT':>8}")
+        print(f"    {'-'*62}")
+        for d in sorted(green_first, key=lambda x: x['day'], reverse=True)[:15]:
+            o1 = f"{d['one_hr_change']*100:+.1f}%" if d['one_hr_change'] is not None else '—'
+            print(f"    {str(d['day']):<12} {d['ticker']:<8} {d['gap_pct']*100:>5.1f}% {'GREEN':>8} {o1:>8} {d['eod_change']*100:>+7.1f}% {d['mkt_change']*100:>+7.1f}%")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 26) PRE-MARKET MOVERS ON GREEN DAYS — open >2% above prev close
+# ─────────────────────────────────────────────────────────────────────────────
+def green_day_premarket_movers():
+    import statistics
+
+    print('=' * 70)
+    print('26) PRE-MARKET MOVERS — open >2% above prev close on green days')
+    print('=' * 70)
+
+    green_days, ticker_daily, ticker_1hr, ticker_2hr = _build_green_day_data()
+
+    if not green_days:
+        print('  No green days found.')
+        return
+
+    # Any ticker that opened >2% above prev close on a green day
+    movers = []
+    for r in ticker_daily:
+        day = r['day']
+        if day not in green_days:
+            continue
+        prev = float(r['prev_close'])
+        day_open = float(r['day_open'])
+        day_close = float(r['day_close'])
+        if prev <= 0:
+            continue
+        premarket_gap = (day_open - prev) / prev
+        if premarket_gap <= 0.02:
+            continue
+
+        one_hr = ticker_1hr.get((r['ticker'], day))
+        two_hr = ticker_2hr.get((r['ticker'], day))
+
+        movers.append({
+            'ticker': r['ticker'],
+            'day': day,
+            'prev_close': prev,
+            'day_open': day_open,
+            'day_close': day_close,
+            'premarket_gap': premarket_gap,
+            'eod_change': (day_close - day_open) / day_open,
+            'one_hr': one_hr,
+            'one_hr_change': (one_hr - day_open) / day_open if one_hr else None,
+            'two_hr': two_hr,
+            'two_hr_change': (two_hr - day_open) / day_open if two_hr else None,
+            'mkt_change': green_days[day],
+        })
+
+    print(f'\n  Tickers up >2% pre-market on green days: {len(movers)}')
+    if not movers:
+        print('  (none found)')
+        return
+
+    # Does pre-market strength continue or fade?
+    eods = sorted([d['eod_change'] * 100 for d in movers])
+    faded = sum(1 for d in movers if d['eod_change'] < 0)  # opened up, closed below open
+    continued = sum(1 for d in movers if d['eod_change'] > 0)
+
+    print(f'\n  INTRADAY OUTCOME (from open):')
+    print(f'    Continued up (close > open): {continued}/{len(movers)} ({continued/len(movers)*100:.1f}%)')
+    print(f'    Faded (close < open):        {faded}/{len(movers)} ({faded/len(movers)*100:.1f}%)')
+    print(f'    EOD distribution:')
+    print(f'      Worst:  {eods[0]:+.2f}%  |  P25: {pctl(eods,25):+.2f}%  |  Median: {pctl(eods,50):+.2f}%')
+    print(f'      P75: {pctl(eods,75):+.2f}%  |  Best: {eods[-1]:+.2f}%  |  Mean: {sum(eods)/len(eods):+.2f}%')
+
+    # First hour
+    with_1hr = [d for d in movers if d['one_hr_change'] is not None]
+    if with_1hr:
+        hrs = sorted([d['one_hr_change'] * 100 for d in with_1hr])
+        up_1hr = sum(1 for d in with_1hr if d['one_hr_change'] > 0)
+        print(f'\n  FIRST HOUR (from open):')
+        print(f'    Still up:  {up_1hr}/{len(with_1hr)} ({up_1hr/len(with_1hr)*100:.1f}%)')
+        print(f'    Median: {pctl(hrs,50):+.2f}%  |  Mean: {sum(hrs)/len(hrs):+.2f}%')
+
+    # By gap size
+    print(f'\n  By pre-market gap size:')
+    for lo, hi, label in [(0.02, 0.03, '2-3%'), (0.03, 0.05, '3-5%'), (0.05, 1.0, '5%+')]:
+        bucket = [d for d in movers if lo <= d['premarket_gap'] < hi]
+        if bucket:
+            bfaded = sum(1 for d in bucket if d['eod_change'] < 0)
+            bavg = sum(d['eod_change'] for d in bucket) / len(bucket) * 100
+            print(f'    {label}: {len(bucket)} days, faded {bfaded/len(bucket)*100:.0f}%, avg EOD {bavg:+.2f}%')
+
+    # Concentration
+    unique_days = sorted(set(d['day'] for d in movers))
+    print(f'\n  Concentration: {len(movers)} signals across {len(unique_days)} days')
+
+    # Examples
+    movers.sort(key=lambda x: x['day'], reverse=True)
+    print(f'\n  Recent examples:')
+    print(f"  {'DATE':<12} {'TICKER':<8} {'GAP':>6} {'1HR':>8} {'EOD':>8} {'MKT':>8} {'RESULT':>8}")
+    print(f"  {'-'*62}")
+    for d in movers[:20]:
+        o1 = f"{d['one_hr_change']*100:+.1f}%" if d['one_hr_change'] is not None else '—'
+        result = 'CONT' if d['eod_change'] > 0 else 'FADE'
+        print(f"  {str(d['day']):<12} {d['ticker']:<8} {d['premarket_gap']*100:>5.1f}% {o1:>8} {d['eod_change']*100:>+7.1f}% {d['mkt_change']*100:>+7.1f}% {result:>8}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 27) SECTOR ROTATION — red-at-open on a green day: bounce or put?
+# ─────────────────────────────────────────────────────────────────────────────
+def green_day_sector_rotation():
+    import statistics
+
+    print('=' * 70)
+    print('27) SECTOR ROTATION — ticker DOWN >1% at open on a GREEN day')
+    print('=' * 70)
+
+    green_days, ticker_daily, ticker_1hr, ticker_2hr = _build_green_day_data()
+
+    if not green_days:
+        print('  No green days found.')
+        return
+
+    # Ticker gapped DOWN >1% from prev close on a green day
+    red_opens = []
+    for r in ticker_daily:
+        day = r['day']
+        if day not in green_days:
+            continue
+        prev = float(r['prev_close'])
+        day_open = float(r['day_open'])
+        day_close = float(r['day_close'])
+        if prev <= 0:
+            continue
+        gap_pct = (day_open - prev) / prev
+        if gap_pct >= -0.01:
+            continue  # not down enough
+
+        one_hr = ticker_1hr.get((r['ticker'], day))
+        two_hr = ticker_2hr.get((r['ticker'], day))
+
+        red_opens.append({
+            'ticker': r['ticker'],
+            'day': day,
+            'prev_close': prev,
+            'day_open': day_open,
+            'day_close': day_close,
+            'gap_pct': gap_pct,
+            'eod_change': (day_close - day_open) / day_open,
+            'eod_vs_prev': (day_close - prev) / prev,
+            'one_hr': one_hr,
+            'one_hr_change': (one_hr - day_open) / day_open if one_hr else None,
+            'two_hr': two_hr,
+            'two_hr_change': (two_hr - day_open) / day_open if two_hr else None,
+            'mkt_change': green_days[day],
+        })
+
+    print(f'\n  Tickers down >1% at open on green days: {len(red_opens)}')
+    if not red_opens:
+        print('  (none found)')
+        return
+
+    # Key question: did they bounce or keep falling?
+    bounced = sum(1 for d in red_opens if d['eod_change'] > 0)  # close > open = intraday recovery
+    kept_falling = sum(1 for d in red_opens if d['eod_change'] < 0)
+
+    eods = sorted([d['eod_change'] * 100 for d in red_opens])
+
+    print(f'\n  INTRADAY OUTCOME (from open):')
+    print(f'    Bounced (close > open):    {bounced}/{len(red_opens)} ({bounced/len(red_opens)*100:.1f}%)')
+    print(f'    Kept falling (close < open): {kept_falling}/{len(red_opens)} ({kept_falling/len(red_opens)*100:.1f}%)')
+    print(f'\n    EOD return from open:')
+    print(f'      Worst:  {eods[0]:+.2f}%  |  P25: {pctl(eods,25):+.2f}%  |  Median: {pctl(eods,50):+.2f}%')
+    print(f'      P75: {pctl(eods,75):+.2f}%  |  Best: {eods[-1]:+.2f}%  |  Mean: {sum(eods)/len(eods):+.2f}%')
+
+    # Put win = close < open (continued falling from already-red open)
+    print(f'\n    PUT signal: {kept_falling/len(red_opens)*100:.1f}% win rate')
+    print(f'    CALL signal (bounce): {bounced/len(red_opens)*100:.1f}% win rate')
+
+    # First hour
+    with_1hr = [d for d in red_opens if d['one_hr_change'] is not None]
+    if with_1hr:
+        hrs = sorted([d['one_hr_change'] * 100 for d in with_1hr])
+        up_1hr = sum(1 for d in with_1hr if d['one_hr_change'] > 0)
+        down_1hr = sum(1 for d in with_1hr if d['one_hr_change'] < 0)
+        print(f'\n  FIRST HOUR from open:')
+        print(f'    Recovered (up): {up_1hr}/{len(with_1hr)} ({up_1hr/len(with_1hr)*100:.1f}%)')
+        print(f'    Fell more:      {down_1hr}/{len(with_1hr)} ({down_1hr/len(with_1hr)*100:.1f}%)')
+        print(f'    Median: {pctl(hrs,50):+.2f}%  |  Mean: {sum(hrs)/len(hrs):+.2f}%')
+
+    # 2hr mark
+    with_2hr = [d for d in red_opens if d['two_hr_change'] is not None]
+    if with_2hr:
+        hrs = sorted([d['two_hr_change'] * 100 for d in with_2hr])
+        up_2hr = sum(1 for d in with_2hr if d['two_hr_change'] > 0)
+        print(f'\n  AT 2HR from open:')
+        print(f'    Recovered (up): {up_2hr}/{len(with_2hr)} ({up_2hr/len(with_2hr)*100:.1f}%)')
+        print(f'    Median: {pctl(hrs,50):+.2f}%  |  Mean: {sum(hrs)/len(hrs):+.2f}%')
+
+    # By gap severity
+    print(f'\n  By gap-down severity:')
+    for lo, hi, label in [(-0.02, -0.01, '1-2% down'), (-0.03, -0.02, '2-3% down'), (-1.0, -0.03, '3%+ down')]:
+        bucket = [d for d in red_opens if lo <= d['gap_pct'] < hi]
+        if bucket:
+            bbounced = sum(1 for d in bucket if d['eod_change'] > 0)
+            bavg = sum(d['eod_change'] for d in bucket) / len(bucket) * 100
+            print(f'    {label}: {len(bucket)} days, bounced {bbounced/len(bucket)*100:.0f}%, avg EOD from open {bavg:+.2f}%')
+
+    # Did any close ABOVE prev close (full recovery)?
+    full_recovery = sum(1 for d in red_opens if d['day_close'] > d['prev_close'])
+    print(f'\n  Full recovery (close > prev close): {full_recovery}/{len(red_opens)} ({full_recovery/len(red_opens)*100:.1f}%)')
+
+    # Concentration
+    unique_days = sorted(set(d['day'] for d in red_opens))
+    unique_tickers = set(d['ticker'] for d in red_opens)
+    print(f'\n  Concentration: {len(red_opens)} signals across {len(unique_days)} days, {len(unique_tickers)} tickers')
+
+    # Examples
+    red_opens.sort(key=lambda x: x['day'], reverse=True)
+    print(f'\n  Recent examples:')
+    print(f"  {'DATE':<12} {'TICKER':<8} {'GAP':>7} {'1HR':>8} {'2HR':>8} {'EOD':>8} {'MKT':>8} {'RESULT':>8}")
+    print(f"  {'-'*72}")
+    for d in red_opens[:20]:
+        o1 = f"{d['one_hr_change']*100:+.1f}%" if d['one_hr_change'] is not None else '—'
+        o2 = f"{d['two_hr_change']*100:+.1f}%" if d['two_hr_change'] is not None else '—'
+        result = 'BOUNCE' if d['eod_change'] > 0 else 'PUT WIN'
+        print(f"  {str(d['day']):<12} {d['ticker']:<8} {d['gap_pct']*100:>+6.1f}% {o1:>8} {o2:>8} {d['eod_change']*100:>+7.1f}% {d['mkt_change']*100:>+7.1f}% {result:>8}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     try:
-        full_universe_deterioration()
+        green_day_gap_ups()
+        print('\n')
+        green_day_premarket_movers()
+        print('\n')
+        green_day_sector_rotation()
     finally:
         cur.close()
         conn.close()
