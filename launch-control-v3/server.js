@@ -234,7 +234,7 @@ app.get('/api/debug/accuracy', async (req, res) => {
         SELECT signal_id, ticker, direction, price_at_signal, created_at,
                created_at + INTERVAL '60 minutes' AS target_ts
         FROM lc_v3.signals
-        WHERE DATE(created_at AT TIME ZONE 'America/New_York') = '2026-03-16'
+        WHERE DATE(created_at AT TIME ZONE 'America/New_York') IN ('2026-03-12', '2026-03-13')
           AND price_at_signal IS NOT NULL
       ),
       matched AS (
