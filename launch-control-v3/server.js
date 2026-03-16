@@ -105,6 +105,7 @@ app.get('/api/signals', async (req, res) => {
       peak_grade:        s.peak_grade                  || null,
       composite_history: s.composite_history            || [],
       momentum_trend:    s.momentum_trend              || null,
+      strategy:          ((s.news_headline || '').match(/strategy=(\w+)/) || [])[1] || null,
       // Intelligence overlay
       earnings_date:     s.earnings_date               || null,
       earnings_days_away: s.earnings_days_away != null ? Number(s.earnings_days_away) : null,

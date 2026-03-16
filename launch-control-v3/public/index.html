@@ -601,6 +601,7 @@ function buildIntelBar(s) {
 }
 
 function parseStrategy(s) {
+  if (s.strategy) return s.strategy;
   const hl = s.news_headline || '';
   const m = hl.match(/strategy=(\w+)/);
   return m ? m[1] : null;
