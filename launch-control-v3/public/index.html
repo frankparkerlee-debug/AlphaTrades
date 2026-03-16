@@ -424,8 +424,7 @@ body::after {
       <button class="filter-btn"        onclick="grade('B+',this)">B+</button>
       <button class="filter-btn"        onclick="grade('B',this)">B</button>
       <div class="filter-divider"></div>
-      <button class="filter-btn on-blue" onclick="strat('all',this)">ALL STRATS</button>
-      <button class="filter-btn"         onclick="strat('MOMENTUM',this)">MOMENTUM</button>
+      <button class="filter-btn on-blue" onclick="strat('all',this)">ALL</button>
       <button class="filter-btn"         onclick="strat('GAP_REVERSAL',this)">GAP REV</button>
       <button class="filter-btn"         onclick="strat('CAPITULATION_BOUNCE',this)">CAPIT</button>
       <button class="filter-btn"         onclick="strat('VOL_DROP_PUT',this)">VOL PUT</button>
@@ -533,7 +532,7 @@ function grade(v, btn) {
 function strat(v, btn) {
   stratF = v;
   document.querySelectorAll('#filterBar .filter-btn').forEach(b => {
-    if (['ALL STRATS','MOMENTUM','GAP REV','CAPIT','VOL PUT','CONSEC','SECTOR'].includes(b.textContent)) b.classList.remove('on-blue');
+    if (['ALL','GAP REV','CAPIT','VOL PUT','CONSEC','SECTOR'].includes(b.textContent)) b.classList.remove('on-blue');
   });
   btn.classList.add('on-blue');
   render();
