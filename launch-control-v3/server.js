@@ -248,10 +248,23 @@ app.get('/api/debug/accuracy', async (req, res) => {
         JOIN lc_v3.bars b ON b.ticker = s.ticker
           AND b.ts BETWEEN s.created_at + INTERVAL '55 minutes'
                        AND s.created_at + INTERVAL '65 minutes'
-          AND b.session = 'REGULAR'
         ORDER BY s.signal_id, ABS(EXTRACT(EPOCH FROM (b.ts - s.target_ts)))
+      ),
+      debug_info AS (
+        SELECT s.signal_id, s.ticker, s.created_at, s.price_at_signal,
+          (SELECT MIN(ts) FROM lc_v3.bars WHERE ticker = s.ticker AND DATE(ts) = DATE(s.created_at)) AS first_bar,
+          (SELECT MAX(ts) FROM lc_v3.bars WHERE ticker = s.ticker AND DATE(ts) = DATE(s.created_at)) AS last_bar,
+          (SELECT COUNT(*) FROM lc_v3.bars WHERE ticker = s.ticker AND DATE(ts) = DATE(s.created_at)) AS bar_count
+        FROM signals_today s
+        LIMIT 5
       )
-      SELECT * FROM matched ORDER BY created_at
+      SELECT 'matched' as src, m.* FROM matched m
+      UNION ALL
+      SELECT 'debug' as src, d.signal_id, d.ticker, 'DBG' as direction,
+             d.price_at_signal, d.created_at, NULL as price_60min,
+             d.first_bar as bar_ts
+      FROM debug_info d
+      ORDER BY src, created_at
     `);
     res.json({ rows: result.rows, count: result.rows.length });
   } catch (err) { res.json({ error: err.message }); }
