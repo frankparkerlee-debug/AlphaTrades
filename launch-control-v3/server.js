@@ -226,6 +226,37 @@ app.post('/api/edit', async (req, res) => {
 // Health check
 app.get('/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
+// Temporary: signal accuracy analysis
+app.get('/api/debug/accuracy', async (req, res) => {
+  try {
+    const result = await db.query(`
+      WITH signals_today AS (
+        SELECT signal_id, ticker, direction, price_at_signal, created_at,
+               created_at + INTERVAL '60 minutes' AS target_ts
+        FROM lc_v3.signals
+        WHERE DATE(created_at AT TIME ZONE 'America/New_York') = '2026-03-16'
+          AND price_at_signal IS NOT NULL
+      ),
+      matched AS (
+        SELECT DISTINCT ON (s.signal_id)
+          s.signal_id, s.ticker, s.direction,
+          s.price_at_signal,
+          s.created_at,
+          b.close AS price_60min,
+          b.ts AS bar_ts
+        FROM signals_today s
+        JOIN lc_v3.bars b ON b.ticker = s.ticker
+          AND b.ts BETWEEN s.created_at + INTERVAL '55 minutes'
+                       AND s.created_at + INTERVAL '65 minutes'
+          AND b.session = 'REGULAR'
+        ORDER BY s.signal_id, ABS(EXTRACT(EPOCH FROM (b.ts - s.target_ts)))
+      )
+      SELECT * FROM matched ORDER BY created_at
+    `);
+    res.json({ rows: result.rows, count: result.rows.length });
+  } catch (err) { res.json({ error: err.message }); }
+});
+
 // Debug endpoint — test contract selector on live Render
 // Snapshot scan — intraday movers
 app.get('/api/snapshots', async (req, res) => {
