@@ -229,44 +229,38 @@ app.get('/health', (req, res) => res.json({ ok: true, time: new Date().toISOStri
 // Temporary: signal accuracy analysis
 app.get('/api/debug/accuracy', async (req, res) => {
   try {
-    const result = await db.query(`
-      WITH signals_today AS (
-        SELECT signal_id, ticker, direction, price_at_signal, created_at,
-               created_at + INTERVAL '60 minutes' AS target_ts
-        FROM lc_v3.signals
-        WHERE DATE(created_at AT TIME ZONE 'America/New_York') IN ('2026-03-12', '2026-03-13')
-          AND price_at_signal IS NOT NULL
-      ),
-      matched AS (
-        SELECT DISTINCT ON (s.signal_id)
-          s.signal_id, s.ticker, s.direction,
-          s.price_at_signal,
-          s.created_at,
-          b.close AS price_60min,
-          b.ts AS bar_ts
-        FROM signals_today s
-        JOIN lc_v3.bars b ON b.ticker = s.ticker
-          AND b.ts BETWEEN s.created_at + INTERVAL '55 minutes'
-                       AND s.created_at + INTERVAL '65 minutes'
-        ORDER BY s.signal_id, ABS(EXTRACT(EPOCH FROM (b.ts - s.target_ts)))
-      ),
-      debug_info AS (
-        SELECT s.signal_id, s.ticker, s.created_at, s.price_at_signal,
-          (SELECT MIN(ts) FROM lc_v3.bars WHERE ticker = s.ticker AND DATE(ts) = DATE(s.created_at)) AS first_bar,
-          (SELECT MAX(ts) FROM lc_v3.bars WHERE ticker = s.ticker AND DATE(ts) = DATE(s.created_at)) AS last_bar,
-          (SELECT COUNT(*) FROM lc_v3.bars WHERE ticker = s.ticker AND DATE(ts) = DATE(s.created_at)) AS bar_count
-        FROM signals_today s
-        LIMIT 5
-      )
-      SELECT 'matched' as src, m.* FROM matched m
-      UNION ALL
-      SELECT 'debug' as src, d.signal_id, d.ticker, 'DBG' as direction,
-             d.price_at_signal, d.created_at, NULL as price_60min,
-             d.first_bar as bar_ts
-      FROM debug_info d
-      ORDER BY src, created_at
+    // Step 1: Get signals
+    const sigRes = await db.query(`
+      SELECT signal_id, ticker, direction, price_at_signal, created_at
+      FROM lc_v3.signals
+      WHERE created_at >= '2026-03-12' AND created_at < '2026-03-14'
+      ORDER BY created_at
     `);
-    res.json({ rows: result.rows, count: result.rows.length });
+    const signals = sigRes.rows;
+
+    // Step 2: For each signal, find closest bar ~60min later
+    const results = [];
+    for (const sig of signals) {
+      const barRes = await db.query(`
+        SELECT close, ts FROM lc_v3.bars
+        WHERE ticker = $1
+          AND ts BETWEEN $2::timestamptz + INTERVAL '50 minutes'
+                     AND $2::timestamptz + INTERVAL '70 minutes'
+        ORDER BY ABS(EXTRACT(EPOCH FROM (ts - ($2::timestamptz + INTERVAL '60 minutes'))))
+        LIMIT 1
+      `, [sig.ticker, sig.created_at]);
+
+      results.push({
+        ticker: sig.ticker,
+        direction: sig.direction,
+        price_at_signal: sig.price_at_signal,
+        created_at: sig.created_at,
+        price_60min: barRes.rows[0]?.close || null,
+        bar_ts: barRes.rows[0]?.ts || null,
+      });
+    }
+
+    res.json({ signals_found: signals.length, matched: results.filter(r => r.price_60min).length, rows: results });
   } catch (err) { res.json({ error: err.message }); }
 });
 
