@@ -535,6 +535,92 @@ app.get('/api/seed-macro/status', (req, res) => {
   res.json({ running: macroRunning, result: macroResult });
 });
 
+// Seed conviction universe fundamentals
+let convictionRunning = false;
+let convictionResult = null;
+app.post('/api/seed-conviction', async (req, res) => {
+  if (convictionRunning) return res.json({ ok: false, error: 'Already running' });
+  convictionRunning = true;
+  convictionResult = null;
+  res.json({ ok: true, message: 'Conviction fundamentals seed started' });
+
+  const FMP_KEY = process.env.FMP_API_KEY;
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  try {
+    const tickerRes = await db.query('SELECT ticker FROM lc_v3.conviction_universe ORDER BY ticker');
+    const tickers = tickerRes.rows.map(r => r.ticker);
+    console.log(`[CONV-FUND] ${tickers.length} tickers to process`);
+
+    let inserted = 0;
+    for (let i = 0; i < tickers.length; i += 5) {
+      const batch = tickers.slice(i, i + 5);
+      await Promise.all(batch.map(async (ticker) => {
+        try {
+          await sleep(400);
+          const [incRes, cfRes] = await Promise.all([
+            axios.get(`https://financialmodelingprep.com/stable/income-statement?symbol=${ticker}&period=quarter&limit=8&apikey=${FMP_KEY}`, { timeout: 15000 }),
+            axios.get(`https://financialmodelingprep.com/stable/cash-flow-statement?symbol=${ticker}&period=quarter&limit=8&apikey=${FMP_KEY}`, { timeout: 15000 }),
+          ]);
+          const income = incRes.data || [];
+          const cashflow = cfRes.data || [];
+          if (!Array.isArray(income) || income.length === 0) return;
+
+          const cfMap = {};
+          if (Array.isArray(cashflow)) {
+            for (const cf of cashflow) cfMap[cf.period] = cf;
+          }
+
+          for (const q of income) {
+            if (!q.period) continue;
+            const cf = cfMap[q.period] || {};
+            const grossMargin = q.revenue && q.revenue !== 0 ? parseFloat((q.grossProfit / q.revenue).toFixed(4)) : null;
+            const opMargin = q.revenue && q.revenue !== 0 ? parseFloat((q.operatingIncome / q.revenue).toFixed(4)) : null;
+
+            await db.query(`
+              INSERT INTO lc_v3.fundamentals (
+                ticker, period, revenue, gross_profit, operating_income, net_income,
+                free_cash_flow, gross_margin, operating_margin,
+                accounts_receivable, inventory, total_debt, cash_and_equivalents, reported_at
+              ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+              ON CONFLICT (ticker, period) DO UPDATE SET
+                revenue = EXCLUDED.revenue, gross_profit = EXCLUDED.gross_profit,
+                operating_income = EXCLUDED.operating_income, net_income = EXCLUDED.net_income,
+                free_cash_flow = EXCLUDED.free_cash_flow, gross_margin = EXCLUDED.gross_margin,
+                operating_margin = EXCLUDED.operating_margin, accounts_receivable = EXCLUDED.accounts_receivable,
+                inventory = EXCLUDED.inventory, total_debt = EXCLUDED.total_debt,
+                cash_and_equivalents = EXCLUDED.cash_and_equivalents, reported_at = EXCLUDED.reported_at
+            `, [
+              ticker, q.period, q.revenue ?? null, q.grossProfit ?? null,
+              q.operatingIncome ?? null, q.netIncome ?? null, cf.freeCashFlow ?? null,
+              grossMargin, opMargin, cf.accountsReceivables ?? null,
+              cf.inventory ?? null, cf.totalDebt ?? cf.netDebt ?? null,
+              cf.cashAtEndOfPeriod ?? null, q.date || null,
+            ]);
+            inserted++;
+          }
+          console.log(`[CONV-FUND] ${ticker} done`);
+        } catch (err) {
+          console.error(`[CONV-FUND] ${ticker} error: ${err.message}`);
+        }
+      }));
+
+      if ((i + 5) % 50 === 0) console.log(`[CONV-FUND] Progress: ${i + 5}/${tickers.length}, ${inserted} rows`);
+    }
+
+    convictionResult = { ok: true, tickers: tickers.length, rows: inserted };
+    console.log(`[CONV-FUND] Done — ${inserted} rows inserted for ${tickers.length} tickers`);
+  } catch (err) {
+    convictionResult = { ok: false, error: err.message };
+    console.error('[CONV-FUND] FATAL:', err.message);
+  } finally {
+    convictionRunning = false;
+  }
+});
+app.get('/api/seed-conviction/status', (req, res) => {
+  res.json({ running: convictionRunning, result: convictionResult });
+});
+
 // Backtest status
 let backtestError = null;
 app.get('/api/backtest/status', (req, res) => {
