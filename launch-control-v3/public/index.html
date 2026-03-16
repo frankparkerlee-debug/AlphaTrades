@@ -203,6 +203,28 @@ body::after {
 .pos-label { font-size: 9px; color: var(--text3); }
 .pos-value { font-family: var(--mono); font-size: 13px; font-weight: 700; }
 
+/* Strategy banner */
+.strat-banner {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 10px; margin: -10px -12px 10px -12px; border-radius: 6px 6px 0 0;
+  font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+}
+.strat-badge { display: flex; align-items: center; gap: 6px; }
+.strat-hold { font-size: 9px; font-weight: 500; opacity: 0.8; }
+.strat-gap     { background: rgba(16,185,129,0.1); color: var(--green); border-bottom: 3px solid var(--green); }
+.strat-cap     { background: rgba(59,130,246,0.1); color: var(--blue); border-bottom: 3px solid var(--blue); }
+.strat-vdp     { background: rgba(239,68,68,0.1); color: var(--red); border-bottom: 3px solid var(--red); }
+.strat-consec  { background: rgba(139,92,246,0.1); color: var(--purple); border-bottom: 3px solid var(--purple); }
+.strat-momentum{ background: rgba(245,158,11,0.08); color: var(--amber); border-bottom: 3px solid var(--amber); }
+
+/* Hold instruction */
+.hold-instruction {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 4px;
+  padding: 8px 12px; margin-bottom: 8px;
+  font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+}
+
 /* Contract */
 .contract-row {
   background: var(--bg3); border-radius: 4px; padding: 10px 12px; margin-bottom: 8px;
@@ -566,6 +588,38 @@ function buildIntelBar(s) {
   return `<div style="display:flex;gap:8px;flex-wrap:wrap;font-family:var(--mono);font-size:9px;margin:3px 0;padding:3px 6px;background:rgba(255,255,255,0.03);border-radius:3px">${items.join('<span style="color:var(--text4)">·</span>')}</div>`;
 }
 
+function parseStrategy(s) {
+  const hl = s.news_headline || '';
+  const m = hl.match(/strategy=(\w+)/);
+  return m ? m[1] : null;
+}
+
+function buildStratBanner(strategy) {
+  const map = {
+    GAP_REVERSAL:       { cls: 'strat-gap',    label: 'GAP REVERSAL', win: '83.9% WIN', hold: '' },
+    CAPITULATION_BOUNCE:{ cls: 'strat-cap',    label: 'CAPITULATION', win: '72% WIN', hold: 'OVERNIGHT HOLD' },
+    VOL_DROP_PUT:       { cls: 'strat-vdp',    label: 'VOL DROP PUT', win: '57% WIN', hold: 'PUT · OVERNIGHT' },
+    CONSEC_BOUNCE:      { cls: 'strat-consec', label: 'CONSEC BOUNCE', win: '64-85%', hold: 'MULTI-DAY HOLD' },
+  };
+  const info = map[strategy];
+  if (!info) {
+    return `<div class="strat-banner strat-momentum"><span class="strat-badge">MOMENTUM · UNVALIDATED</span></div>`;
+  }
+  return `<div class="strat-banner ${info.cls}"><span class="strat-badge">${info.label} · ${info.win}</span>${info.hold ? `<span class="strat-hold">${info.hold}</span>` : ''}</div>`;
+}
+
+function buildHoldInstruction(strategy, createdAt) {
+  if (strategy === 'GAP_REVERSAL') {
+    const exit = new Date(new Date(createdAt).getTime() + 90 * 60000);
+    const exitCT = exit.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago' });
+    return `<div class="hold-instruction" style="color:var(--green)">EXIT BY ${exitCT} CT</div>`;
+  }
+  if (strategy === 'CAPITULATION_BOUNCE') return `<div class="hold-instruction" style="color:var(--blue)">EXIT AT TOMORROW OPEN</div>`;
+  if (strategy === 'VOL_DROP_PUT') return `<div class="hold-instruction" style="color:var(--red)">EXIT AT TOMORROW OPEN</div>`;
+  if (strategy === 'CONSEC_BOUNCE') return `<div class="hold-instruction" style="color:var(--purple)">EXIT WITHIN 3 DAYS</div>`;
+  return '';
+}
+
 function buildCard(s) {
   const g = gc(s.grade);
   const c = col(s.grade);
@@ -575,6 +629,7 @@ function buildCard(s) {
   const isBreakdown = s.status === 'BREAKDOWN';
   const isTarget    = s.status === 'TARGET_ZONE';
   const dir = (s.direction||'CALL').toLowerCase();
+  const strategy = parseStrategy(s);
 
   // Status overlay for monitored signals
   const statusOverlay = isBreakdown
@@ -651,6 +706,7 @@ function buildCard(s) {
   return `
   <div class="card ${g}${stale?' stale':''}${isBreakdown?' breakdown-card':''}${isWeakening?' weakening-card':''}" id="card-${s.signal_id}">
     <div class="card-glow"></div>
+    ${buildStratBanner(strategy)}
     ${statusOverlay}
     <div class="card-head">
       <div class="card-left">
@@ -711,6 +767,7 @@ function buildCard(s) {
     ${mkt?`<div class="ctx-line">${mkt}</div>`:''}
     ${buildIntelBar(s)}
     ${contract}
+    ${buildHoldInstruction(strategy, s.created_at)}
     ${(() => {
       const gradeSize = {'A+':0.20,'A':0.15,'A-':0.10,'B+':0.07,'B':0.05}[s.grade] || 0.05;
       const deployDollars = Math.round(ACCOUNT * gradeSize);
