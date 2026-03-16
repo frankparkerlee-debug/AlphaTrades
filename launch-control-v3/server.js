@@ -13,6 +13,7 @@ import { runBacktest } from './scripts/backtest/run.js';
 import { scanGapReversal } from './src/strategies/gap-reversal.js';
 import { scanCapitulationBounce } from './src/strategies/capitulation-bounce.js';
 import { scanVolumeDropPut } from './src/strategies/volume-drop-put.js';
+import { scanConsecutiveDrop } from './src/strategies/consecutive-drop.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app  = express();
@@ -1479,11 +1480,38 @@ async function startRestPoller() {
             }
           }
 
-          // Run all three scanners
+          // Build dailyBars for consecutive-drop scanner (last 5 daily bars per ticker from Alpaca)
+          const dailyBars = {};
+          try {
+            const dbRes = await db.query(`
+              SELECT ticker, DATE(ts AT TIME ZONE 'America/New_York') as day,
+                     (array_agg(open ORDER BY ts))[1] as o,
+                     MAX(high) as h, MIN(low) as l,
+                     (array_agg(close ORDER BY ts DESC))[1] as c,
+                     SUM(volume) as v
+              FROM lc_v3.bars
+              WHERE session = 'REGULAR'
+                AND ts >= NOW() - INTERVAL '10 days'
+              GROUP BY ticker, DATE(ts AT TIME ZONE 'America/New_York')
+              ORDER BY ticker, day
+            `);
+            for (const row of dbRes.rows) {
+              if (!dailyBars[row.ticker]) dailyBars[row.ticker] = [];
+              dailyBars[row.ticker].push({
+                day: row.day, o: parseFloat(row.o), h: parseFloat(row.h),
+                l: parseFloat(row.l), c: parseFloat(row.c), v: parseInt(row.v),
+              });
+            }
+          } catch (dbErr) {
+            console.error('[STRATEGY] Daily bars query error:', dbErr.message);
+          }
+
+          // Run all four scanners
           const gapSignals = scanGapReversal(stratSnapshots, prevCloses, firstCandles);
           const capSignals = scanCapitulationBounce(stratSnapshots, prevCloses, volumeBaselines);
           const putSignals = scanVolumeDropPut(stratSnapshots, prevCloses, volumeBaselines);
-          const allStratSignals = [...gapSignals, ...capSignals, ...putSignals];
+          const consecSignals = scanConsecutiveDrop(Object.keys(allSnaps), dailyBars);
+          const allStratSignals = [...gapSignals, ...capSignals, ...putSignals, ...consecSignals];
 
           for (const sig of allStratSignals) {
             // Dedup: skip if strategy signal already exists today for this ticker+direction+strategy
@@ -1496,13 +1524,34 @@ async function startRestPoller() {
             `, [sig.ticker, sig.direction, `%strategy=${sig.strategy}%`]);
             if (dupCheck.rows.length > 0) continue;
 
-            const compositeRaw = sig.strategy === 'GAP_REVERSAL' ? 85
-                               : sig.strategy === 'CAPITULATION_BOUNCE' ? 72
-                               : 57;
+            let compositeRaw = sig.strategy === 'GAP_REVERSAL' ? 85
+                             : sig.strategy === 'CAPITULATION_BOUNCE' ? 72
+                             : sig.strategy === 'CONSEC_BOUNCE' ? (sig.consecutive_days >= 3 ? 85 : 64)
+                             : 57;
+
+            // Pre-earnings filter: reduce confidence if earnings within 5 days
+            let nearEarnings = false;
+            try {
+              const eiRes = await db.query(
+                `SELECT earnings_date FROM lc_v3.ticker_intelligence WHERE ticker = $1`,
+                [sig.ticker]
+              );
+              if (eiRes.rows.length > 0 && eiRes.rows[0].earnings_date) {
+                const earningsDate = new Date(eiRes.rows[0].earnings_date);
+                const daysUntil = Math.round((earningsDate - new Date()) / 86400000);
+                if (daysUntil >= 0 && daysUntil <= 5) {
+                  compositeRaw -= 15;
+                  nearEarnings = true;
+                }
+              }
+            } catch (eiErr) {
+              // Non-fatal — skip earnings check
+            }
 
             const signalNote = [
               `strategy=${sig.strategy}`,
               `confidence=${sig.confidence}%`,
+              nearEarnings ? 'NEAR_EARNINGS' : null,
               sig.gap_pct != null ? `gap=${sig.gap_pct}%` : null,
               sig.intraday_drop_pct != null ? `drop=${sig.intraday_drop_pct}%` : null,
               sig.volume_ratio != null ? `volRatio=${sig.volume_ratio}x` : null,
@@ -1512,6 +1561,9 @@ async function startRestPoller() {
               sig.exit_by ? `exitBy=${sig.exit_by}` : null,
               sig.exit_at ? `exitAt=${sig.exit_at}` : null,
               sig.hold ? `hold=${sig.hold}` : null,
+              sig.consecutive_days ? `consec=${sig.consecutive_days}d` : null,
+              sig.total_drop_pct != null ? `totalDrop=${sig.total_drop_pct}%` : null,
+              sig.exit_within_days ? `exitWithin=${sig.exit_within_days}d` : null,
               sig.note || null,
             ].filter(Boolean).join(' · ');
 
