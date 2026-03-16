@@ -1772,7 +1772,7 @@ async function startRestPoller() {
           }
 
           // Debug summary — always log so we know scanners ran
-          console.log(`[POLL SUMMARY] GAP_REVERSAL=${gapSignals.length} CAPITULATION=${capSignals.length} VOL_DROP=${putSignals.length} SECTOR_ROTATION=${sectorSignals.length} CONSEC=${consecSignals.length}`);
+          console.log(`[POLL SUMMARY] checked=${Object.keys(stratSnapshots).length} GAP_DOWN=${gapSignals.length} SECTOR_ROTATION=${sectorSignals.length} CAPITULATION=${capSignals.length} VOL_DROP=${putSignals.length} CONSEC=${consecSignals.length}`);
         } catch (stratErr) {
           console.error('[STRATEGY] Scanner error:', stratErr.message);
         }
