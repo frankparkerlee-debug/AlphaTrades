@@ -535,6 +535,33 @@ app.get('/api/seed-macro/status', (req, res) => {
   res.json({ running: macroRunning, result: macroResult });
 });
 
+// Seed insider transactions + SEC filings
+let insiderRunning = false;
+let insiderResult = null;
+app.post('/api/seed-insider', async (req, res) => {
+  if (insiderRunning) return res.json({ ok: false, error: 'Already running' });
+  insiderRunning = true;
+  insiderResult = null;
+  res.json({ ok: true, message: 'Insider/filings seed started' });
+  try {
+    const { execSync } = await import('child_process');
+    const output = execSync('node scripts/seed-insider-filings.js', {
+      cwd: process.cwd(), timeout: 600000, encoding: 'utf-8',
+      env: { ...process.env },
+    });
+    insiderResult = { ok: true, output: output.slice(-3000) };
+    console.log('[INSIDER] Seed complete');
+  } catch (err) {
+    insiderResult = { ok: false, error: err.message, output: (err.stdout || '').slice(-3000) };
+    console.error('[INSIDER] Seed failed:', err.message);
+  } finally {
+    insiderRunning = false;
+  }
+});
+app.get('/api/seed-insider/status', (req, res) => {
+  res.json({ running: insiderRunning, result: insiderResult });
+});
+
 // Seed conviction universe fundamentals
 let convictionRunning = false;
 let convictionResult = null;
