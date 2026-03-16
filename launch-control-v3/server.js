@@ -546,7 +546,7 @@ app.post('/api/seed-insider', async (req, res) => {
   try {
     const { execSync } = await import('child_process');
     const output = execSync('node scripts/seed-insider-filings.js', {
-      cwd: process.cwd(), timeout: 600000, encoding: 'utf-8',
+      cwd: process.cwd(), timeout: 1200000, encoding: 'utf-8',
       env: { ...process.env },
     });
     insiderResult = { ok: true, output: output.slice(-3000) };
