@@ -851,6 +851,145 @@ app.get('/api/analysis/rally-exhaustion', async (req, res) => {
   }
 });
 
+// ── IV EXPANSION PRE-EARNINGS ANALYSIS ──────────────────────────────────────
+app.get('/api/analysis/iv-expansion', async (req, res) => {
+  try {
+    const API_KEY = process.env.ALPACA_API_KEY;
+    const API_SECRET = process.env.ALPACA_SECRET_KEY;
+    if (!API_KEY || !API_SECRET) return res.status(500).json({ error: 'No Alpaca keys' });
+
+    // Get historical earnings
+    const intelRes = await db.query(`
+      SELECT ticker, historical_earnings FROM lc_v3.ticker_intelligence
+      WHERE historical_earnings IS NOT NULL
+    `);
+    const allEvents = [];
+    for (const row of intelRes.rows) {
+      const hist = row.historical_earnings;
+      for (const q of hist) {
+        if (q.date) allEvents.push({ ticker: row.ticker, date: q.date });
+      }
+    }
+
+    // Fetch 6mo daily bars
+    const profileRes = await db.query('SELECT ticker FROM lc_v3.equity_profiles ORDER BY ticker');
+    const tickers = profileRes.rows.map(r => r.ticker);
+    const headers = { 'APCA-API-KEY-ID': API_KEY, 'APCA-API-SECRET-KEY': API_SECRET };
+    const allBars = {};
+    for (let i = 0; i < tickers.length; i += 40) {
+      const batch = tickers.slice(i, i + 40);
+      let pageToken = null;
+      do {
+        const params = {
+          symbols: batch.join(','), timeframe: '1Day',
+          start: '2025-09-01', end: new Date().toISOString().slice(0, 10),
+          limit: 10000, feed: 'sip', adjustment: 'split',
+        };
+        if (pageToken) params.page_token = pageToken;
+        const resp = await axios.get('https://data.alpaca.markets/v2/stocks/bars', { headers, params });
+        for (const [t, bars] of Object.entries(resp.data.bars || {})) {
+          if (!allBars[t]) allBars[t] = [];
+          for (const b of bars) allBars[t].push({ day: b.t.slice(0, 10), o: b.o, c: b.c });
+        }
+        pageToken = resp.data.next_page_token || null;
+      } while (pageToken);
+    }
+    for (const t of Object.keys(allBars)) allBars[t].sort((a, b) => a.day.localeCompare(b.day));
+
+    // Build day index
+    const dayIdx = {};
+    for (const [t, days] of Object.entries(allBars)) {
+      dayIdx[t] = {};
+      days.forEach((d, i) => { dayIdx[t][d.day] = i; });
+    }
+
+    const windows = [10, 7, 5, 3, 1];
+    const volByWindow = {};
+    for (const w of windows) volByWindow[w] = [];
+    const baselineVols = [];
+    const erDayMoves = [];
+
+    for (const ev of allEvents) {
+      const days = allBars[ev.ticker];
+      const idx = dayIdx[ev.ticker];
+      if (!days || days.length < 30) continue;
+
+      let ei = idx[ev.date];
+      if (ei === undefined) {
+        const after = Object.entries(idx).filter(([d]) => d >= ev.date).sort((a, b) => a[0].localeCompare(b[0]));
+        if (after.length > 0) { ei = after[0][1]; }
+        else {
+          const before = Object.entries(idx).filter(([d]) => d <= ev.date).sort((a, b) => b[0].localeCompare(a[0]));
+          if (before.length > 0) ei = before[0][1];
+          else continue;
+        }
+      }
+      if (ei < 25) continue;
+
+      // Earnings day move
+      if (days[ei].o > 0) {
+        erDayMoves.push(Math.abs((days[ei].c - days[ei].o) / days[ei].o * 100));
+      }
+
+      // Vol at each window
+      for (const w of windows) {
+        const end = ei;
+        const start = end - w;
+        if (start < 1) continue;
+        const rets = [];
+        for (let j = start; j < end; j++) {
+          if (days[j - 1].c > 0) rets.push((days[j].c - days[j - 1].c) / days[j - 1].c * 100);
+        }
+        if (rets.length >= 2) {
+          const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+          const variance = rets.reduce((a, b) => a + (b - mean) ** 2, 0) / (rets.length - 1);
+          volByWindow[w].push(Math.sqrt(variance) * Math.sqrt(252));
+        }
+      }
+
+      // Baseline: 20d vol ending 15d before earnings
+      const blEnd = ei - 15;
+      const blStart = blEnd - 20;
+      if (blStart >= 1) {
+        const brets = [];
+        for (let j = blStart; j < blEnd; j++) {
+          if (days[j - 1].c > 0) brets.push((days[j].c - days[j - 1].c) / days[j - 1].c * 100);
+        }
+        if (brets.length >= 5) {
+          const mean = brets.reduce((a, b) => a + b, 0) / brets.length;
+          const variance = brets.reduce((a, b) => a + (b - mean) ** 2, 0) / (brets.length - 1);
+          baselineVols.push(Math.sqrt(variance) * Math.sqrt(252));
+        }
+      }
+    }
+
+    const baselineAvg = baselineVols.length > 0 ? baselineVols.reduce((a, b) => a + b, 0) / baselineVols.length : 0;
+
+    const windowResults = windows.map(w => {
+      const vols = volByWindow[w];
+      if (vols.length === 0) return { window: w, samples: 0 };
+      const avg = vols.reduce((a, b) => a + b, 0) / vols.length;
+      return { window: w, samples: vols.length, avgAnnVol: +avg.toFixed(1), vsBaseline: baselineAvg > 0 ? +(avg / baselineAvg * 100).toFixed(0) : 0 };
+    });
+
+    const erMove = erDayMoves.length > 0 ? {
+      events: erDayMoves.length,
+      avgAbsMove: +(erDayMoves.reduce((a, b) => a + b, 0) / erDayMoves.length).toFixed(2),
+      medianAbsMove: +erDayMoves.sort((a, b) => a - b)[Math.floor(erDayMoves.length / 2)].toFixed(2),
+      movesOver5pct: erDayMoves.filter(m => m > 5).length,
+    } : null;
+
+    res.json({
+      totalEvents: allEvents.length, matchedEvents: erDayMoves.length,
+      baselineAnnVol: +baselineAvg.toFixed(1), baselineSamples: baselineVols.length,
+      windows: windowResults, earningsDayMove: erMove,
+    });
+  } catch (err) {
+    console.error('[ANALYSIS]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Catch-all — serve dashboard
 app.get('*', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'index.html'));
