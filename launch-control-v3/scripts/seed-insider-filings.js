@@ -1,34 +1,91 @@
 /**
- * Seed insider transactions, SEC 8-K filings, and insider summary
+ * Seed insider transactions (SEC EDGAR Form 4) and 8-K filings
  * For all tickers in equity_profiles + conviction_universe
+ * Uses SEC EDGAR APIs (free, no key needed)
  * Run: node scripts/seed-insider-filings.js
  */
 import 'dotenv/config';
 import { query } from '../src/data/db.js';
 import axios from 'axios';
 
-const BASE_URL = 'https://financialmodelingprep.com/stable';
-const API_KEY = process.env.FMP_API_KEY;
+const EDGAR_UA = 'AlphaTrades research@alphatrades.com';
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-async function fmpGet(path, ticker) {
-  try {
-    const url = `${BASE_URL}${path}${path.includes('?') ? '&' : '?'}apikey=${API_KEY}`;
-    await sleep(300);
-    const res = await axios.get(url, { timeout: 15000 });
-    return res.data || [];
-  } catch (err) {
-    if (err.response?.status !== 404) {
-      console.error(`[INSIDER] ERROR ${ticker}: ${err.message}`);
-    }
-    return [];
+// ── CIK LOOKUP ──────────────────────────────────────────────────────────────
+let tickerToCik = null;
+async function loadCikMap() {
+  if (tickerToCik) return;
+  const res = await axios.get('https://www.sec.gov/files/company_tickers.json', {
+    headers: { 'User-Agent': EDGAR_UA }, timeout: 15000,
+  });
+  tickerToCik = {};
+  for (const entry of Object.values(res.data)) {
+    tickerToCik[entry.ticker] = String(entry.cik_str).padStart(10, '0');
   }
+  console.log(`[INSIDER] CIK map loaded: ${Object.keys(tickerToCik).length} tickers`);
 }
 
-const RED_FLAG_KEYWORDS = /departure|resign|terminat|restate|investigation|subpoena|default|going concern/i;
+// ── PARSE FORM 4 XML ────────────────────────────────────────────────────────
+function parseForm4Xml(xml, ticker) {
+  const txns = [];
+  const ownerMatch = xml.match(/<rptOwnerName>(.*?)<\/rptOwnerName>/);
+  const ownerName = ownerMatch ? ownerMatch[1].trim() : 'Unknown';
 
+  // Check if officer or director
+  const isOfficer = /<isOfficer>1<\/isOfficer>/.test(xml);
+  const isDirector = /<isDirector>1<\/isDirector>/.test(xml);
+  const titleMatch = xml.match(/<officerTitle>(.*?)<\/officerTitle>/);
+  const title = titleMatch ? titleMatch[1].trim()
+    : isDirector ? 'Director'
+    : isOfficer ? 'Officer' : '';
+
+  // Parse non-derivative transactions (actual stock buys/sells)
+  const ndRegex = /<nonDerivativeTransaction>([\s\S]*?)<\/nonDerivativeTransaction>/g;
+  let match;
+  while ((match = ndRegex.exec(xml)) !== null) {
+    const block = match[1];
+    const dateM = block.match(/<transactionDate>[\s\S]*?<value>([\d-]+)<\/value>/);
+    const codeM = block.match(/<transactionCode>(\w)<\/transactionCode>/);
+    const sharesM = block.match(/<transactionShares>[\s\S]*?<value>([\d.]+)<\/value>/);
+    const priceM = block.match(/<transactionPricePerShare>[\s\S]*?<value>([\d.]+)<\/value>/);
+    const ownedM = block.match(/<sharesOwnedFollowingTransaction>[\s\S]*?<value>([\d.]+)<\/value>/);
+    const dispM = block.match(/<transactionAcquiredDisposedCode>[\s\S]*?<value>(\w)<\/value>/);
+
+    if (!dateM || !codeM) continue;
+
+    const code = codeM[1]; // P=purchase, S=sale, A=award, etc.
+    const disp = dispM ? dispM[1] : ''; // A=acquired, D=disposed
+    const shares = sharesM ? Math.round(parseFloat(sharesM[1])) : 0;
+    const price = priceM ? parseFloat(priceM[1]) : 0;
+
+    let txType;
+    if (code === 'P') txType = 'P-Purchase';
+    else if (code === 'S') txType = 'S-Sale';
+    else if (code === 'A') txType = 'A-Award';
+    else if (code === 'M') txType = 'M-Exercise';
+    else if (code === 'F') txType = 'F-Tax';
+    else if (code === 'G') txType = 'G-Gift';
+    else txType = `${code}-Other`;
+
+    txns.push({
+      ticker,
+      filing_date: dateM[1],
+      reporting_name: ownerName.slice(0, 100),
+      title: title.slice(0, 100),
+      transaction_type: txType,
+      shares_traded: disp === 'D' ? -shares : shares,
+      price,
+      value: Math.round(shares * price * 100) / 100,
+      shares_owned_after: ownedM ? Math.round(parseFloat(ownedM[1])) : null,
+    });
+  }
+
+  return txns;
+}
+
+// ── MAIN ─────────────────────────────────────────────────────────────────────
 async function main() {
-  // ── CREATE TABLES ──────────────────────────────────────────────────────────
+  // Create tables
   await query(`
     CREATE TABLE IF NOT EXISTS lc_v3.insider_transactions (
       ticker VARCHAR(10),
@@ -43,8 +100,6 @@ async function main() {
       PRIMARY KEY (ticker, filing_date, reporting_name, transaction_type)
     )
   `);
-  console.log('[INSIDER] Table lc_v3.insider_transactions ready');
-
   await query(`
     CREATE TABLE IF NOT EXISTS lc_v3.sec_filings (
       ticker VARCHAR(10),
@@ -57,14 +112,14 @@ async function main() {
       PRIMARY KEY (ticker, filing_date, form_type)
     )
   `);
-  console.log('[INSIDER] Table lc_v3.sec_filings ready');
-
-  // Add insider columns to ticker_intelligence
   await query(`ALTER TABLE lc_v3.ticker_intelligence ADD COLUMN IF NOT EXISTS insider_net_90d DECIMAL(14,2)`);
   await query(`ALTER TABLE lc_v3.ticker_intelligence ADD COLUMN IF NOT EXISTS insider_signal VARCHAR(10)`);
-  console.log('[INSIDER] ticker_intelligence columns ready');
+  console.log('[INSIDER] Tables ready');
 
-  // ── GET ALL TICKERS ────────────────────────────────────────────────────────
+  // Load CIK mapping
+  await loadCikMap();
+
+  // Get all tickers
   const epRes = await query('SELECT ticker FROM lc_v3.equity_profiles ORDER BY ticker');
   const cuRes = await query('SELECT ticker FROM lc_v3.conviction_universe ORDER BY ticker');
   const allTickers = [...new Set([
@@ -76,98 +131,120 @@ async function main() {
   let insiderRows = 0;
   let filingRows = 0;
   let redFlags = 0;
+  let noMatch = 0;
 
-  // ── PROCESS IN BATCHES OF 5 ───────────────────────────────────────────────
-  for (let i = 0; i < allTickers.length; i += 5) {
-    const batch = allTickers.slice(i, i + 5);
+  const RED_FLAGS = /departure|resign|terminat|restate|investigation|subpoena|default|going concern/i;
 
-    await Promise.all(batch.map(async (ticker) => {
-      // 1) Insider transactions
-      const insiders = await fmpGet(`/insider-trading?symbol=${ticker}&limit=20`, ticker);
-      if (Array.isArray(insiders)) {
-        for (const tx of insiders) {
-          if (!tx.filingDate || !tx.reportingName || !tx.transactionType) continue;
-          try {
-            await query(`
-              INSERT INTO lc_v3.insider_transactions
-                (ticker, filing_date, reporting_name, title, transaction_type,
-                 shares_traded, price, value, shares_owned_after)
-              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-              ON CONFLICT (ticker, filing_date, reporting_name, transaction_type) DO NOTHING
-            `, [
-              ticker,
-              tx.filingDate,
-              (tx.reportingName || '').slice(0, 100),
-              (tx.typeOfOwner || tx.reportingTitle || '').slice(0, 100),
-              tx.transactionType,
-              tx.securitiesTransacted || null,
-              tx.price || null,
-              tx.securitiesTransacted && tx.price
-                ? Math.round(tx.securitiesTransacted * tx.price * 100) / 100
-                : null,
-              tx.securitiesOwned || null,
-            ]);
-            insiderRows++;
-          } catch { /* dupe or constraint — skip */ }
-        }
+  for (let i = 0; i < allTickers.length; i++) {
+    const ticker = allTickers[i];
+    const cik = tickerToCik[ticker];
+    if (!cik) {
+      noMatch++;
+      continue;
+    }
+
+    try {
+      // SEC EDGAR rate limit: 10 req/sec — be conservative
+      await sleep(150);
+
+      // Fetch company submissions
+      const subRes = await axios.get(
+        `https://data.sec.gov/submissions/CIK${cik}.json`,
+        { headers: { 'User-Agent': EDGAR_UA }, timeout: 15000 }
+      );
+      const recent = subRes.data?.filings?.recent || {};
+      const forms = recent.form || [];
+      const dates = recent.filingDate || [];
+      const docs = recent.primaryDocument || [];
+      const accessions = recent.accessionNumber || [];
+      const descriptions = recent.primaryDocDescription || [];
+
+      // ── 8-K FILINGS ─────────────────────────────────────────────────────
+      let fCount = 0;
+      for (let j = 0; j < forms.length && fCount < 10; j++) {
+        if (forms[j] !== '8-K') continue;
+        fCount++;
+
+        const desc = descriptions[j] || '';
+        const isRedFlag = RED_FLAGS.test(desc);
+        const accClean = accessions[j].replace(/-/g, '');
+        const url = `https://www.sec.gov/Archives/edgar/data/${parseInt(cik)}/${accClean}/${docs[j]}`;
+
+        try {
+          await query(`
+            INSERT INTO lc_v3.sec_filings (ticker, filing_date, form_type, description, filing_url, is_red_flag, red_flag_reason)
+            VALUES ($1,$2,$3,$4,$5,$6,$7)
+            ON CONFLICT (ticker, filing_date, form_type) DO UPDATE SET
+              description = EXCLUDED.description, filing_url = EXCLUDED.filing_url,
+              is_red_flag = EXCLUDED.is_red_flag, red_flag_reason = EXCLUDED.red_flag_reason
+          `, [ticker, dates[j], '8-K', desc.slice(0, 500), url, isRedFlag, isRedFlag ? desc.match(RED_FLAGS)?.[0] : null]);
+          filingRows++;
+          if (isRedFlag) redFlags++;
+        } catch { /* skip dupes */ }
       }
 
-      // 2) SEC 8-K filings
-      const filings = await fmpGet(`/sec_filings?symbol=${ticker}&type=8-K&limit=10`, ticker);
-      if (Array.isArray(filings)) {
-        for (const f of filings) {
-          if (!f.fillingDate && !f.filingDate) continue;
-          const fDate = f.fillingDate || f.filingDate;
-          const desc = f.description || f.title || '';
-          const isRedFlag = RED_FLAG_KEYWORDS.test(desc);
-          const reason = isRedFlag
-            ? desc.match(RED_FLAG_KEYWORDS)?.[0] || 'keyword match'
-            : null;
+      // ── FORM 4 (INSIDER TRANSACTIONS) ────────────────────────────────────
+      // Fetch up to 10 most recent Form 4 XMLs
+      let form4Count = 0;
+      for (let j = 0; j < forms.length && form4Count < 10; j++) {
+        if (forms[j] !== '4') continue;
+        form4Count++;
 
-          try {
-            await query(`
-              INSERT INTO lc_v3.sec_filings
-                (ticker, filing_date, form_type, description, filing_url, is_red_flag, red_flag_reason)
-              VALUES ($1,$2,$3,$4,$5,$6,$7)
-              ON CONFLICT (ticker, filing_date, form_type) DO UPDATE SET
-                description = EXCLUDED.description,
-                filing_url = EXCLUDED.filing_url,
-                is_red_flag = EXCLUDED.is_red_flag,
-                red_flag_reason = EXCLUDED.red_flag_reason
-            `, [
-              ticker,
-              fDate,
-              f.type || '8-K',
-              desc.slice(0, 500),
-              f.finalLink || f.link || null,
-              isRedFlag,
-              reason,
-            ]);
-            filingRows++;
-            if (isRedFlag) redFlags++;
-          } catch { /* skip */ }
-        }
+        try {
+          await sleep(120);
+          const accClean = accessions[j].replace(/-/g, '');
+          const ownerCik = parseInt(cik); // issuer CIK
+          // The primaryDocument has xslF345X05/ prefix for display — get the raw XML
+          const rawDoc = docs[j].replace('xslF345X05/', '');
+          const xmlUrl = `https://www.sec.gov/Archives/edgar/data/${ownerCik}/${accClean}/${rawDoc}`;
+
+          const xmlRes = await axios.get(xmlUrl, {
+            headers: { 'User-Agent': EDGAR_UA }, timeout: 10000,
+            responseType: 'text',
+          });
+          const txns = parseForm4Xml(xmlRes.data, ticker);
+
+          for (const tx of txns) {
+            try {
+              await query(`
+                INSERT INTO lc_v3.insider_transactions
+                  (ticker, filing_date, reporting_name, title, transaction_type,
+                   shares_traded, price, value, shares_owned_after)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                ON CONFLICT (ticker, filing_date, reporting_name, transaction_type) DO NOTHING
+              `, [
+                tx.ticker, tx.filing_date, tx.reporting_name, tx.title,
+                tx.transaction_type, tx.shares_traded, tx.price, tx.value,
+                tx.shares_owned_after,
+              ]);
+              insiderRows++;
+            } catch { /* skip constraint violations */ }
+          }
+        } catch { /* skip failed XML fetches */ }
       }
 
-      console.log(`[INSIDER] ${ticker} done`);
-    }));
+      console.log(`[INSIDER] ${ticker} — ${form4Count} form4s, ${fCount} 8-Ks`);
+    } catch (err) {
+      console.error(`[INSIDER] ${ticker} error: ${err.message}`);
+    }
 
-    if ((i + 5) % 50 === 0) {
-      console.log(`[INSIDER] Progress: ${i + 5}/${allTickers.length} tickers, ${insiderRows} insider rows, ${filingRows} filings`);
+    if ((i + 1) % 50 === 0) {
+      console.log(`[INSIDER] Progress: ${i + 1}/${allTickers.length}, ${insiderRows} insider rows, ${filingRows} filings`);
     }
   }
 
   console.log(`\n[INSIDER] Insider transactions: ${insiderRows} rows`);
-  console.log(`[INSIDER] SEC filings: ${filingRows} rows (${redFlags} red flags)`);
+  console.log(`[INSIDER] SEC 8-K filings: ${filingRows} rows (${redFlags} red flags)`);
+  console.log(`[INSIDER] No CIK match: ${noMatch} tickers`);
 
-  // ── 3) COMPUTE INSIDER SUMMARY ────────────────────────────────────────────
+  // ── INSIDER SUMMARY ────────────────────────────────────────────────────────
   console.log('[INSIDER] Computing insider summary...');
 
   const summaryRes = await query(`
     SELECT ticker,
-      COALESCE(SUM(CASE WHEN transaction_type IN ('S-Sale','P-Sale','S-Sale+OE') AND filing_date >= CURRENT_DATE - 90
+      COALESCE(SUM(CASE WHEN transaction_type = 'S-Sale' AND filing_date >= CURRENT_DATE - 90
         THEN ABS(value) ELSE 0 END), 0) as sell_total,
-      COALESCE(SUM(CASE WHEN transaction_type IN ('P-Purchase','A-Award') AND filing_date >= CURRENT_DATE - 90
+      COALESCE(SUM(CASE WHEN transaction_type = 'P-Purchase' AND filing_date >= CURRENT_DATE - 90
         THEN ABS(value) ELSE 0 END), 0) as buy_total
     FROM lc_v3.insider_transactions
     GROUP BY ticker
@@ -183,39 +260,32 @@ async function main() {
                  : 'NEUTRAL';
 
     await query(`
-      UPDATE lc_v3.ticker_intelligence
-      SET insider_net_90d = $2, insider_signal = $3, last_updated = NOW()
+      UPDATE lc_v3.ticker_intelligence SET insider_net_90d = $2, insider_signal = $3, last_updated = NOW()
       WHERE ticker = $1
     `, [row.ticker, net, signal]);
     updated++;
   }
-
   console.log(`[INSIDER] Updated ${updated} tickers in ticker_intelligence`);
 
-  // Show top sellers and buyers
+  // Top sellers/buyers
   const topSellers = await query(`
-    SELECT ticker, insider_net_90d, insider_signal
-    FROM lc_v3.ticker_intelligence
-    WHERE insider_signal = 'SELLING'
-    ORDER BY insider_net_90d ASC LIMIT 10
+    SELECT ticker, insider_net_90d FROM lc_v3.ticker_intelligence
+    WHERE insider_signal = 'SELLING' ORDER BY insider_net_90d ASC LIMIT 10
   `);
   if (topSellers.rows.length > 0) {
     console.log('\n[INSIDER] Top sellers (90d):');
     for (const r of topSellers.rows) {
-      console.log(`  ${r.ticker.padEnd(8)} $${(parseFloat(r.insider_net_90d) / 1e6).toFixed(1)}M net`);
+      console.log(`  ${r.ticker.padEnd(8)} $${(parseFloat(r.insider_net_90d) / 1e6).toFixed(2)}M net`);
     }
   }
-
   const topBuyers = await query(`
-    SELECT ticker, insider_net_90d, insider_signal
-    FROM lc_v3.ticker_intelligence
-    WHERE insider_signal = 'BUYING'
-    ORDER BY insider_net_90d DESC LIMIT 10
+    SELECT ticker, insider_net_90d FROM lc_v3.ticker_intelligence
+    WHERE insider_signal = 'BUYING' ORDER BY insider_net_90d DESC LIMIT 10
   `);
   if (topBuyers.rows.length > 0) {
     console.log('\n[INSIDER] Top buyers (90d):');
     for (const r of topBuyers.rows) {
-      console.log(`  ${r.ticker.padEnd(8)} +$${(parseFloat(r.insider_net_90d) / 1e6).toFixed(1)}M net`);
+      console.log(`  ${r.ticker.padEnd(8)} +$${(parseFloat(r.insider_net_90d) / 1e6).toFixed(2)}M net`);
     }
   }
 
