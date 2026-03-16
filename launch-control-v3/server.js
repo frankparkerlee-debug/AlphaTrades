@@ -1729,6 +1729,9 @@ async function startRestPoller() {
               sig.note || null,
             ].filter(Boolean).join(' · ');
 
+            const expiryInterval = sig.strategy === 'CONSEC_BOUNCE'
+              ? '2 days' : '4 hours';
+
             await db.query(`
               INSERT INTO lc_v3.signals (
                 ticker, direction, grade, status, composite_raw, signal_tier,
@@ -1738,7 +1741,7 @@ async function startRestPoller() {
                 expires_at, created_at
               ) VALUES ($1,$2,'A','ACTIVE',$3,'primary',$4,$5,
                 NOW(), NOW(), 1, $3, 'A', '[]'::jsonb, 'NEW',
-                NOW() + INTERVAL '4 hours', NOW())
+                NOW() + INTERVAL '${expiryInterval}', NOW())
             `, [sig.ticker, sig.direction, compositeRaw, sig.entry_price, signalNote]);
 
             console.log(`[STRATEGY] ${sig.ticker} ${sig.direction} ${sig.strategy} ${sig.confidence}%`);
@@ -1776,7 +1779,7 @@ async function startRestPoller() {
           }
         }
 
-        // 2) Any ACTIVE signal with no human action and >15 min old → MISSED
+        // 2) Any ACTIVE signal (except CONSEC_BOUNCE) with no human action and >15 min old → MISSED
         const missed = await db.query(`
           UPDATE lc_v3.signals SET status = 'MISSED',
             human_notes = COALESCE(human_notes, '') || ' | AUTO: NO_ACTION_15MIN'
@@ -1784,10 +1787,25 @@ async function startRestPoller() {
             AND human_taken IS NULL
             AND created_at < NOW() - INTERVAL '15 minutes'
             AND DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
+            AND news_headline NOT LIKE '%strategy=CONSEC_BOUNCE%'
           RETURNING ticker
         `);
         for (const r of missed.rows) {
           console.log(`[AUTO] ${r.ticker} → MISSED (no action 15min)`);
+        }
+
+        // 2b) CONSEC_BOUNCE: ACTIVE for 2 trading days, then EXPIRED
+        const consecExpired = await db.query(`
+          UPDATE lc_v3.signals SET status = 'EXPIRED',
+            human_notes = COALESCE(human_notes, '') || ' | AUTO: CONSEC_2DAY_EXPIRED'
+          WHERE status = 'ACTIVE'
+            AND human_taken IS NULL
+            AND news_headline LIKE '%strategy=CONSEC_BOUNCE%'
+            AND created_at < NOW() - INTERVAL '2 days'
+          RETURNING ticker
+        `);
+        for (const r of consecExpired.rows) {
+          console.log(`[AUTO] ${r.ticker} CONSEC_BOUNCE → EXPIRED (2 trading days)`);
         }
 
         // 3) GAP_REVERSAL where stock dropped below stop → INVALID
