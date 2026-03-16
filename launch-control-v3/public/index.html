@@ -205,39 +205,84 @@ body::after {
 
 /* Contract */
 .contract-row {
-  background: var(--bg3); border-radius: 4px; padding: 8px 10px; margin-bottom: 8px;
+  background: var(--bg3); border-radius: 4px; padding: 10px 12px; margin-bottom: 8px;
   border-left: 2px solid var(--amber);
 }
 .contract-row.contract-pending { border-left-color: var(--border); }
-.contract-label { font-size: 8px; color: var(--text3); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 4px; }
-.contract-details { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--text1); margin-bottom: 5px; }
-.contract-pricing { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
-.cp-item { font-size: 10px; color: var(--text3); font-family: var(--mono); }
-.cp-item strong { color: var(--text1); }
-.cp-green strong { color: var(--green); }
-.cp-gold  strong { color: var(--amber2); }
-.cp-red   strong { color: var(--red); }
+.contract-label { font-size: 8px; color: var(--text3); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 6px; }
+.contract-symbol-row {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+}
+.contract-symbol {
+  font-family: var(--mono); font-size: 15px; font-weight: 700; color: var(--amber2);
+  letter-spacing: 0.5px;
+}
+.copy-btn {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 3px;
+  color: var(--text3); font-family: var(--mono); font-size: 9px; padding: 3px 8px;
+  cursor: pointer; transition: all 0.15s;
+}
+.copy-btn:hover { border-color: var(--amber); color: var(--amber); }
+.copy-btn.copied { border-color: var(--green); color: var(--green); }
+.rh-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: #00c805; color: #000; border: none; border-radius: 3px;
+  font-family: var(--mono); font-size: 9px; font-weight: 700; padding: 3px 8px;
+  cursor: pointer; text-decoration: none; transition: opacity 0.15s;
+}
+.rh-btn:hover { opacity: 0.85; }
+.price-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 8px;
+}
+.price-cell {
+  background: var(--bg2); border-radius: 4px; padding: 6px 8px; text-align: center;
+}
+.price-cell-label { font-size: 8px; color: var(--text3); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 2px; }
+.price-cell-value { font-family: var(--mono); font-size: 14px; font-weight: 700; }
+.price-cell-entry .price-cell-value { color: var(--text1); }
+.price-cell-stop  .price-cell-value { color: var(--red); }
+.price-cell-t1    .price-cell-value { color: var(--green); }
+.price-cell-t2    .price-cell-value { color: var(--amber2); }
 .contract-greeks { font-size: 9px; color: var(--text4); font-family: var(--mono); margin-top: 3px; }
 
-/* Countdown */
-.cd-bar { height: 2px; background: var(--border); border-radius: 1px; margin-bottom: 3px; overflow: hidden; }
+/* Deploy + Countdown */
+.deploy-row {
+  display: flex; justify-content: space-between; align-items: center;
+  background: var(--bg3); border-radius: 4px; padding: 8px 12px; margin-bottom: 8px;
+}
+.deploy-label { font-size: 9px; color: var(--text3); }
+.deploy-value { font-family: var(--mono); font-size: 16px; font-weight: 700; }
+.countdown-row {
+  display: flex; justify-content: space-between; align-items: center;
+  font-family: var(--mono); font-size: 10px; margin-bottom: 6px; padding: 0 2px;
+}
+.cd-age { color: var(--text3); }
+.cd-deadline { color: var(--amber); }
+.cd-bar { height: 2px; background: var(--border); border-radius: 1px; margin-bottom: 8px; overflow: hidden; }
 .cd-fill { height: 100%; background: var(--amber); border-radius: 1px; transition: width 1s linear, background 0.3s; }
 .cd-fill.urgent { background: var(--red); animation: pulse 0.5s ease-in-out infinite; }
-.cd-label { font-size: 9px; color: var(--text3); text-align: right; font-family: var(--mono); margin-bottom: 7px; }
 
 /* Actions */
-.actions { display: flex; gap: 6px; }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .btn {
-  flex: 1; padding: 9px; border: none; border-radius: 4px;
-  font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 1px;
-  cursor: pointer; transition: opacity 0.15s;
+  padding: 12px; border: none; border-radius: 4px;
+  font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 1px;
+  cursor: pointer; transition: opacity 0.15s; width: 100%;
 }
 .btn:hover { opacity: 0.85; }
 .btn-take   { background: var(--green); color: #000; }
+.btn-paper  { background: var(--blue); color: #fff; }
 .btn-skip   { background: var(--bg3); color: var(--text3); border: 1px solid var(--border); }
+.btn-late   { background: rgba(245,158,11,0.15); color: var(--amber); border: 1px solid var(--amber); }
+.btn-missed { background: rgba(139,92,246,0.15); color: var(--purple); border: 1px solid var(--purple); }
+.btn-invalid{ background: rgba(239,68,68,0.1); color: var(--red); border: 1px solid rgba(239,68,68,0.3); }
 .btn-taken  { background: #065f4640; color: var(--green); border: 1px solid var(--green); cursor: default; }
 .btn-skipped{ background: var(--bg3); color: var(--text4); cursor: default; }
-.btn-edit   { background: transparent; color: var(--amber); border: 1px solid var(--amber); font-size: 9px; padding: 9px 10px; flex: 0; }
+.btn-edit   { background: transparent; color: var(--amber); border: 1px solid var(--amber); font-size: 10px; padding: 10px; }
+.action-row-primary { display: flex; gap: 6px; width: 100%; }
+.action-row-primary .btn { flex: 1; width: auto; }
+.action-row-secondary { display: flex; gap: 6px; width: 100%; }
+.action-row-secondary .btn { flex: 1; width: auto; font-size: 9px; padding: 8px; }
 
 /* Record form */
 .record-form { margin-top: 8px; padding: 8px; background: var(--bg3); border-radius: 4px; border: 1px solid var(--border); }
@@ -550,16 +595,20 @@ function buildCard(s) {
   // Contract details
   const hasContract = s.contract_mid > 0;
   const isEst = s.contract_estimated;
+  const rawSymbol = s.contract_symbol || '';
   const contract = hasContract ? `
     <div class="contract-row">
-      <div class="contract-label">CONTRACT${isEst?' (ESTIMATED)':''}</div>
-      <div class="contract-details">${s.contract_symbol ? formatOCC(s.contract_symbol) : `${s.ticker} $${s.contract_strike} ${s.direction}`} · ${s.contract_expiry_label||'0DTE'}</div>
-      <div class="contract-pricing">
-        <span class="cp-item">Entry <strong>$${s.contract_entry_lo}–$${s.contract_entry_hi}</strong></span>
-        <span class="cp-item cp-green">T1 <strong>$${s.contract_t1}</strong></span>
-        ${s.contract_t2?`<span class="cp-item cp-green">T2 <strong>$${s.contract_t2}</strong></span>`:''}
-        ${s.contract_t3?`<span class="cp-item cp-gold">T3 <strong>$${s.contract_t3}</strong></span>`:''}
-        <span class="cp-item cp-red">Stop <strong>$${s.contract_stop}</strong></span>
+      <div class="contract-label">CONTRACT${isEst?' (ESTIMATED)':''} · ${s.contract_expiry_label||'0DTE'}</div>
+      <div class="contract-symbol-row">
+        <span class="contract-symbol">${s.contract_symbol ? formatOCC(s.contract_symbol) : `${s.ticker} $${s.contract_strike} ${s.direction}`}</span>
+        <button class="copy-btn" onclick="copyContract(this,'${rawSymbol}')">COPY</button>
+        <a class="rh-btn" href="robinhood://stocks/${s.ticker}">RH</a>
+      </div>
+      <div class="price-grid">
+        <div class="price-cell price-cell-entry"><div class="price-cell-label">ENTRY</div><div class="price-cell-value">$${s.contract_mid}</div></div>
+        <div class="price-cell price-cell-stop"><div class="price-cell-label">STOP</div><div class="price-cell-value">$${s.contract_stop}</div></div>
+        <div class="price-cell price-cell-t1"><div class="price-cell-label">T1</div><div class="price-cell-value">$${s.contract_t1}</div></div>
+        <div class="price-cell price-cell-t2"><div class="price-cell-label">${s.contract_t3?'T2':'T2'}</div><div class="price-cell-value">${s.contract_t2?'$'+s.contract_t2:'—'}</div></div>
       </div>
       <div class="contract-greeks">
         Δ ${s.contract_delta} · IV ${s.contract_iv}% · Bid $${s.contract_bid} / Ask $${s.contract_ask}
@@ -583,13 +632,21 @@ function buildCard(s) {
 
   // Actions
   const actions = stale
-    ? `<button class="btn btn-skipped" disabled>${s.human_taken?'✓ TAKEN':'SKIPPED'}</button>
-       ${s.human_taken?`<button class="btn btn-edit" onclick="editTrade('${s.signal_id}',${s.human_entry_price||0},${s.human_exit_price||0})">EDIT</button>`:''}`
+    ? `<div class="action-row-primary"><button class="btn ${s.human_taken?'btn-taken':'btn-skipped'}" disabled>${s.human_taken?'✓ TOOK IT':'SKIPPED'}</button></div>
+       ${s.human_taken?`<div class="action-row-secondary"><button class="btn btn-edit" onclick="editTrade('${s.signal_id}',${s.human_entry_price||0},${s.human_exit_price||0})">EDIT</button></div>`:''}`
     : s.human_taken===true
-      ? `<button class="btn btn-taken" disabled>✓ TAKEN</button>
-         <button class="btn btn-edit" onclick="editTrade('${s.signal_id}',${s.human_entry_price||0},${s.human_exit_price||0})">EDIT</button>`
-      : `<button class="btn btn-take" onclick="takeSignal('${s.signal_id}',this)">TAKE</button>
-         <button class="btn btn-skip" onclick="skipSignal('${s.signal_id}',this)">SKIP</button>`;
+      ? `<div class="action-row-primary"><button class="btn btn-taken" disabled>✓ TOOK IT</button></div>
+         <div class="action-row-secondary"><button class="btn btn-edit" onclick="editTrade('${s.signal_id}',${s.human_entry_price||0},${s.human_exit_price||0})">EDIT</button></div>`
+      : `<div class="action-row-primary">
+           <button class="btn btn-take" onclick="takeSignal('${s.signal_id}',this)">TOOK IT</button>
+           <button class="btn btn-paper" onclick="paperSignal('${s.signal_id}',this)">PAPER</button>
+         </div>
+         <div class="action-row-secondary">
+           <button class="btn btn-skip" onclick="skipSignal('${s.signal_id}',this)">SKIP</button>
+           <button class="btn btn-late" onclick="outcomeSignal('${s.signal_id}','late',this)">LATE</button>
+           <button class="btn btn-missed" onclick="outcomeSignal('${s.signal_id}','missed',this)">MISSED</button>
+           <button class="btn btn-invalid" onclick="outcomeSignal('${s.signal_id}','invalid',this)">INVALID</button>
+         </div>`;
 
   return `
   <div class="card ${g}${stale?' stale':''}${isBreakdown?' breakdown-card':''}${isWeakening?' weakening-card':''}" id="card-${s.signal_id}">
@@ -654,14 +711,24 @@ function buildCard(s) {
     ${mkt?`<div class="ctx-line">${mkt}</div>`:''}
     ${buildIntelBar(s)}
     ${contract}
-    <div class="position-row">
-      <span class="pos-label">Position</span>
-      <span class="pos-value" style="color:${c}">$${Number(s.position_size_dollars||0).toLocaleString()} <span style="font-size:9px;color:var(--text3)">(${((s.position_size_pct||0)*100).toFixed(1)}%)</span></span>
-    </div>
-    ${(s.status==='ACTIVE'||s.status==='WEAKENING')&&s.expires_at?`
-      <div class="cd-bar"><div class="cd-fill" id="cdf-${s.signal_id}" style="width:100%"></div></div>
-      <div class="cd-label" id="cdl-${s.signal_id}">—</div>`:''
-    }
+    ${(() => {
+      const gradeSize = {'A+':0.20,'A':0.15,'A-':0.10,'B+':0.07,'B':0.05}[s.grade] || 0.05;
+      const deployDollars = Math.round(ACCOUNT * gradeSize);
+      return `<div class="deploy-row">
+        <div><span class="deploy-label">DEPLOY</span></div>
+        <div><span class="deploy-value" style="color:${c}">$${deployDollars.toLocaleString()}</span> <span style="font-size:9px;color:var(--text3);font-family:var(--mono)">${(gradeSize*100).toFixed(0)}% of $${ACCOUNT.toLocaleString()}</span></div>
+      </div>`;
+    })()}
+    ${(s.status==='ACTIVE'||s.status==='WEAKENING')&&s.expires_at?(() => {
+      const ageMin = Math.round((Date.now() - new Date(s.created_at).getTime()) / 60000);
+      const expiry = new Date(s.expires_at);
+      const deadlineCT = expiry.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/Chicago'}) + ' CT';
+      return `<div class="countdown-row">
+        <span class="cd-age">${ageMin}min ago</span>
+        <span class="cd-deadline">Exit by ${deadlineCT}</span>
+      </div>
+      <div class="cd-bar"><div class="cd-fill" id="cdf-${s.signal_id}" style="width:100%"></div></div>`;
+    })():''}
     <div class="actions" id="act-${s.signal_id}">${actions}</div>
     <div id="rec-${s.signal_id}"></div>
   </div>`;
@@ -672,16 +739,14 @@ function startCd(s) {
   const id = s.signal_id;
   if (countdowns[id]) clearInterval(countdowns[id]);
   const bar = document.getElementById(`cdf-${id}`);
-  const lbl = document.getElementById(`cdl-${id}`);
-  if (!bar||!lbl) return;
+  if (!bar) return;
   const total = new Date(s.expires_at) - new Date(s.created_at);
   countdowns[id] = setInterval(() => {
     const left = new Date(s.expires_at) - Date.now();
-    if (left<=0) { clearInterval(countdowns[id]); bar.style.width='0%'; lbl.textContent='EXPIRED'; return; }
+    if (left<=0) { clearInterval(countdowns[id]); bar.style.width='0%'; return; }
     bar.style.width = `${(left/total)*100}%`;
-    bar.classList.toggle('urgent', left<15000);
-    lbl.textContent = `${Math.round(left/1000)}s`;
-  }, 1000);
+    bar.classList.toggle('urgent', left < 300000); // urgent under 5 min
+  }, 5000);
 }
 
 // ── TAKE / SKIP ───────────────────────────────────────────────────
@@ -710,6 +775,31 @@ async function skipSignal(id, btn) {
   await fetch('/api/outcome',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({signal_id:id,taken:false})});
   btn.textContent='SKIPPED'; btn.className='btn btn-skipped';
+}
+
+function copyContract(btn, symbol) {
+  if (!symbol) return;
+  navigator.clipboard.writeText(symbol).then(() => {
+    btn.textContent='COPIED'; btn.classList.add('copied');
+    setTimeout(() => { btn.textContent='COPY'; btn.classList.remove('copied'); }, 1500);
+  });
+}
+
+async function paperSignal(id, btn) {
+  btn.disabled=true; btn.textContent='PAPERING...';
+  await fetch('/api/outcome',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({signal_id:id,taken:true,notes:'PAPER'})});
+  btn.textContent='PAPERED'; btn.className='btn btn-paper'; btn.style.opacity='0.6';
+  loadAll();
+}
+
+async function outcomeSignal(id, outcome, btn) {
+  btn.disabled=true;
+  const notes = outcome.toUpperCase();
+  await fetch('/api/outcome',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({signal_id:id,taken:false,notes})});
+  const actDiv = document.getElementById(`act-${id}`);
+  if (actDiv) actDiv.innerHTML=`<div class="action-row-primary"><button class="btn btn-skipped" disabled>${notes}</button></div>`;
 }
 
 function editTrade(id, currentEntry, currentExit) {
