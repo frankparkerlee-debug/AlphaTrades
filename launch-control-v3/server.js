@@ -16,6 +16,7 @@ import { scanVolumeDropPut } from './src/strategies/volume-drop-put.js';
 import { scanConsecutiveDrop } from './src/strategies/consecutive-drop.js';
 import { scanSectorRotationBounce } from './src/strategies/sector-rotation-bounce.js';
 import { scanGapUpReversal } from './src/strategies/gap-up-reversal.js';
+import { scoreConvictionSetup } from './src/strategies/conviction-scorer.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app  = express();
@@ -1168,6 +1169,50 @@ app.get('/api/analysis/iv-expansion', async (req, res) => {
     });
   } catch (err) {
     console.error('[ANALYSIS]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── CONVICTION SCANNER ───────────────────────────────────────────────────────
+app.get('/conviction', (req, res) => {
+  res.sendFile(join(__dirname, 'public', 'conviction.html'));
+});
+
+app.get('/api/conviction', async (req, res) => {
+  try {
+    // Get tickers from equity_profiles UNION conviction_universe
+    const tickerRes = await db.query(`
+      SELECT ticker FROM lc_v3.equity_profiles
+      UNION
+      SELECT ticker FROM lc_v3.conviction_universe
+    `);
+    const tickers = tickerRes.rows.map(r => r.ticker);
+
+    // Score each ticker
+    const scored = [];
+    for (const ticker of tickers) {
+      try {
+        const result = await scoreConvictionSetup(ticker, db);
+        if (result.conviction_score >= 50) {
+          scored.push(result);
+        }
+      } catch (err) {
+        console.error(`[CONVICTION] Error scoring ${ticker}:`, err.message);
+      }
+    }
+
+    // Sort by score desc, take top 20
+    scored.sort((a, b) => b.conviction_score - a.conviction_score);
+    const top20 = scored.slice(0, 20);
+
+    res.json({
+      results: top20,
+      total_scanned: tickers.length,
+      total_qualifying: scored.length,
+      scanned_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('[CONVICTION]', err);
     res.status(500).json({ error: err.message });
   }
 });
