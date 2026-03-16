@@ -226,58 +226,6 @@ app.post('/api/edit', async (req, res) => {
 // Health check
 app.get('/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
-// Temporary: signal accuracy analysis
-app.get('/api/debug/accuracy', async (req, res) => {
-  try {
-    // Step 1: Get signals
-    const sigRes = await db.query(`
-      SELECT signal_id, ticker, direction, price_at_signal, created_at
-      FROM lc_v3.signals
-      WHERE created_at >= '2026-03-12' AND created_at < '2026-03-14'
-      ORDER BY created_at
-    `);
-    const signals = sigRes.rows;
-
-    // Step 2: For each signal, find bar at signal time AND ~60min later
-    const results = [];
-    for (const sig of signals) {
-      // Bar closest to signal time (entry price)
-      const entryBar = await db.query(`
-        SELECT close, ts FROM lc_v3.bars
-        WHERE ticker = $1
-          AND ts BETWEEN $2::timestamptz - INTERVAL '2 minutes'
-                     AND $2::timestamptz + INTERVAL '2 minutes'
-        ORDER BY ABS(EXTRACT(EPOCH FROM (ts - $2::timestamptz)))
-        LIMIT 1
-      `, [sig.ticker, sig.created_at]);
-
-      // Bar ~60min later
-      const exitBar = await db.query(`
-        SELECT close, ts FROM lc_v3.bars
-        WHERE ticker = $1
-          AND ts BETWEEN $2::timestamptz + INTERVAL '55 minutes'
-                     AND $2::timestamptz + INTERVAL '65 minutes'
-        ORDER BY ABS(EXTRACT(EPOCH FROM (ts - ($2::timestamptz + INTERVAL '60 minutes'))))
-        LIMIT 1
-      `, [sig.ticker, sig.created_at]);
-
-      const entryPrice = sig.price_at_signal ? parseFloat(sig.price_at_signal)
-        : entryBar.rows[0]?.close ? parseFloat(entryBar.rows[0].close) : null;
-
-      results.push({
-        ticker: sig.ticker,
-        direction: sig.direction,
-        price_at_signal: entryPrice,
-        created_at: sig.created_at,
-        price_60min: exitBar.rows[0]?.close ? parseFloat(exitBar.rows[0].close) : null,
-      });
-    }
-
-    const matched = results.filter(r => r.price_at_signal && r.price_60min);
-    res.json({ signals_found: signals.length, matched: matched.length, rows: matched });
-  } catch (err) { res.json({ error: err.message }); }
-});
-
 // Debug endpoint — test contract selector on live Render
 // Snapshot scan — intraday movers
 app.get('/api/snapshots', async (req, res) => {
