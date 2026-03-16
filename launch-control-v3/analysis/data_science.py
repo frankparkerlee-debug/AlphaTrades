@@ -2099,106 +2099,247 @@ def premarket_gap():
 # ─────────────────────────────────────────────────────────────────────────────
 def iv_expansion_earnings():
     import math
+    import json
 
     print('=' * 70)
     print('18) IV EXPANSION PRE-EARNINGS — daily volatility ramp')
     print('=' * 70)
 
-    # Get earnings dates from ticker_intelligence
-    cur.execute("SELECT ticker, earnings_date FROM lc_v3.ticker_intelligence WHERE earnings_date IS NOT NULL")
-    earnings = cur.fetchall()
-    print(f'\n  Tickers with earnings dates: {len(earnings)}')
+    # Get historical earnings from ticker_intelligence
+    cur.execute("""
+        SELECT ticker, historical_earnings
+        FROM lc_v3.ticker_intelligence
+        WHERE historical_earnings IS NOT NULL
+    """)
+    intel_rows = cur.fetchall()
+    print(f'\n  Tickers with historical earnings: {len(intel_rows)}')
 
-    if not earnings:
-        print('  No earnings data found.')
+    if not intel_rows:
+        print('  No historical earnings data found.')
         return
 
-    # Get daily closes for all tickers
-    cur.execute("""
-        SELECT ticker, DATE(ts) AS day,
-               (ARRAY_AGG(close ORDER BY ts DESC))[1] AS day_close
-        FROM lc_v3.bars
-        WHERE session = 'REGULAR'
-        GROUP BY ticker, DATE(ts)
-        ORDER BY ticker, day
-    """)
+    # Parse all earnings events
+    all_events = []  # [{ticker, date}, ...]
+    for r in intel_rows:
+        ticker = r['ticker']
+        hist = r['historical_earnings']
+        if isinstance(hist, str):
+            hist = json.loads(hist)
+        for q in hist:
+            if q.get('date'):
+                all_events.append({'ticker': ticker, 'date': q['date']})
+    print(f'  Total earnings events: {len(all_events)}')
+
+    # Fetch 6 months of daily bars from Alpaca (lc_v3.bars only has ~20 days)
+    import requests
+    from datetime import datetime
+
+    API_KEY    = os.environ.get('ALPACA_API_KEY')
+    API_SECRET = os.environ.get('ALPACA_SECRET_KEY')
+
+    # Get all tickers
+    cur.execute('SELECT ticker FROM lc_v3.equity_profiles ORDER BY ticker')
+    tickers = [r['ticker'] for r in cur.fetchall()]
 
     daily_by_ticker = {}
-    for r in cur.fetchall():
-        t = r['ticker']
-        if t not in daily_by_ticker:
-            daily_by_ticker[t] = []
-        daily_by_ticker[t].append({'day': str(r['day']), 'close': float(r['day_close'])})
 
-    # For each earnings date, compute daily return volatility at various lookbacks
+    # Try local Alpaca keys first, fall back to Render proxy
+    fetch_success = False
+    if API_KEY and API_SECRET:
+        print(f'  Fetching 6mo daily bars from Alpaca for {len(tickers)} tickers...')
+        headers = {'APCA-API-KEY-ID': API_KEY, 'APCA-API-SECRET-KEY': API_SECRET}
+        batch_size = 40
+
+        for batch_start in range(0, len(tickers), batch_size):
+            batch = tickers[batch_start:batch_start + batch_size]
+            page_token = None
+            while True:
+                params = {
+                    'symbols': ','.join(batch), 'timeframe': '1Day',
+                    'start': '2025-09-01', 'end': datetime.now().strftime('%Y-%m-%d'),
+                    'limit': 10000, 'feed': 'sip', 'adjustment': 'split',
+                }
+                if page_token:
+                    params['page_token'] = page_token
+                try:
+                    resp = requests.get('https://data.alpaca.markets/v2/stocks/bars',
+                                        headers=headers, params=params, timeout=30)
+                    if resp.status_code == 401:
+                        print(f'  Alpaca 401 — keys expired, trying Render proxy...')
+                        daily_by_ticker = {}
+                        break
+                    if resp.status_code != 200:
+                        print(f'  Alpaca error {resp.status_code}')
+                        break
+                    data = resp.json()
+                    for ticker, bars in data.get('bars', {}).items():
+                        if ticker not in daily_by_ticker:
+                            daily_by_ticker[ticker] = []
+                        for b in bars:
+                            daily_by_ticker[ticker].append({
+                                'day': b['t'][:10], 'open': b['o'], 'close': b['c'],
+                            })
+                    page_token = data.get('next_page_token')
+                    if not page_token:
+                        break
+                except Exception as e:
+                    print(f'  Alpaca fetch error: {e}')
+                    break
+            else:
+                continue
+            break
+
+        if daily_by_ticker:
+            for t in daily_by_ticker:
+                daily_by_ticker[t].sort(key=lambda x: x['day'])
+            total = sum(len(v) for v in daily_by_ticker.values())
+            print(f'  Fetched {total:,} daily bars for {len(daily_by_ticker)} tickers')
+            fetch_success = True
+
+    # Render proxy fallback: fetch from /api/analysis/rally-exhaustion which already fetches daily bars
+    # Actually, let's just query the raw Alpaca via Render
+    if not fetch_success and not daily_by_ticker:
+        print(f'  Fetching daily bars via Render proxy...')
+        try:
+            resp = requests.get('https://alphatradesv3-1.onrender.com/api/analysis/rally-exhaustion', timeout=120)
+            if resp.status_code == 200:
+                # This endpoint returns analysis, not raw bars — we need raw bars
+                # Fall back to DB
+                print(f'  Render proxy doesn\'t return raw bars — using DB')
+            else:
+                print(f'  Render proxy error {resp.status_code}')
+        except Exception as e:
+            print(f'  Render proxy error: {e}')
+
+    if not daily_by_ticker:
+        print('  No Alpaca keys — falling back to lc_v3.bars (limited range)')
+        cur.execute("""
+            SELECT ticker, DATE(ts) AS day,
+                   (ARRAY_AGG(open ORDER BY ts))[1] AS day_open,
+                   (ARRAY_AGG(close ORDER BY ts DESC))[1] AS day_close
+            FROM lc_v3.bars
+            WHERE session = 'REGULAR'
+            GROUP BY ticker, DATE(ts)
+            ORDER BY ticker, day
+        """)
+        for r in cur.fetchall():
+            t = r['ticker']
+            if t not in daily_by_ticker:
+                daily_by_ticker[t] = []
+            daily_by_ticker[t].append({
+                'day': str(r['day']),
+                'open': float(r['day_open']),
+                'close': float(r['day_close']),
+            })
+
+    # Build day index per ticker for fast lookup
+    day_index = {}  # ticker -> {day_str: index}
+    for t, days in daily_by_ticker.items():
+        day_index[t] = {d['day']: i for i, d in enumerate(days)}
+
     windows = [10, 7, 5, 3, 1]
     vol_by_window = {w: [] for w in windows}
     baseline_vols = []
+    er_day_moves = []  # absolute move on earnings day
 
-    for er in earnings:
-        ticker = er['ticker']
-        edate = str(er['earnings_date'])
+    matched = 0
+
+    for ev in all_events:
+        ticker = ev['ticker']
+        edate = ev['date']
 
         days = daily_by_ticker.get(ticker, [])
-        if len(days) < 25:
+        idx = day_index.get(ticker, {})
+
+        if len(days) < 15:
             continue
 
-        # Build day index
-        day_list = [d['day'] for d in days]
+        # Find earnings date or nearest trading day at or after
+        ei = idx.get(edate)
+        if ei is None:
+            # Find nearest trading day after earnings date
+            candidates = [(d_str, i) for d_str, i in idx.items() if d_str >= edate]
+            if not candidates:
+                # Try nearest before
+                candidates = [(d_str, i) for d_str, i in idx.items() if d_str <= edate]
+                if not candidates:
+                    continue
+                candidates.sort(reverse=True)
+            else:
+                candidates.sort()
+            edate, ei = candidates[0]
+
+        if ei < 12:
+            continue
+
         close_list = [d['close'] for d in days]
 
-        # Find earnings date position
-        if edate not in day_list:
-            # Find nearest trading day before earnings
-            candidates = [d for d in day_list if d <= edate]
-            if not candidates:
-                continue
-            edate = candidates[-1]
+        # Earnings day move: open-to-close on earnings day
+        er_open = days[ei]['open']
+        er_close = days[ei]['close']
+        if er_open > 0:
+            er_move = abs((er_close - er_open) / er_open * 100)
+            er_day_moves.append(er_move)
 
-        ei = day_list.index(edate)
-        if ei < 20:
-            continue
-
-        # Compute daily return volatility over trailing N days for each window
+        # Compute daily return volatility at each window before earnings
         for w in windows:
-            start = ei - w
+            end = ei  # day before earnings day (compute vol of days leading up)
+            start = end - w
             if start < 1:
                 continue
             rets = []
-            for j in range(start, ei):
+            for j in range(start, end):
                 if close_list[j - 1] > 0:
                     rets.append((close_list[j] - close_list[j - 1]) / close_list[j - 1] * 100)
             if len(rets) >= 2:
                 mean = sum(rets) / len(rets)
                 var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
-                vol = math.sqrt(var)
-                vol_by_window[w].append(vol)
+                daily_vol = math.sqrt(var)
+                annual_vol = daily_vol * math.sqrt(252)
+                vol_by_window[w].append(annual_vol)
 
-        # Baseline: 20-day vol ending 20 days before earnings
-        baseline_start = max(1, ei - 40)
-        baseline_end = ei - 20
-        if baseline_end > baseline_start:
+        # Baseline: 20-day vol ending 15 days before earnings
+        baseline_end = ei - 15
+        baseline_start = baseline_end - 20
+        if baseline_start >= 1 and baseline_end > baseline_start:
             brets = []
             for j in range(baseline_start, baseline_end):
                 if close_list[j - 1] > 0:
                     brets.append((close_list[j] - close_list[j - 1]) / close_list[j - 1] * 100)
-            if len(brets) >= 2:
+            if len(brets) >= 5:
                 mean = sum(brets) / len(brets)
                 var = sum((r - mean) ** 2 for r in brets) / (len(brets) - 1)
-                baseline_vols.append(math.sqrt(var))
+                baseline_vols.append(math.sqrt(var) * math.sqrt(252))
+
+        matched += 1
+
+    print(f'  Earnings events matched to bars: {matched}')
 
     baseline_avg = sum(baseline_vols) / len(baseline_vols) if baseline_vols else 0
 
-    print(f'\n  Baseline daily vol (20d before earnings window): {baseline_avg:.3f}%')
-    print(f'\n  {"Days to ER":<15} {"Samples":>10} {"Avg Vol":>10} {"vs Baseline":>12}')
-    print(f'  {"-"*49}')
+    print(f'\n  Baseline annualized vol (20d, >15d before ER): {baseline_avg:.1f}%')
+    print(f'  ({len(baseline_vols)} baseline samples)')
+    print(f'\n  {"Window":<20} {"Samples":>10} {"Ann. Vol":>10} {"vs Base":>10}')
+    print(f'  {"-"*52}')
     for w in windows:
         vols = vol_by_window[w]
         if not vols:
+            print(f'  {w}d before ER       {0:>10} {"—":>10} {"—":>10}')
             continue
         avg = sum(vols) / len(vols)
         ratio = avg / baseline_avg * 100 if baseline_avg > 0 else 0
-        print(f'  {w:>3}d out        {len(vols):>10} {avg:>9.3f}% {ratio:>10.0f}%')
+        print(f'  {w}d before ER       {len(vols):>10} {avg:>9.1f}% {ratio:>8.0f}%')
+
+    # Earnings day move
+    if er_day_moves:
+        avg_move = sum(er_day_moves) / len(er_day_moves)
+        median_move = sorted(er_day_moves)[len(er_day_moves) // 2]
+        big_moves = sum(1 for m in er_day_moves if m > 5)
+        print(f'\n  Earnings Day Move (open → close):')
+        print(f'    Events: {len(er_day_moves)}')
+        print(f'    Avg absolute move: {avg_move:.2f}%')
+        print(f'    Median absolute move: {median_move:.2f}%')
+        print(f'    Moves >5%: {big_moves} ({big_moves/len(er_day_moves)*100:.1f}%)')
 
     print()
 
@@ -2289,11 +2430,242 @@ def vix_regime():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 20) FUNDAMENTAL DETERIORATION — declining revenue + upcoming earnings
+# ─────────────────────────────────────────────────────────────────────────────
+def fundamental_deterioration():
+    print('=' * 70)
+    print('20) FUNDAMENTAL DETERIORATION — revenue decline + upcoming earnings')
+    print('=' * 70)
+
+    # Get all fundamentals ordered by ticker then period descending
+    cur.execute("""
+        SELECT f.ticker, f.period, f.revenue, f.gross_profit, f.gross_margin,
+               f.free_cash_flow
+        FROM lc_v3.fundamentals f
+        ORDER BY f.ticker, f.reported_at DESC
+    """)
+    rows = cur.fetchall()
+
+    # Group by ticker
+    by_ticker = {}
+    for r in rows:
+        t = r['ticker']
+        if t not in by_ticker:
+            by_ticker[t] = []
+        by_ticker[t].append(r)
+
+    # Get earnings intelligence (all tickers, not just those with earnings_date)
+    cur.execute("""
+        SELECT ticker, earnings_date, iv_rank_30d
+        FROM lc_v3.ticker_intelligence
+    """)
+    intel = {r['ticker']: r for r in cur.fetchall()}
+
+    from datetime import datetime, date
+    today = date.today()
+    results = []
+
+    for ticker, quarters in by_ticker.items():
+        if len(quarters) < 4:
+            continue
+
+        # Last 4 quarters (already sorted desc by reported_at)
+        last4 = quarters[:4]
+
+        # Count declining revenue quarters in last 3 transitions
+        # last4[0] is most recent, last4[3] is oldest
+        rev_declines = 0
+        for i in range(3):
+            newer = last4[i]['revenue']
+            older = last4[i + 1]['revenue']
+            if newer is not None and older is not None and newer < older:
+                rev_declines += 1
+
+        if rev_declines < 2:
+            continue
+
+        # Earnings info (optional — show all candidates regardless)
+        ti = intel.get(ticker)
+        days_to = None
+        iv_rank = None
+        if ti:
+            edate = ti.get('earnings_date')
+            if edate:
+                if isinstance(edate, str):
+                    edate = datetime.strptime(edate, '%Y-%m-%d').date()
+                d = (edate - today).days
+                if d >= 0 and d <= 60:
+                    days_to = d
+            if ti.get('iv_rank_30d') is not None:
+                iv_rank = float(ti['iv_rank_30d'])
+
+        # Gross margin trend
+        gm_vals = [float(q['gross_margin']) for q in last4 if q['gross_margin'] is not None]
+        latest_gm = gm_vals[0] if gm_vals else None
+        gm_declines = 0
+        for i in range(min(3, len(gm_vals) - 1)):
+            if gm_vals[i] < gm_vals[i + 1]:
+                gm_declines += 1
+
+        # FCF status
+        latest_fcf = last4[0]['free_cash_flow']
+        fcf_negative = latest_fcf is not None and float(latest_fcf) < 0
+
+        results.append({
+            'ticker': ticker,
+            'rev_decline_quarters': rev_declines,
+            'latest_gm': latest_gm,
+            'gm_declining': gm_declines >= 2,
+            'fcf_negative': fcf_negative,
+            'days_to_earnings': days_to,
+            'iv_rank': iv_rank,
+        })
+
+    # Sort: most declines first, then nearest earnings
+    results.sort(key=lambda x: (-x['rev_decline_quarters'], x['days_to_earnings'] if x['days_to_earnings'] is not None else 9999))
+
+    print(f"\n*** KYNDRYL CANDIDATE LIST — 2+ quarters declining revenue ***")
+    print(f"{'TICKER':<8} {'REV↓ Q':>7} {'GROSS M':>8} {'FCF':>8} {'DAYS':>6} {'IV RANK':>8}")
+    print('-' * 50)
+
+    if not results:
+        print('(none found)')
+    else:
+        for r in results:
+            gm_str = f"{r['latest_gm']*100:.1f}%" if r['latest_gm'] is not None else '—'
+            gm_str += '↓' if r['gm_declining'] else ''
+            fcf_str = 'NEG' if r['fcf_negative'] else 'OK'
+            iv_str = f"{r['iv_rank']:.0f}%" if r['iv_rank'] is not None else '—'
+            days_str = str(r['days_to_earnings']) if r['days_to_earnings'] is not None else '—'
+            print(f"{r['ticker']:<8} {r['rev_decline_quarters']:>5}/3  {gm_str:>8} {fcf_str:>8} {days_str:>6} {iv_str:>8}")
+
+    # Highlight near-earnings candidates
+    near = [r for r in results if r['days_to_earnings'] is not None]
+    if near:
+        print(f"\n  >> {len(near)} with earnings within 60 days (actionable)")
+
+    print(f"\nTotal: {len(results)} tickers flagged")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 21) FULL UNIVERSE DETERIORATION — revenue decline across both universes
+# ─────────────────────────────────────────────────────────────────────────────
+def full_universe_deterioration():
+    from datetime import datetime, date
+    print('=' * 80)
+    print('21) FULL UNIVERSE DETERIORATION — declining revenue (equity_profiles + conviction)')
+    print('=' * 80)
+
+    # All fundamentals
+    cur.execute("""
+        SELECT ticker, period, revenue, gross_margin, free_cash_flow, reported_at
+        FROM lc_v3.fundamentals
+        ORDER BY ticker, reported_at DESC
+    """)
+    rows = cur.fetchall()
+
+    by_ticker = {}
+    for r in rows:
+        t = r['ticker']
+        if t not in by_ticker:
+            by_ticker[t] = []
+        by_ticker[t].append(r)
+
+    # Earnings intelligence
+    cur.execute("SELECT ticker, earnings_date, iv_rank_30d FROM lc_v3.ticker_intelligence")
+    intel = {r['ticker']: r for r in cur.fetchall()}
+
+    # Universe membership
+    cur.execute("SELECT ticker FROM lc_v3.equity_profiles")
+    core_set = set(r['ticker'] for r in cur.fetchall())
+    cur.execute("SELECT ticker FROM lc_v3.conviction_universe")
+    conv_set = set(r['ticker'] for r in cur.fetchall())
+
+    today = date.today()
+    results = []
+
+    for ticker, quarters in by_ticker.items():
+        if len(quarters) < 4:
+            continue
+        last4 = quarters[:4]
+
+        # Count declining revenue in last 3 transitions
+        rev_declines = 0
+        for i in range(3):
+            newer = last4[i]['revenue']
+            older = last4[i + 1]['revenue']
+            if newer is not None and older is not None and float(newer) < float(older):
+                rev_declines += 1
+
+        if rev_declines < 2:
+            continue
+
+        # Gross margin
+        latest_gm = float(last4[0]['gross_margin']) if last4[0]['gross_margin'] is not None else None
+
+        # FCF
+        latest_fcf = last4[0]['free_cash_flow']
+        fcf_negative = latest_fcf is not None and float(latest_fcf) < 0
+
+        # Earnings + IV
+        ti = intel.get(ticker)
+        days_to = None
+        iv_rank = None
+        if ti:
+            edate = ti.get('earnings_date')
+            if edate:
+                if isinstance(edate, str):
+                    edate = datetime.strptime(edate, '%Y-%m-%d').date()
+                d = (edate - today).days
+                if 0 <= d <= 90:
+                    days_to = d
+            if ti.get('iv_rank_30d') is not None:
+                iv_rank = float(ti['iv_rank_30d'])
+
+        # Universe
+        if ticker in core_set:
+            universe = 'CORE'
+        elif ticker in conv_set:
+            universe = 'CONV'
+        else:
+            universe = '?'
+
+        results.append({
+            'ticker': ticker,
+            'rev_declines': rev_declines,
+            'latest_gm': latest_gm,
+            'fcf_negative': fcf_negative,
+            'days_to': days_to,
+            'iv_rank': iv_rank,
+            'universe': universe,
+        })
+
+    results.sort(key=lambda x: (-x['rev_declines'], x['days_to'] if x['days_to'] is not None else 9999))
+
+    print(f"\n{'TICKER':<8} {'REV↓':>5} {'GROSS M':>8} {'FCF':>5} {'DAYS':>6} {'IV':>6} {'UNIV':>6}")
+    print('-' * 48)
+
+    if not results:
+        print('(none found)')
+    else:
+        for r in results:
+            gm_str = f"{r['latest_gm']*100:.1f}%" if r['latest_gm'] is not None else '—'
+            fcf_str = 'NEG' if r['fcf_negative'] else 'OK'
+            days_str = str(r['days_to']) if r['days_to'] is not None else '—'
+            iv_str = f"{r['iv_rank']:.0f}%" if r['iv_rank'] is not None else '—'
+            print(f"{r['ticker']:<8} {r['rev_declines']:>3}/3  {gm_str:>8} {fcf_str:>5} {days_str:>6} {iv_str:>6} {r['universe']:>6}")
+
+    core_cnt = sum(1 for r in results if r['universe'] == 'CORE')
+    conv_cnt = sum(1 for r in results if r['universe'] == 'CONV')
+    near_cnt = sum(1 for r in results if r['days_to'] is not None)
+    print(f"\nTotal: {len(results)} flagged ({core_cnt} core, {conv_cnt} conviction)")
+    print(f"  >> {near_cnt} with earnings within 90 days")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     try:
-        premarket_gap()
-        iv_expansion_earnings()
-        vix_regime()
+        full_universe_deterioration()
     finally:
         cur.close()
         conn.close()

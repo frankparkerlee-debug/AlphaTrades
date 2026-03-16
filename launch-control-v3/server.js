@@ -225,6 +225,51 @@ app.post('/api/edit', async (req, res) => {
 app.get('/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
 // Debug endpoint — test contract selector on live Render
+// Snapshot scan — intraday movers
+app.get('/api/snapshots', async (req, res) => {
+  try {
+    const alpacaHdrs = {
+      'APCA-API-KEY-ID': process.env.ALPACA_API_KEY,
+      'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY,
+    };
+    const dataUrl = process.env.ALPACA_DATA_URL || 'https://data.alpaca.markets';
+    const profileRes = await db.query('SELECT ticker FROM lc_v3.equity_profiles ORDER BY ticker');
+    const tickers = profileRes.rows.map(r => r.ticker);
+    const snapRes = await axios.get(`${dataUrl}/v2/stocks/snapshots`, {
+      headers: alpacaHdrs, params: { symbols: tickers.join(','), feed: ALPACA_FEED }, timeout: 10000,
+    });
+    const snaps = snapRes.data || {};
+
+    // Volume baselines
+    const blRes = await db.query('SELECT ticker, window_key, avg_volume FROM lc_v3.volume_baselines');
+    const baselines = {};
+    for (const row of blRes.rows) baselines[`${row.ticker}:${row.window_key}`] = parseFloat(row.avg_volume);
+
+    const et = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const mins = et.getHours() * 60 + et.getMinutes();
+    const wH = Math.floor(mins / 15) * 15;
+    const wKey = `${Math.floor(wH / 60).toString().padStart(2, '0')}:${(wH % 60).toString().padStart(2, '0')}`;
+
+    const results = [];
+    for (const [ticker, snap] of Object.entries(snaps)) {
+      const open = snap.dailyBar?.o || 0;
+      const price = snap.latestTrade?.p || 0;
+      const vol = snap.dailyBar?.v || 0;
+      const prevClose = snap.prevDailyBar?.c || 0;
+      if (!open || !price) continue;
+      const changePct = (price - open) / open;
+      const gapPct = prevClose ? (open - prevClose) / prevClose : 0;
+      const baseline = baselines[`${ticker}:${wKey}`] || 0;
+      const volRatio = baseline > 0 ? vol / baseline : null;
+      results.push({ ticker, price, open, prevClose, changePct, gapPct, vol, baseline, volRatio });
+    }
+    results.sort((a, b) => a.changePct - b.changePct);
+    res.json({ count: results.length, windowKey: wKey, results });
+  } catch (err) {
+    res.json({ error: err.message });
+  }
+});
+
 app.get('/api/debug/contract/:ticker/:direction', async (req, res) => {
   try {
     const { ticker, direction } = req.params;
