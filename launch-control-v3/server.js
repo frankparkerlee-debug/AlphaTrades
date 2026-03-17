@@ -460,28 +460,30 @@ app.post('/api/backtest/run', async (req, res) => {
 // ── SEED BARS (one-shot, triggered via POST) ─────────────────────────────────
 let seedRunning = false;
 let seedResult = null;
+let seedOutput = '';
 app.post('/api/seed-bars', async (req, res) => {
   if (seedRunning) return res.json({ ok: false, error: 'Already running' });
   seedRunning = true;
   seedResult = null;
+  seedOutput = '';
   res.json({ ok: true, message: 'Seed started' });
-  try {
-    const { execSync } = await import('child_process');
-    const output = execSync('node scripts/seed-bars-historical.js', {
-      cwd: process.cwd(), timeout: 600000, encoding: 'utf-8',
-      env: { ...process.env },
-    });
-    seedResult = { ok: true, output: output.slice(-2000) };
-    console.log('[SEED] Complete');
-  } catch (err) {
-    seedResult = { ok: false, error: err.message, output: (err.stdout || '').slice(-2000) };
-    console.error('[SEED] Failed:', err.message);
-  } finally {
+  // Use spawn (non-blocking) so status endpoint stays responsive
+  const { spawn } = await import('child_process');
+  const child = spawn('node', ['scripts/seed-bars-historical.js'], {
+    cwd: process.cwd(), env: { ...process.env },
+  });
+  child.stdout.on('data', d => { seedOutput = (seedOutput + d.toString()).slice(-4000); });
+  child.stderr.on('data', d => { seedOutput = (seedOutput + d.toString()).slice(-4000); });
+  child.on('close', code => {
+    seedResult = code === 0
+      ? { ok: true, output: seedOutput.slice(-2000) }
+      : { ok: false, error: `exit code ${code}`, output: seedOutput.slice(-2000) };
     seedRunning = false;
-  }
+    console.log(`[SEED] ${code === 0 ? 'Complete' : 'Failed with code ' + code}`);
+  });
 });
 app.get('/api/seed-bars/status', (req, res) => {
-  res.json({ running: seedRunning, result: seedResult });
+  res.json({ running: seedRunning, result: seedResult, output: seedRunning ? seedOutput.slice(-2000) : undefined });
 });
 
 // Seed earnings intelligence
