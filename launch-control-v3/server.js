@@ -44,7 +44,7 @@ app.get('/api/signals', async (req, res) => {
         s.score_price_action, s.score_volume, s.score_news,
         s.score_market, s.score_timing,
         s.position_size_pct, s.position_size_dollars,
-        s.confluence_score, s.news_headline,
+        s.confluence_score, s.news_headline, s.price_at_signal,
         s.leader_ticker, s.propagation_lag_min,
         s.spy_change_pct, s.qqq_change_pct, s.sector_change_pct,
         s.relative_volume, s.atr_multiple,
@@ -110,6 +110,11 @@ app.get('/api/signals', async (req, res) => {
       strategy:          ((s.news_headline || '').match(/strategy=(\w+)/) || [])[1] || null,
       news_warning:      (s.news_headline || '').includes('news_warning=true'),
       news_text:         ((s.news_headline || '').match(/news_text=(.+?)(?:\s·|$)/) || [])[1] || null,
+      // Locked targets parsed from signal headline (set once at insertion, never updated)
+      locked_entry:      s.price_at_signal != null ? Number(s.price_at_signal) : null,
+      locked_t1:         ((s.news_headline || '').match(/T1=\$([0-9.]+)/) || [])[1] ? Number(((s.news_headline || '').match(/T1=\$([0-9.]+)/) || [])[1]) : null,
+      locked_t2:         ((s.news_headline || '').match(/T2=\$([0-9.]+)/) || [])[1] ? Number(((s.news_headline || '').match(/T2=\$([0-9.]+)/) || [])[1]) : null,
+      locked_stop:       ((s.news_headline || '').match(/stop=\$([0-9.]+)/) || [])[1] ? Number(((s.news_headline || '').match(/stop=\$([0-9.]+)/) || [])[1]) : null,
       // Intelligence overlay
       earnings_date:     s.earnings_date               || null,
       earnings_days_away: s.earnings_days_away != null ? Number(s.earnings_days_away) : null,
@@ -1180,6 +1185,19 @@ app.get('/conviction', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'conviction.html'));
 });
 
+// In-memory latest prices from poller (ticker → price)
+let latestPrices = {};
+
+app.get('/api/prices', (req, res) => {
+  const tickers = (req.query.tickers || '').split(',').filter(Boolean);
+  if (tickers.length === 0) return res.json(latestPrices);
+  const filtered = {};
+  for (const t of tickers) {
+    if (latestPrices[t] != null) filtered[t] = latestPrices[t];
+  }
+  res.json(filtered);
+});
+
 // In-memory conviction scan state
 let convictionScan = { status: 'idle', results: null, started_at: null, completed_at: null, progress: null, error: null };
 
@@ -1462,6 +1480,12 @@ async function startRestPoller() {
       }
       global.currentRegime = regime;
       global.marketContext = { spyPct, qqqPct, vix, updatedAt: new Date().toISOString() };
+
+      // Update in-memory price cache for /api/prices
+      for (const [t, snap] of Object.entries(allSnaps)) {
+        const p = snap.latestTrade?.p || snap.latestQuote?.ap;
+        if (p) latestPrices[t] = p;
+      }
 
       console.log(`[POLL] ${Object.keys(allSnaps).length} snaps SPY=${(spyPct*100).toFixed(2)}% QQQ=${(qqqPct*100).toFixed(2)}% VIX=${vix} REGIME=${regime.regime}`);
 

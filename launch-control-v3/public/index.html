@@ -373,6 +373,23 @@ body::after {
 .pm-bias-val { font-family: var(--mono); font-size: 10px; font-weight: 700; }
 .pm-tickers { display: flex; flex-wrap: wrap; gap: 4px; }
 .pm-ticker { font-family: var(--mono); font-size: 9px; font-weight: 700; background: var(--bg3); border-radius: 3px; padding: 2px 6px; color: var(--text2); }
+
+/* Locked targets */
+.locked-targets { margin: 8px 0; padding: 8px; background: var(--bg1); border: 1px solid var(--border2); border-radius: 4px; }
+.locked-targets-title { font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: 1px; color: var(--text3); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+.locked-badge { font-size: 8px; padding: 1px 4px; border-radius: 2px; background: rgba(245,158,11,0.15); color: var(--amber); border: 1px solid var(--amber); letter-spacing: 0.5px; }
+.locked-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 4px; }
+.locked-cell { text-align: center; padding: 4px 2px; background: var(--bg2); border-radius: 3px; border: 1px solid var(--border); }
+.locked-cell-label { font-size: 8px; font-weight: 700; letter-spacing: 0.5px; color: var(--text3); margin-bottom: 2px; }
+.locked-cell-value { font-family: var(--mono); font-size: 12px; font-weight: 700; }
+.locked-cell-value.entry { color: var(--text1); }
+.locked-cell-value.stop { color: var(--red); }
+.locked-cell-value.t1 { color: var(--green); }
+.locked-cell-value.t2 { color: var(--green2); }
+.current-price-row { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding: 4px 6px; background: var(--bg3); border-radius: 3px; border: 1px solid var(--border); }
+.current-price-label { font-family: var(--mono); font-size: 9px; font-weight: 600; color: var(--text3); letter-spacing: 0.5px; }
+.current-price-value { font-family: var(--mono); font-size: 13px; font-weight: 700; }
+.current-price-pnl { font-family: var(--mono); font-size: 10px; font-weight: 600; margin-left: 6px; }
 </style>
 </head>
 <body>
@@ -625,6 +642,29 @@ function buildStratBanner(strategy) {
   return `<div class="strat-banner ${info.cls}"><span class="strat-badge">${info.label} · ${info.win}</span>${info.hold ? `<span class="strat-hold">${info.hold}</span>` : ''}</div>`;
 }
 
+function buildLockedTargets(s) {
+  const entry = s.locked_entry;
+  const t1 = s.locked_t1;
+  const t2 = s.locked_t2;
+  const stop = s.locked_stop;
+  if (entry == null && t1 == null && t2 == null && stop == null) return '';
+
+  const cells = [];
+  if (entry != null) cells.push(`<div class="locked-cell"><div class="locked-cell-label">ENTRY</div><div class="locked-cell-value entry">$${entry.toFixed(2)}</div></div>`);
+  if (stop != null) cells.push(`<div class="locked-cell"><div class="locked-cell-label">STOP</div><div class="locked-cell-value stop">$${stop.toFixed(2)}</div></div>`);
+  if (t1 != null) cells.push(`<div class="locked-cell"><div class="locked-cell-label">T1</div><div class="locked-cell-value t1">$${t1.toFixed(2)}</div></div>`);
+  if (t2 != null) cells.push(`<div class="locked-cell"><div class="locked-cell-label">T2</div><div class="locked-cell-value t2">$${t2.toFixed(2)}</div></div>`);
+
+  return `<div class="locked-targets">
+    <div class="locked-targets-title">STOCK TARGETS <span class="locked-badge">LOCKED</span></div>
+    <div class="locked-grid">${cells.join('')}</div>
+    <div class="current-price-row">
+      <span class="current-price-label">CURRENT</span>
+      <span><span class="current-price-value" id="cp-${s.signal_id}">--</span><span class="current-price-pnl" id="cpnl-${s.signal_id}"></span></span>
+    </div>
+  </div>`;
+}
+
 function buildHoldInstruction(strategy, createdAt) {
   if (strategy === 'GAP_REVERSAL') {
     const exit = new Date(new Date(createdAt).getTime() + 90 * 60000);
@@ -800,6 +840,7 @@ function buildCard(s) {
     ${mkt?`<div class="ctx-line">${mkt}</div>`:''}
     ${buildIntelBar(s)}
     ${contract}
+    ${strategy ? buildLockedTargets(s) : ''}
     ${buildHoldInstruction(strategy, s.created_at)}
     ${(() => {
       const gradeSize = {'A+':0.20,'A':0.15,'A-':0.10,'B+':0.07,'B':0.05}[s.grade] || 0.05;
@@ -1092,9 +1133,44 @@ function updateClock() {
     new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:'America/New_York'})+' ET';
 }
 
+// ── LIVE PRICE UPDATER FOR LOCKED TARGETS ──────────────────────────
+async function updateCurrentPrices() {
+  try {
+    const resp = await fetch('/api/prices');
+    if (!resp.ok) return;
+    const prices = await resp.json();
+    // Update each signal card's current price
+    document.querySelectorAll('[id^="cp-"]').forEach(el => {
+      const sigId = el.id.replace('cp-', '');
+      const card = document.getElementById('card-' + sigId);
+      if (!card) return;
+      const ticker = card.querySelector('.ticker')?.textContent;
+      if (!ticker || prices[ticker] == null) return;
+      const curPrice = prices[ticker];
+      el.textContent = '$' + curPrice.toFixed(2);
+      // Compute P&L vs locked entry
+      const pnlEl = document.getElementById('cpnl-' + sigId);
+      if (!pnlEl) return;
+      const entryEl = card.querySelector('.locked-cell-value.entry');
+      if (!entryEl) return;
+      const entry = parseFloat(entryEl.textContent.replace('$', ''));
+      if (!entry) return;
+      const dir = card.querySelector('.dir-badge')?.textContent || 'CALL';
+      const pnlPct = dir === 'PUT'
+        ? ((entry - curPrice) / entry * 100)
+        : ((curPrice - entry) / entry * 100);
+      const sign = pnlPct >= 0 ? '+' : '';
+      pnlEl.textContent = sign + pnlPct.toFixed(2) + '%';
+      pnlEl.style.color = pnlPct >= 0 ? 'var(--green)' : 'var(--red)';
+      el.style.color = pnlPct >= 0 ? 'var(--green)' : 'var(--red)';
+    });
+  } catch { /* non-fatal */ }
+}
+
 // ── INIT ──────────────────────────────────────────────────────────
 loadAll();
 setInterval(loadAll, 8000);
+setInterval(updateCurrentPrices, 5000);
 setInterval(updateClock, 1000);
 updateClock();
 </script>
