@@ -1862,7 +1862,7 @@ async function startRestPoller() {
           const capSignals = scanCapitulationBounce(stratSnapshots, prevCloses, volumeBaselines);
           const putSignals = scanVolumeDropPut(stratSnapshots, prevCloses, volumeBaselines);
           const consecSignals = scanConsecutiveDrop(Object.keys(allSnaps), dailyBars);
-          const sectorSignals = scanSectorRotationBounce(stratSnapshots, prevCloses, spyPct, firstCandles);
+          const sectorSignals = scanSectorRotationBounce(stratSnapshots, prevCloses, spyPct, firstCandles, qqqPct);
           const gapUpSignals = scanGapUpReversal(stratSnapshots, prevCloses, firstCandles);
           const allStratSignals = [...gapSignals, ...capSignals, ...putSignals, ...consecSignals, ...sectorSignals, ...gapUpSignals];
 

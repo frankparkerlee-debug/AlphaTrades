@@ -224,6 +224,19 @@ async function main() {
     }
   }
 
+  // ── Seed index ETFs (SPY, QQQ, IWM) for market context ──────────────────
+  const indexETFs = ['SPY', 'QQQ', 'IWM'];
+  console.log(`\n[SEED] Seeding index ETFs: ${indexETFs.join(', ')}`);
+  for (const etf of indexETFs) {
+    try {
+      const count = await seedTicker(etf, startDate, endDate);
+      console.log(`[SEED] ${etf} — ${count} bars`);
+      totalBars += count;
+    } catch (err) {
+      console.error(`[SEED] ${etf} — FAILED: ${err.message}`);
+    }
+  }
+
   console.log(`\n[SEED] Total bars inserted: ${totalBars.toLocaleString()}`);
 
   // Compute volume baselines
