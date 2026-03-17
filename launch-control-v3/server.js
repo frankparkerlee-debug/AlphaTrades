@@ -522,6 +522,28 @@ app.get('/api/backtest/run-strategies/status', (req, res) => {
   res.json({ running: btRunning, result: btResult, output: btRunning ? btOutput.slice(-4000) : undefined });
 });
 
+// Run trajectory backtest
+let trajRunning = false, trajResult = null, trajOutput = '';
+app.post('/api/backtest/run-trajectory', async (req, res) => {
+  if (trajRunning) return res.json({ ok: false, error: 'Already running' });
+  trajRunning = true; trajResult = null; trajOutput = '';
+  res.json({ ok: true, message: 'Trajectory backtest started' });
+  const { spawn } = await import('child_process');
+  const child = spawn('node', ['--max-old-space-size=512', 'scripts/backtest-trajectory.js'], { cwd: process.cwd(), env: { ...process.env } });
+  child.stdout.on('data', d => { trajOutput = (trajOutput + d.toString()).slice(-8000); });
+  child.stderr.on('data', d => { trajOutput = (trajOutput + d.toString()).slice(-8000); });
+  child.on('close', code => {
+    trajResult = code === 0
+      ? { ok: true, output: trajOutput.slice(-6000) }
+      : { ok: false, error: `exit code ${code}`, output: trajOutput.slice(-6000) };
+    trajRunning = false;
+    console.log(`[BACKTEST] trajectory ${code === 0 ? 'complete' : 'failed code=' + code}`);
+  });
+});
+app.get('/api/backtest/run-trajectory/status', (req, res) => {
+  res.json({ running: trajRunning, result: trajResult, output: trajRunning ? trajOutput.slice(-4000) : undefined });
+});
+
 // Seed daily bars (2 years)
 let dailySeedRunning = false;
 let dailySeedResult = null;
