@@ -218,6 +218,11 @@ body::after {
 .strat-gapup   { background: rgba(249,115,22,0.1); color: #f97316; border-bottom: 3px solid #f97316; }
 .strat-sector  { background: rgba(34,211,238,0.1); color: #22d3ee; border-bottom: 3px solid #22d3ee; }
 .strat-momentum{ background: rgba(245,158,11,0.08); color: var(--amber); border-bottom: 3px solid var(--amber); }
+.paper-only-banner {
+  background: rgba(139,92,246,0.12); border: 1px solid var(--purple); border-radius: 3px;
+  padding: 5px 10px; margin-bottom: 8px; font-family: var(--mono); font-size: 10px;
+  color: var(--purple); font-weight: 600; letter-spacing: 0.5px; text-align: center;
+}
 
 /* Hold instruction */
 .hold-instruction {
@@ -760,7 +765,8 @@ function buildCard(s) {
     ? `<div class="auto-status-banner auto-invalid">INVALID — ${(s.human_notes||'').includes('CONDITIONS_CHANGED') ? 'CONDITIONS CHANGED' : 'SETUP INVALIDATED'}</div>`
     : '';
 
-  // Actions — only 3 human buttons: TOOK IT, PAPER, SKIP
+  // Actions — only 3 human buttons: TOOK IT, PAPER, SKIP (PAPER_ONLY hides TOOK IT)
+  const isPaperOnly = s.paper_only;
   const actions = (stale || isAutoExpired || isAutoMissed || isAutoInvalid)
     ? (s.human_taken
       ? `<div class="action-row-primary"><button class="btn btn-taken" disabled>✓ TOOK IT</button></div>
@@ -769,16 +775,22 @@ function buildCard(s) {
     : s.human_taken===true
       ? `<div class="action-row-primary"><button class="btn btn-taken" disabled>✓ TOOK IT</button></div>
          <div class="action-row-primary"><button class="btn btn-edit" onclick="editTrade('${s.signal_id}',${s.human_entry_price||0},${s.human_exit_price||0})">EDIT</button></div>`
-      : `<div class="action-row-primary">
-           <button class="btn btn-take" onclick="takeSignal('${s.signal_id}',this)">TOOK IT</button>
-           <button class="btn btn-paper" onclick="paperSignal('${s.signal_id}',this)">PAPER</button>
-           <button class="btn btn-skip" onclick="skipSignal('${s.signal_id}',this)">SKIP</button>
-         </div>`;
+      : isPaperOnly
+        ? `<div class="action-row-primary">
+             <button class="btn btn-paper" onclick="paperSignal('${s.signal_id}',this)">PAPER</button>
+             <button class="btn btn-skip" onclick="skipSignal('${s.signal_id}',this)">SKIP</button>
+           </div>`
+        : `<div class="action-row-primary">
+             <button class="btn btn-take" onclick="takeSignal('${s.signal_id}',this)">TOOK IT</button>
+             <button class="btn btn-paper" onclick="paperSignal('${s.signal_id}',this)">PAPER</button>
+             <button class="btn btn-skip" onclick="skipSignal('${s.signal_id}',this)">SKIP</button>
+           </div>`;
 
   return `
   <div class="card ${g}${stale?' stale':''}${isBreakdown?' breakdown-card':''}${isWeakening?' weakening-card':''}" id="card-${s.signal_id}">
     <div class="card-glow"></div>
     ${buildStratBanner(strategy)}
+    ${isPaperOnly ? '<div class="paper-only-banner">PAPER ONLY — Tracking performance, not for live entry</div>' : ''}
     ${s.news_warning && strategy === 'CAPITULATION_BOUNCE' ? '<div style="background:rgba(245,158,11,0.12);border:1px solid var(--amber);border-radius:3px;padding:6px 10px;margin-bottom:8px;font-family:var(--mono);font-size:10px;color:var(--amber);font-weight:600;letter-spacing:0.5px">CAUTION — Recent news detected. Verify drop is not fundamental before entering.' + (s.news_text ? '<div style="font-weight:400;margin-top:3px;font-size:9px;color:var(--text2);letter-spacing:0">' + s.news_text.replace(/</g,'&lt;') + '</div>' : '') + '</div>' : ''}
     ${statusOverlay}
     <div class="card-head">

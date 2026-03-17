@@ -6,7 +6,7 @@ import { dirname, join } from 'path';
 import { Pool } from 'pg';
 import cron from 'node-cron';
 import { createServer } from 'http';
-import { selectOptionsContract } from './src/options/contract-selector.js';
+import { selectOptionsContract, getOptionsVolume } from './src/options/contract-selector.js';
 import { getNewsEvents } from './src/data/state.js';
 import { computeNewsScore } from './src/scoring/news.js';
 import { runBacktest } from './scripts/backtest/run.js';
@@ -108,6 +108,7 @@ app.get('/api/signals', async (req, res) => {
       composite_history: s.composite_history            || [],
       momentum_trend:    s.momentum_trend              || null,
       strategy:          ((s.news_headline || '').match(/strategy=(\w+)/) || [])[1] || null,
+      paper_only:        s.status === 'PAPER_ONLY',
       news_warning:      (s.news_headline || '').includes('news_warning=true'),
       news_text:         ((s.news_headline || '').match(/news_text=(.+?)(?:\s·|$)/) || [])[1] || null,
       // Locked targets parsed from signal headline (set once at insertion, never updated)
@@ -1876,6 +1877,18 @@ async function startRestPoller() {
             `, [sig.ticker, sig.direction, `%strategy=${sig.strategy}%`]);
             if (dupCheck.rows.length > 0) continue;
 
+            // Options volume gate — skip if total options volume < 2000 contracts
+            try {
+              const optVol = await getOptionsVolume(sig.ticker);
+              if (optVol < 2000) {
+                console.log(`[STRATEGY] ${sig.ticker} ${sig.strategy} skipped — options vol ${optVol} < 2000`);
+                continue;
+              }
+            } catch (volErr) {
+              console.warn(`[STRATEGY] ${sig.ticker} options volume check failed: ${volErr.message}`);
+              // Allow signal through if volume check fails (API error)
+            }
+
             let compositeRaw = sig.strategy === 'GAP_REVERSAL' ? 85
                              : sig.strategy === 'CAPITULATION_BOUNCE' ? 72
                              : sig.strategy === 'SECTOR_ROTATION_BOUNCE' ? 88
@@ -1947,6 +1960,9 @@ async function startRestPoller() {
             const expiryInterval = sig.strategy === 'CONSEC_BOUNCE'
               ? '2 days' : '4 hours';
 
+            // VOL_DROP_PUT fires as PAPER_ONLY — track but don't prompt for live entry
+            const signalStatus = sig.strategy === 'VOL_DROP_PUT' ? 'PAPER_ONLY' : 'ACTIVE';
+
             await db.query(`
               INSERT INTO lc_v3.signals (
                 ticker, direction, grade, status, composite_raw, signal_tier,
@@ -1954,12 +1970,12 @@ async function startRestPoller() {
                 first_seen_at, last_confirmed_at, confirmation_count,
                 peak_composite, peak_grade, composite_history, momentum_trend,
                 expires_at, created_at
-              ) VALUES ($1,$2,'A','ACTIVE',$3,'primary',$4,$5,
-                NOW(), NOW(), 1, $3, 'A', '[]'::jsonb, 'NEW',
+              ) VALUES ($1,$2,'A',$3,$4,'primary',$5,$6,
+                NOW(), NOW(), 1, $4, 'A', '[]'::jsonb, 'NEW',
                 NOW() + INTERVAL '${expiryInterval}', NOW())
-            `, [sig.ticker, sig.direction, compositeRaw, sig.entry_price, signalNote]);
+            `, [sig.ticker, sig.direction, signalStatus, compositeRaw, sig.entry_price, signalNote]);
 
-            console.log(`[STRATEGY] ${sig.ticker} ${sig.direction} ${sig.strategy} ${sig.confidence}%`);
+            console.log(`[STRATEGY] ${sig.ticker} ${sig.direction} ${sig.strategy} ${sig.confidence}% ${signalStatus === 'PAPER_ONLY' ? '(PAPER)' : ''}`);
           }
 
           if (allStratSignals.length > 0) {
@@ -2063,6 +2079,16 @@ async function startRestPoller() {
   console.log('[LC v3] REST poller started — scoring every 60s');
 }
 
+// Strategy → minimum DTE for options contract selection
+const STRATEGY_MIN_DTE = {
+  GAP_REVERSAL: 0,
+  SECTOR_ROTATION_BOUNCE: 0,
+  GAP_UP_REVERSAL: 1,
+  CAPITULATION_BOUNCE: 1,
+  VOL_DROP_PUT: 2,
+  CONSEC_BOUNCE: 3,
+};
+
 // ── POST-SIGNAL MONITORING ────────────────────────────────────────────────────
 async function monitorActiveSignals(alpacaHdrs, dataUrl, profiles) {
   try {
@@ -2070,9 +2096,9 @@ async function monitorActiveSignals(alpacaHdrs, dataUrl, profiles) {
 
     // Get all ACTIVE and WEAKENING signals from today
     const res = await db.query(`
-      SELECT signal_id, ticker, direction, atr_multiple, grade
+      SELECT signal_id, ticker, direction, atr_multiple, grade, news_headline
       FROM lc_v3.signals
-      WHERE status IN ('ACTIVE','WEAKENING')
+      WHERE status IN ('ACTIVE','WEAKENING','PAPER_ONLY')
       AND DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
       AND expires_at > NOW() - INTERVAL '30 minutes'
     `);
@@ -2113,7 +2139,9 @@ async function monitorActiveSignals(alpacaHdrs, dataUrl, profiles) {
 
       // Refresh contract prices every cycle for active signals
       try {
-        const contract = await selectOptionsContract(signal.ticker, signal.direction, signal.grade, price, atr);
+        const sigStrategy = ((signal.news_headline || '').match(/strategy=(\w+)/) || [])[1] || '';
+        const minDTE = STRATEGY_MIN_DTE[sigStrategy] ?? 0;
+        const contract = await selectOptionsContract(signal.ticker, signal.direction, signal.grade, price, atr, { minDTE });
         if (contract) {
           await db.query(`
             UPDATE lc_v3.signals SET
@@ -2147,7 +2175,7 @@ async function monitorActiveSignals(alpacaHdrs, dataUrl, profiles) {
 async function backfillContracts() {
   try {
     const res = await db.query(`
-      SELECT signal_id, ticker, direction, grade, composite_raw
+      SELECT signal_id, ticker, direction, grade, composite_raw, news_headline
       FROM lc_v3.signals
       WHERE contract_mid IS NULL
         AND DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
@@ -2158,7 +2186,9 @@ async function backfillContracts() {
 
     for (const row of res.rows) {
       try {
-        const contract = await selectOptionsContract(row.ticker, row.direction, row.grade, 0, 0.025);
+        const rowStrategy = ((row.news_headline || '').match(/strategy=(\w+)/) || [])[1] || '';
+        const minDTE = STRATEGY_MIN_DTE[rowStrategy] ?? 0;
+        const contract = await selectOptionsContract(row.ticker, row.direction, row.grade, 0, 0.025, { minDTE });
         if (!contract) continue;
         await db.query(`
           UPDATE lc_v3.signals SET

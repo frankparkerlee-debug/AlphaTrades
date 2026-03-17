@@ -51,7 +51,7 @@ function parseExpiryFromOCC(symbol) {
  * then pick the nearest expiry from the results.
  * Uses /v1beta1/options/snapshots which works (the /contracts endpoint 404s).
  */
-async function fetchAllSnapshots(ticker, direction) {
+async function fetchAllSnapshots(ticker, direction, minDTE = 0) {
   try {
     const type = direction === 'CALL' ? 'call' : 'put';
     let allSnaps = {};
@@ -84,7 +84,13 @@ async function fetchAllSnapshots(ticker, direction) {
 
     if (expiries.length === 0) return { snapshots: snaps, expiry: null };
 
-    const nearest = expiries[0];
+    // Filter expiries by minimum DTE
+    const eligible = expiries.filter(d => Math.round((new Date(d) - new Date(today)) / 86400000) >= minDTE);
+    if (eligible.length === 0) {
+      console.log(`[contract] ${ticker}: no expiries meet minDTE=${minDTE} (available: ${expiries.join(', ')})`);
+      return { snapshots: snaps, expiry: null };
+    }
+    const nearest = eligible[0];
     const days = Math.round((new Date(nearest) - new Date(today)) / 86400000);
     const label = days <= 0 ? '0DTE' : `${days}DTE`;
 
@@ -234,9 +240,9 @@ function buildRecommendation(contract, expiry, grade, direction, ticker) {
 /**
  * Main export — get contract recommendation for a signal
  */
-export async function selectOptionsContract(ticker, direction, grade, currentPrice, atr) {
+export async function selectOptionsContract(ticker, direction, grade, currentPrice, atr, { minDTE = 0 } = {}) {
   try {
-    const { snapshots, expiry } = await fetchAllSnapshots(ticker, direction);
+    const { snapshots, expiry } = await fetchAllSnapshots(ticker, direction, minDTE);
 
     if (!expiry) {
       console.log(`[contract] No options available for ${ticker}`);
@@ -254,6 +260,32 @@ export async function selectOptionsContract(ticker, direction, grade, currentPri
   } catch (err) {
     console.error(`[contract] Selection failed for ${ticker}:`, err.message);
     return null;
+  }
+}
+
+/**
+ * Check total options volume for a ticker today.
+ * Returns total volume across all call+put snapshots.
+ */
+export async function getOptionsVolume(ticker) {
+  try {
+    let totalVol = 0;
+    for (const type of ['call', 'put']) {
+      const res = await axios.get(`${DATA_URL}/v1beta1/options/snapshots/${ticker}`, {
+        headers,
+        params: { type, limit: 100 },
+        timeout: 8000,
+      });
+      const snaps = res.data?.snapshots || {};
+      for (const snap of Object.values(snaps)) {
+        totalVol += snap.latestTrade?.v || 0;
+        totalVol += snap.dayBar?.v || 0;
+      }
+    }
+    return totalVol;
+  } catch (err) {
+    console.warn(`[contract] Options volume check failed for ${ticker}:`, err.message);
+    return 0;
   }
 }
 
