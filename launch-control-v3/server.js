@@ -486,6 +486,34 @@ app.get('/api/seed-bars/status', (req, res) => {
   res.json({ running: seedRunning, result: seedResult, output: seedRunning ? seedOutput.slice(-2000) : undefined });
 });
 
+// Seed daily bars (2 years)
+let dailySeedRunning = false;
+let dailySeedResult = null;
+let dailySeedOutput = '';
+app.post('/api/seed-daily-bars', async (req, res) => {
+  if (dailySeedRunning) return res.json({ ok: false, error: 'Already running' });
+  dailySeedRunning = true;
+  dailySeedResult = null;
+  dailySeedOutput = '';
+  res.json({ ok: true, message: 'Daily bars seed started' });
+  const { spawn } = await import('child_process');
+  const child = spawn('node', ['scripts/seed-daily-bars.js'], {
+    cwd: process.cwd(), env: { ...process.env },
+  });
+  child.stdout.on('data', d => { dailySeedOutput = (dailySeedOutput + d.toString()).slice(-4000); });
+  child.stderr.on('data', d => { dailySeedOutput = (dailySeedOutput + d.toString()).slice(-4000); });
+  child.on('close', code => {
+    dailySeedResult = code === 0
+      ? { ok: true, output: dailySeedOutput.slice(-2000) }
+      : { ok: false, error: `exit code ${code}`, output: dailySeedOutput.slice(-2000) };
+    dailySeedRunning = false;
+    console.log(`[DAILY-SEED] ${code === 0 ? 'Complete' : 'Failed with code ' + code}`);
+  });
+});
+app.get('/api/seed-daily-bars/status', (req, res) => {
+  res.json({ running: dailySeedRunning, result: dailySeedResult, output: dailySeedRunning ? dailySeedOutput.slice(-2000) : undefined });
+});
+
 // Seed earnings intelligence
 let earningsRunning = false;
 let earningsResult = null;
