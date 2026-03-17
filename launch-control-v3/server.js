@@ -1808,7 +1808,7 @@ async function startRestPoller() {
           // Build firstCandles — earliest bar after 9:30 ET today for each ticker
           const firstCandles = {};
           const fcRes = await db.query(`
-            SELECT DISTINCT ON (ticker) ticker, open, close
+            SELECT DISTINCT ON (ticker) ticker, open, high, low, close
             FROM lc_v3.bars
             WHERE session = 'REGULAR'
               AND DATE(ts AT TIME ZONE 'America/New_York') = CURRENT_DATE
@@ -1817,7 +1817,7 @@ async function startRestPoller() {
             ORDER BY ticker, ts
           `);
           for (const row of fcRes.rows) {
-            firstCandles[row.ticker] = { open: parseFloat(row.open), close: parseFloat(row.close) };
+            firstCandles[row.ticker] = { open: parseFloat(row.open), high: parseFloat(row.high), low: parseFloat(row.low), close: parseFloat(row.close) };
           }
 
           // If no bars in DB yet today (bars may not be seeded yet), build from snapshots
@@ -1826,7 +1826,7 @@ async function startRestPoller() {
               const o = snap.dailyBar?.o;
               const firstMin = snap.prevMinuteBar || snap.minuteBar;
               if (o && firstMin) {
-                firstCandles[ticker] = { open: o, close: firstMin.c };
+                firstCandles[ticker] = { open: o, high: firstMin.h || o, low: firstMin.l || firstMin.c, close: firstMin.c };
               }
             }
           }

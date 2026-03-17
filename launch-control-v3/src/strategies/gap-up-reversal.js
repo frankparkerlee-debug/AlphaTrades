@@ -39,7 +39,7 @@ export function scanGapUpReversal(snapshots, prevCloses, firstCandles) {
       direction: 'PUT',
       strategy: 'GAP_UP_REVERSAL',
       entry_price: candle.close,
-      stop_price: candle.open,
+      stop_price: candle.high || candle.open,
       gap_pct: +(gap * 100).toFixed(2),
       t1_target: +(todayOpen - gapAmount * 0.40).toFixed(2),
       t2_target: +prevClose.toFixed(2),

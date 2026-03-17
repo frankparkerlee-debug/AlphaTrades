@@ -24,6 +24,10 @@ export function scanCapitulationBounce(snapshots, prevCloses, volumeBaselines) {
 
     if (intradayDrop > -0.03) continue;
 
+    // Guard: if price has already bounced >1.5% above open, the move happened — skip
+    const bounceFromOpen = (currentPrice - todayOpen) / todayOpen;
+    if (bounceFromOpen > 0.015) continue;
+
     const windowKey = snap.windowKey;
     if (!windowKey) continue;
 
@@ -37,7 +41,7 @@ export function scanCapitulationBounce(snapshots, prevCloses, volumeBaselines) {
       ticker,
       direction: 'CALL',
       strategy: 'CAPITULATION_BOUNCE',
-      entry_price: currentPrice,
+      entry_price: todayOpen,
       gap_pct: +(intradayDrop * 100).toFixed(2),
       volume_ratio: +volumeRatio.toFixed(2),
       confidence: 72.0,
