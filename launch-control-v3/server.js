@@ -17,6 +17,7 @@ import { scanConsecutiveDrop } from './src/strategies/consecutive-drop.js';
 import { scanSectorRotationBounce } from './src/strategies/sector-rotation-bounce.js';
 import { scanGapUpReversal } from './src/strategies/gap-up-reversal.js';
 import { scoreConvictionSetup } from './src/strategies/conviction-scorer.js';
+import { monitorOpenPositions } from './src/jobs/options-monitor.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app  = express();
@@ -2093,6 +2094,13 @@ async function startRestPoller() {
       // Post-signal monitoring — check active signals for breakdowns
       await monitorActiveSignals(alpacaHdrs, dataUrl, profiles);
 
+      // Options greeks monitoring on open paper trades
+      try {
+        await monitorOpenPositions(db);
+      } catch (greeksErr) {
+        console.error('[GREEKS] Monitor cycle error:', greeksErr.message);
+      }
+
       // ── AUTO-STATUS: expire, miss, and invalidate signals ────────────
       try {
         const et = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -2338,6 +2346,19 @@ async function backfillContracts() {
       await db.query(`ALTER TABLE lc_v3.signals ADD COLUMN IF NOT EXISTS ${col} ${type}`);
     }
     console.log('[MIGRATE] Greeks columns ensured on lc_v3.signals');
+
+    // Paper trades greeks monitoring columns
+    const paperCols = [
+      ['current_delta', 'NUMERIC'],
+      ['current_iv', 'NUMERIC'],
+      ['current_spread', 'NUMERIC'],
+      ['cumulative_theta', 'NUMERIC'],
+      ['greeks_updated_at', 'TIMESTAMPTZ'],
+    ];
+    for (const [col, type] of paperCols) {
+      await db.query(`ALTER TABLE lc_v3.paper_trades ADD COLUMN IF NOT EXISTS ${col} ${type}`);
+    }
+    console.log('[MIGRATE] Greeks monitor columns ensured on lc_v3.paper_trades');
   } catch (err) {
     console.error('[MIGRATE] Greeks columns error:', err.message);
   }
