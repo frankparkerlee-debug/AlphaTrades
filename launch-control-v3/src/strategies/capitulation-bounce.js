@@ -41,7 +41,7 @@ export function scanCapitulationBounce(snapshots, prevCloses, volumeBaselines) {
       ticker,
       direction: 'CALL',
       strategy: 'CAPITULATION_BOUNCE',
-      entry_price: todayOpen,
+      entry_price: currentPrice,
       gap_pct: +(intradayDrop * 100).toFixed(2),
       volume_ratio: +volumeRatio.toFixed(2),
       confidence: 72.0,

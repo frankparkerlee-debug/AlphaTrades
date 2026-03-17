@@ -19,7 +19,7 @@ function detectGapReversal(ticker, todayOpen, prevClose, firstCandle) {
   return {
     strategy: 'GAP_REVERSAL', direction: 'CALL', ticker,
     entry_price: firstCandle.close,
-    stop_price: firstCandle.low || firstCandle.open,
+    stop_price: (firstCandle.low || firstCandle.open) - firstCandle.close * 0.005,
     t1: todayOpen + gapAmount * 0.40,
     t2: todayOpen + gapAmount * 0.77,
     exit_by_mins: 210, gap_pct: gap * 100,
@@ -34,7 +34,7 @@ function detectGapUpReversal(ticker, todayOpen, prevClose, firstCandle) {
   return {
     strategy: 'GAP_UP_REVERSAL', direction: 'PUT', ticker,
     entry_price: firstCandle.close,
-    stop_price: firstCandle.high || firstCandle.open,
+    stop_price: (firstCandle.high || firstCandle.open) + firstCandle.close * 0.005,
     t1: todayOpen - gapAmount * 0.40,
     t2: prevClose,
     exit_by_mins: 210, gap_pct: gap * 100,
@@ -53,7 +53,7 @@ function detectCapitulationBounce(ticker, todayBars, todayOpen, volBaseline) {
     if (volRatio < 1.5) continue;
     return {
       strategy: 'CAPITULATION_BOUNCE', direction: 'CALL', ticker,
-      entry_price: todayOpen, bar_index: i, hold: 'OVERNIGHT', drop_pct: drop * 100,
+      entry_price: bar.close, bar_index: i, hold: 'OVERNIGHT', drop_pct: drop * 100,
     };
   }
   return null;
