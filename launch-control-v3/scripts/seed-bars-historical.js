@@ -190,16 +190,16 @@ async function main() {
   const tickers = profileRes.rows.map(r => r.ticker);
   console.log(`[SEED] ${tickers.length} tickers to seed`);
 
-  // Date range: 20 trading days ago ≈ 30 calendar days
+  // Date range: 6 months of 1-min bars (180 calendar days)
   const end = new Date();
   const start = new Date();
-  start.setDate(start.getDate() - 30);
+  start.setDate(start.getDate() - 180);
   const startDate = start.toISOString();
   const endDate = end.toISOString();
   console.log(`[SEED] Range: ${startDate.split('T')[0]} → ${endDate.split('T')[0]}`);
 
-  // Clear old bars to avoid bloat on re-runs
-  const delRes = await query(`DELETE FROM lc_v3.bars WHERE ts < NOW() - INTERVAL '31 days'`);
+  // Clear bars older than 180 days to avoid bloat on re-runs
+  const delRes = await query(`DELETE FROM lc_v3.bars WHERE ts < NOW() - INTERVAL '181 days'`);
   if (delRes.rowCount > 0) console.log(`[SEED] Cleaned ${delRes.rowCount} old bars`);
 
   let totalBars = 0;
