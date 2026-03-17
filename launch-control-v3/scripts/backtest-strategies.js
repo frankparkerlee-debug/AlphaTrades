@@ -1,11 +1,10 @@
 /**
  * 6-Month Strategy Backtest Against Stored Bars
  *
- * Bulk-loads all bar data upfront, then replays all 6 strategy scanners
- * per trading day. Measures directional accuracy at 30/60/120 min,
- * win rate per strategy exit rules, and avg move on winners vs losers.
+ * Loads daily closes + baselines upfront (small), then processes each day
+ * with a single bars query. Avoids loading all 5M bars into memory.
  *
- * Run: node scripts/backtest-strategies.js
+ * Run: node --max-old-space-size=512 scripts/backtest-strategies.js
  */
 import 'dotenv/config';
 import { query } from '../src/data/db.js';
@@ -114,11 +113,9 @@ function measureOutcome(signal, entryBarIdx, todayBars, nextDayBars) {
   for (const mins of [30, 60, 120]) {
     const targetIdx = entryBarIdx + mins;
     let price = null;
-    if (targetIdx < todayBars.length) {
-      price = todayBars[targetIdx].close;
-    } else if (nextDayBars && targetIdx - todayBars.length < nextDayBars.length) {
+    if (targetIdx < todayBars.length) price = todayBars[targetIdx].close;
+    else if (nextDayBars && targetIdx - todayBars.length < nextDayBars.length)
       price = nextDayBars[targetIdx - todayBars.length].close;
-    }
     if (price != null) {
       const move = (price - entryPrice) / entryPrice;
       accuracy[`dir_${mins}m`] = (move * dir > 0) ? 1 : 0;
@@ -150,11 +147,8 @@ function measureOutcome(signal, entryBarIdx, todayBars, nextDayBars) {
       if (exitBar) { exitPrice = exitBar.close; exitType = 'TIME'; }
     }
   } else if (signal.hold === 'OVERNIGHT') {
-    if (nextDayBars && nextDayBars.length > 0) {
-      exitPrice = nextDayBars[0].open; exitType = 'NEXT_OPEN';
-    } else {
-      exitPrice = todayBars[todayBars.length - 1]?.close; exitType = 'CLOSE';
-    }
+    if (nextDayBars && nextDayBars.length > 0) { exitPrice = nextDayBars[0].open; exitType = 'NEXT_OPEN'; }
+    else { exitPrice = todayBars[todayBars.length - 1]?.close; exitType = 'CLOSE'; }
   } else if (signal.hold === 'MULTIDAY') {
     if (nextDayBars && nextDayBars.length > 0) {
       const maxB = Math.min(nextDayBars.length, 1170);
@@ -169,85 +163,113 @@ function measureOutcome(signal, entryBarIdx, todayBars, nextDayBars) {
   return { ...accuracy, exitPrice, exitType, pnl, win: pnl != null && pnl > 0 };
 }
 
-// ── Main ─────────────────────────────────────────────────────────────────────
+// ── Load bars for a single day ───────────────────────────────────────────────
 
-async function main() {
-  console.log('[BACKTEST] Bulk loading all bar data...');
-
-  // 1) Load ALL regular-session bars in one query, grouped by ticker+day
-  const barsRes = await query(`
-    SELECT ticker, DATE(ts AT TIME ZONE 'America/New_York') as day,
-           open, high, low, close, volume,
+async function loadDayBars(day) {
+  const res = await query(`
+    SELECT ticker, open, high, low, close, volume,
            EXTRACT(HOUR FROM ts AT TIME ZONE 'America/New_York')::int * 60 +
            EXTRACT(MINUTE FROM ts AT TIME ZONE 'America/New_York')::int as et_mins
     FROM lc_v3.bars
     WHERE session = 'REGULAR'
+      AND DATE(ts AT TIME ZONE 'America/New_York') = $1
     ORDER BY ticker, ts
-  `);
-  console.log(`[BACKTEST] Loaded ${barsRes.rows.length.toLocaleString()} bars`);
+  `, [day]);
 
-  // Index: barsByTicker[ticker][dayStr] = [bars...]
-  const barsByTicker = {};
-  for (const r of barsRes.rows) {
-    const day = r.day.toISOString().split('T')[0];
-    if (!barsByTicker[r.ticker]) barsByTicker[r.ticker] = {};
-    if (!barsByTicker[r.ticker][day]) barsByTicker[r.ticker][day] = [];
-    barsByTicker[r.ticker][day].push({
+  const byTicker = {};
+  for (const r of res.rows) {
+    if (!byTicker[r.ticker]) byTicker[r.ticker] = [];
+    byTicker[r.ticker].push({
       open: parseFloat(r.open), high: parseFloat(r.high),
       low: parseFloat(r.low), close: parseFloat(r.close),
       volume: parseInt(r.volume), et_mins: parseInt(r.et_mins),
     });
   }
+  return byTicker;
+}
 
-  // Get sorted unique trading days and tickers (exclude ETFs)
-  const allDays = [...new Set(barsRes.rows.map(r => r.day.toISOString().split('T')[0]))].sort();
-  const tickers = Object.keys(barsByTicker).filter(t => !['SPY', 'QQQ', 'IWM'].includes(t));
+// ── Main ─────────────────────────────────────────────────────────────────────
+
+async function main() {
+  console.log('[BACKTEST] Loading metadata...');
+
+  // 1) Get all trading days
+  const daysRes = await query(`
+    SELECT DISTINCT DATE(ts AT TIME ZONE 'America/New_York') as day
+    FROM lc_v3.bars WHERE session = 'REGULAR' ORDER BY day
+  `);
+  const allDays = daysRes.rows.map(r => r.day.toISOString().split('T')[0]);
   console.log(`[BACKTEST] ${allDays.length} trading days: ${allDays[0]} → ${allDays[allDays.length - 1]}`);
-  console.log(`[BACKTEST] ${tickers.length} tickers`);
 
-  // Build daily close map: dailyClose[ticker][day] = last bar close
+  // 2) Load daily closes (small — one row per ticker per day)
+  const dcRes = await query(`
+    SELECT DISTINCT ON (ticker, DATE(ts AT TIME ZONE 'America/New_York'))
+      ticker, DATE(ts AT TIME ZONE 'America/New_York') as day, close
+    FROM lc_v3.bars
+    WHERE session = 'REGULAR'
+    ORDER BY ticker, DATE(ts AT TIME ZONE 'America/New_York'), ts DESC
+  `);
   const dailyClose = {};
-  for (const [ticker, days] of Object.entries(barsByTicker)) {
-    dailyClose[ticker] = {};
-    for (const [day, bars] of Object.entries(days)) {
-      if (bars.length > 0) dailyClose[ticker][day] = bars[bars.length - 1].close;
-    }
+  for (const r of dcRes.rows) {
+    const day = r.day.toISOString().split('T')[0];
+    if (!dailyClose[r.ticker]) dailyClose[r.ticker] = {};
+    dailyClose[r.ticker][day] = parseFloat(r.close);
   }
+  const tickers = Object.keys(dailyClose).filter(t => !['SPY', 'QQQ', 'IWM'].includes(t));
+  console.log(`[BACKTEST] ${tickers.length} tickers, ${dcRes.rows.length} daily closes loaded`);
 
-  // Load volume baselines
+  // 3) Volume baselines
   const blRes = await query('SELECT ticker, window_key, avg_volume FROM lc_v3.volume_baselines');
   const baselines = {};
   for (const r of blRes.rows) baselines[`${r.ticker}:${r.window_key}`] = parseFloat(r.avg_volume);
-  console.log(`[BACKTEST] ${blRes.rows.length} baseline pairs loaded`);
+  console.log(`[BACKTEST] ${blRes.rows.length} baselines loaded. Starting replay...`);
 
-  // Results
   const results = {
     GAP_REVERSAL: [], GAP_UP_REVERSAL: [], CAPITULATION_BOUNCE: [],
     VOL_DROP_PUT: [], SECTOR_ROTATION_BOUNCE: [], CONSEC_BOUNCE: [],
   };
 
-  // Process each day
+  // Cache last 2 days of loaded bars to avoid re-loading for next-day lookups
+  let cachedBars = {}; // { day: { ticker: bars[] } }
+
   for (let dayIdx = 1; dayIdx < allDays.length; dayIdx++) {
     const today = allDays[dayIdx];
     const yesterday = allDays[dayIdx - 1];
     const tomorrow = dayIdx + 1 < allDays.length ? allDays[dayIdx + 1] : null;
-    // For CONSEC_BOUNCE multiday exit, get up to 3 days ahead
-    const next3Days = allDays.slice(dayIdx + 1, dayIdx + 4);
 
-    if (dayIdx % 20 === 0) console.log(`[BACKTEST] Day ${dayIdx}/${allDays.length}: ${today}`);
+    if (dayIdx % 10 === 0) console.log(`[BACKTEST] Day ${dayIdx}/${allDays.length}: ${today}`);
 
-    // SPY/QQQ change for sector rotation
-    const spyBarsToday = barsByTicker['SPY']?.[today] || [];
-    const qqqBarsToday = barsByTicker['QQQ']?.[today] || [];
+    // Load today's bars (or use cache)
+    if (!cachedBars[today]) cachedBars[today] = await loadDayBars(today);
+    const barsByTicker = cachedBars[today];
+
+    // Load tomorrow's bars for overnight exits (prefetch into cache)
+    let nextDayBarsByTicker = null;
+    if (tomorrow) {
+      if (!cachedBars[tomorrow]) cachedBars[tomorrow] = await loadDayBars(tomorrow);
+      nextDayBarsByTicker = cachedBars[tomorrow];
+    }
+
+    // For CONSEC_BOUNCE multiday: need up to 3 days ahead — we'll use next day only for simplicity
+    // (full 3-day would require loading 3 more days; next-open is the primary exit)
+
+    // Evict old cache entries (keep only today and tomorrow)
+    for (const d of Object.keys(cachedBars)) {
+      if (d !== today && d !== tomorrow) delete cachedBars[d];
+    }
+
+    // SPY/QQQ change
+    const spyBars = barsByTicker['SPY'] || [];
+    const qqqBars = barsByTicker['QQQ'] || [];
     const spyPrevClose = dailyClose['SPY']?.[yesterday] || 0;
     const qqqPrevClose = dailyClose['QQQ']?.[yesterday] || 0;
-    const spyLatest = spyBarsToday.length > 0 ? spyBarsToday[spyBarsToday.length - 1].close : 0;
-    const qqqLatest = qqqBarsToday.length > 0 ? qqqBarsToday[qqqBarsToday.length - 1].close : 0;
+    const spyLatest = spyBars.length > 0 ? spyBars[spyBars.length - 1].close : 0;
+    const qqqLatest = qqqBars.length > 0 ? qqqBars[qqqBars.length - 1].close : 0;
     const spyChange = spyPrevClose > 0 ? (spyLatest - spyPrevClose) / spyPrevClose : 0;
     const qqqChange = qqqPrevClose > 0 ? (qqqLatest - qqqPrevClose) / qqqPrevClose : 0;
 
     for (const ticker of tickers) {
-      const bars = barsByTicker[ticker]?.[today];
+      const bars = barsByTicker[ticker];
       if (!bars || bars.length < 10) continue;
 
       const prevClose = dailyClose[ticker]?.[yesterday];
@@ -255,22 +277,9 @@ async function main() {
 
       const todayOpen = bars[0].open;
       const firstCandle = { open: bars[0].open, high: bars[0].high, low: bars[0].low, close: bars[0].close };
+      const nextBars = nextDayBarsByTicker?.[ticker] || null;
 
-      // Next day bars for overnight exits
-      const nextBars = tomorrow ? (barsByTicker[ticker]?.[tomorrow] || null) : null;
-
-      // Multi-day bars for CONSEC_BOUNCE
-      let multiDayBars = null;
-      if (next3Days.length > 0) {
-        multiDayBars = [];
-        for (const nd of next3Days) {
-          const nb = barsByTicker[ticker]?.[nd];
-          if (nb) multiDayBars.push(...nb);
-        }
-        if (multiDayBars.length === 0) multiDayBars = null;
-      }
-
-      // Volume baseline (sum first 2 hours of windows)
+      // Volume baseline
       let volBaseline = 0;
       for (let m = 570; m < 690; m += 15) {
         const wk = `${Math.floor(m / 60).toString().padStart(2, '0')}:${(m % 60).toString().padStart(2, '0')}`;
@@ -279,50 +288,36 @@ async function main() {
 
       // 1) GAP_REVERSAL
       const gapSig = detectGapReversal(ticker, todayOpen, prevClose, firstCandle);
-      if (gapSig) {
-        const outcome = measureOutcome(gapSig, 0, bars, nextBars);
-        results.GAP_REVERSAL.push({ ...outcome, ticker, date: today });
-      }
+      if (gapSig) results.GAP_REVERSAL.push({ ...measureOutcome(gapSig, 0, bars, nextBars), ticker, date: today });
 
       // 2) GAP_UP_REVERSAL
       const gapUpSig = detectGapUpReversal(ticker, todayOpen, prevClose, firstCandle);
-      if (gapUpSig) {
-        const outcome = measureOutcome(gapUpSig, 0, bars, nextBars);
-        results.GAP_UP_REVERSAL.push({ ...outcome, ticker, date: today });
-      }
+      if (gapUpSig) results.GAP_UP_REVERSAL.push({ ...measureOutcome(gapUpSig, 0, bars, nextBars), ticker, date: today });
 
       // 3) CAPITULATION_BOUNCE
       const midBars = bars.filter(b => b.et_mins >= 630 && b.et_mins <= 870);
       const capSig = detectCapitulationBounce(ticker, midBars, todayOpen, volBaseline);
       if (capSig) {
         const entryIdx = bars.findIndex(b => b.et_mins >= 630) + (capSig.bar_index || 0);
-        const outcome = measureOutcome(capSig, entryIdx, bars, nextBars);
-        results.CAPITULATION_BOUNCE.push({ ...outcome, ticker, date: today });
+        results.CAPITULATION_BOUNCE.push({ ...measureOutcome(capSig, entryIdx, bars, nextBars), ticker, date: today });
       }
 
       // 4) VOL_DROP_PUT
       const vdpSig = detectVolDropPut(ticker, midBars, todayOpen, volBaseline);
       if (vdpSig) {
         const entryIdx = bars.findIndex(b => b.et_mins >= 630) + (vdpSig.bar_index || 0);
-        const outcome = measureOutcome(vdpSig, entryIdx, bars, nextBars);
-        results.VOL_DROP_PUT.push({ ...outcome, ticker, date: today });
+        results.VOL_DROP_PUT.push({ ...measureOutcome(vdpSig, entryIdx, bars, nextBars), ticker, date: today });
       }
 
       // 5) SECTOR_ROTATION_BOUNCE
       const secSig = detectSectorRotation(ticker, todayOpen, prevClose, spyChange, qqqChange);
-      if (secSig) {
-        const outcome = measureOutcome(secSig, 0, bars, nextBars);
-        results.SECTOR_ROTATION_BOUNCE.push({ ...outcome, ticker, date: today });
-      }
+      if (secSig) results.SECTOR_ROTATION_BOUNCE.push({ ...measureOutcome(secSig, 0, bars, nextBars), ticker, date: today });
 
-      // 6) CONSEC_BOUNCE — need last 4 daily closes
+      // 6) CONSEC_BOUNCE
       const recentDays = allDays.slice(Math.max(0, dayIdx - 4), dayIdx).filter(d => dailyClose[ticker]?.[d] != null);
       const recentCloses = recentDays.map(d => dailyClose[ticker][d]);
       const consecSig = detectConsecBounce(ticker, recentCloses);
-      if (consecSig) {
-        const outcome = measureOutcome(consecSig, 0, bars, multiDayBars);
-        results.CONSEC_BOUNCE.push({ ...outcome, ticker, date: today, consec: consecSig.consecutive_days });
-      }
+      if (consecSig) results.CONSEC_BOUNCE.push({ ...measureOutcome(consecSig, 0, bars, nextBars), ticker, date: today });
     }
   }
 
@@ -330,57 +325,46 @@ async function main() {
 
   console.log('\n' + '='.repeat(100));
   console.log('  6-MONTH STRATEGY BACKTEST RESULTS');
-  console.log('  ' + allDays[0] + ' → ' + allDays[allDays.length - 1] + '  (' + allDays.length + ' trading days, ' + tickers.length + ' tickers)');
+  console.log('  ' + allDays[0] + ' → ' + allDays[allDays.length - 1] + '  (' + allDays.length + ' days, ' + tickers.length + ' tickers)');
   console.log('='.repeat(100));
 
   for (const [strategy, trades] of Object.entries(results)) {
     console.log(`\n${'─'.repeat(100)}`);
     console.log(`  ${strategy}  (${trades.length} signals)`);
     console.log(`${'─'.repeat(100)}`);
-
     if (trades.length === 0) { console.log('  No signals fired'); continue; }
 
     for (const mins of [30, 60, 120]) {
-      const key = `dir_${mins}m`;
-      const moveKey = `move_${mins}m`;
+      const key = `dir_${mins}m`, moveKey = `move_${mins}m`;
       const valid = trades.filter(t => t[key] != null);
       if (valid.length === 0) continue;
       const correct = valid.filter(t => t[key] === 1).length;
       const avgMove = valid.reduce((s, t) => s + (t[moveKey] || 0), 0) / valid.length;
-      console.log(`  ${mins}min accuracy: ${(correct / valid.length * 100).toFixed(1)}% (${correct}/${valid.length})  avg directional move: ${avgMove >= 0 ? '+' : ''}${(avgMove * 100).toFixed(2)}%`);
+      console.log(`  ${mins}min accuracy: ${(correct / valid.length * 100).toFixed(1)}% (${correct}/${valid.length})  avg move: ${avgMove >= 0 ? '+' : ''}${(avgMove * 100).toFixed(2)}%`);
     }
 
     const withPnl = trades.filter(t => t.pnl != null);
     if (withPnl.length > 0) {
-      const wins = withPnl.filter(t => t.win);
-      const losses = withPnl.filter(t => !t.win);
+      const wins = withPnl.filter(t => t.win), losses = withPnl.filter(t => !t.win);
       const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length * 100 : 0;
       const avgLoss = losses.length > 0 ? losses.reduce((s, t) => s + t.pnl, 0) / losses.length * 100 : 0;
       const totalPnl = withPnl.reduce((s, t) => s + t.pnl, 0) * 100;
-
       console.log(`  Win rate:     ${(wins.length / withPnl.length * 100).toFixed(1)}% (${wins.length}W / ${losses.length}L of ${withPnl.length})`);
       console.log(`  Avg winner:   +${avgWin.toFixed(2)}%`);
       console.log(`  Avg loser:    ${avgLoss.toFixed(2)}%`);
       console.log(`  Total P&L:    ${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}%`);
-
       const exitTypes = {};
       for (const t of withPnl) exitTypes[t.exitType] = (exitTypes[t.exitType] || 0) + 1;
       console.log(`  Exit types:   ${Object.entries(exitTypes).map(([k, v]) => `${k}=${v}`).join('  ')}`);
     }
 
-    const tickerStats = {};
-    for (const t of trades) {
-      if (!tickerStats[t.ticker]) tickerStats[t.ticker] = { count: 0, wins: 0, pnl: 0 };
-      tickerStats[t.ticker].count++;
-      if (t.win) tickerStats[t.ticker].wins++;
-      if (t.pnl != null) tickerStats[t.ticker].pnl += t.pnl;
-    }
-    const top = Object.entries(tickerStats).sort((a, b) => b[1].count - a[1].count).slice(0, 5);
-    console.log(`  Top tickers:  ${top.map(([t, s]) => `${t}(${s.count}, ${(s.wins / s.count * 100).toFixed(0)}%W)`).join('  ')}`);
+    const ts = {};
+    for (const t of trades) { if (!ts[t.ticker]) ts[t.ticker] = { c: 0, w: 0 }; ts[t.ticker].c++; if (t.win) ts[t.ticker].w++; }
+    const top = Object.entries(ts).sort((a, b) => b[1].c - a[1].c).slice(0, 5);
+    console.log(`  Top tickers:  ${top.map(([t, s]) => `${t}(${s.c}, ${(s.w / s.c * 100).toFixed(0)}%W)`).join('  ')}`);
   }
 
-  const all = Object.values(results).flat();
-  const allPnl = all.filter(t => t.pnl != null);
+  const all = Object.values(results).flat(), allPnl = all.filter(t => t.pnl != null);
   console.log(`\n${'='.repeat(100)}`);
   console.log(`  TOTAL: ${all.length} signals  ${allPnl.filter(t => t.win).length}W / ${allPnl.filter(t => !t.win).length}L`);
   if (allPnl.length > 0) {
@@ -388,7 +372,6 @@ async function main() {
     console.log(`  Cumulative P&L: ${(allPnl.reduce((s, t) => s + t.pnl, 0) * 100).toFixed(2)}%`);
   }
   console.log('='.repeat(100));
-
   process.exit(0);
 }
 

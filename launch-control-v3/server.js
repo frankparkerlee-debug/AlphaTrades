@@ -503,7 +503,7 @@ app.post('/api/backtest/run-strategies', async (req, res) => {
   btRunning = true; btResult = null; btOutput = '';
   res.json({ ok: true, message: 'Backtest started' });
   const { spawn } = await import('child_process');
-  const child = spawn('node', ['scripts/backtest-strategies.js'], { cwd: process.cwd(), env: { ...process.env } });
+  const child = spawn('node', ['--max-old-space-size=512', 'scripts/backtest-strategies.js'], { cwd: process.cwd(), env: { ...process.env } });
   child.stdout.on('data', d => { btOutput = (btOutput + d.toString()).slice(-8000); });
   child.stderr.on('data', d => { btOutput = (btOutput + d.toString()).slice(-8000); });
   child.on('close', code => {
