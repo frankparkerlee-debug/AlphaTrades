@@ -73,55 +73,41 @@ export async function getRecentEightKs(cik, ticker, days = 90) {
   const forms = recent.form || [];
   const dates = recent.filingDate || [];
   const accessions = recent.accessionNumber || [];
+  const primaryDocs = recent.primaryDocument || [];
 
   // Find all 8-K filings within date range
   const eightKs = [];
   for (let i = 0; i < forms.length; i++) {
     if (forms[i] !== '8-K') continue;
     if (dates[i] < cutoffStr) continue;
-    eightKs.push({ filing_date: dates[i], accession_number: accessions[i] });
+    eightKs.push({
+      filing_date: dates[i],
+      accession_number: accessions[i],
+      primary_document: primaryDocs[i] || null,
+    });
   }
 
   if (eightKs.length === 0) return [];
   console.log(`[EDGAR] ${ticker} found ${eightKs.length} 8-K filings in last ${days} days`);
 
-  // Fetch each 8-K's primary document
+  // Fetch each 8-K's primary document directly (URL from submissions JSON)
+  const cikNum = parseInt(cik, 10);
   const results = [];
   for (const filing of eightKs) {
     try {
+      if (!filing.primary_document) {
+        console.warn(`[EDGAR] ${ticker} no primaryDocument for ${filing.accession_number}`);
+        continue;
+      }
+
       await sleep(200);
 
       const accNoDashes = filing.accession_number.replace(/-/g, '');
-      const indexUrl = `https://www.sec.gov/Archives/edgar/data/${parseInt(cik, 10)}/${accNoDashes}/${filing.accession_number}-index.json`;
-      const idxRes = await fetch(indexUrl, { headers: { 'User-Agent': UA } });
-
-      if (!idxRes.ok) {
-        console.warn(`[EDGAR] ${ticker} index fetch failed for ${filing.accession_number}: ${idxRes.status}`);
-        continue;
-      }
-
-      const idxData = await idxRes.json();
-      const items = idxData.directory?.item || [];
-
-      // Find primary document (first .htm or .txt that isn't the index)
-      const primary = items.find(
-        (it) =>
-          (it.name.endsWith('.htm') || it.name.endsWith('.html') || it.name.endsWith('.txt')) &&
-          !it.name.includes('-index')
-      );
-
-      if (!primary) {
-        console.warn(`[EDGAR] ${ticker} no primary document found for ${filing.accession_number}`);
-        continue;
-      }
-
-      await sleep(200);
-
-      const docUrl = `https://www.sec.gov/Archives/edgar/data/${parseInt(cik, 10)}/${accNoDashes}/${primary.name}`;
+      const docUrl = `https://www.sec.gov/Archives/edgar/data/${cikNum}/${accNoDashes}/${filing.primary_document}`;
       const docRes = await fetch(docUrl, { headers: { 'User-Agent': UA } });
 
       if (!docRes.ok) {
-        console.warn(`[EDGAR] ${ticker} doc fetch failed: ${docRes.status}`);
+        console.warn(`[EDGAR] ${ticker} doc fetch failed for ${filing.accession_number}: ${docRes.status}`);
         continue;
       }
 

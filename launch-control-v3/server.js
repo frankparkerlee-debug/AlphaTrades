@@ -1178,7 +1178,15 @@ app.get('/conviction', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'conviction.html'));
 });
 
+// In-memory conviction scan state
+let convictionScan = { status: 'idle', results: null, started_at: null, completed_at: null, progress: null, error: null };
+
 app.get('/api/conviction', async (req, res) => {
+  // Return cached results if a scan has completed
+  if (convictionScan.status === 'complete' && convictionScan.results) {
+    return res.json(convictionScan.results);
+  }
+
   try {
     // Get tickers from equity_profiles UNION conviction_universe
     const tickerRes = await db.query(`
@@ -1215,6 +1223,89 @@ app.get('/api/conviction', async (req, res) => {
     console.error('[CONVICTION]', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+app.post('/api/conviction/scan', (req, res) => {
+  if (convictionScan.status === 'running') {
+    return res.json({ status: 'already_running', started_at: convictionScan.started_at, progress: convictionScan.progress });
+  }
+
+  convictionScan = { status: 'running', results: null, started_at: new Date().toISOString(), completed_at: null, progress: '0/?', error: null };
+  res.json({ status: 'started', started_at: convictionScan.started_at });
+
+  // Run in background
+  (async () => {
+    try {
+      const tickerRes = await db.query(`
+        SELECT ticker FROM lc_v3.equity_profiles
+        UNION
+        SELECT ticker FROM lc_v3.conviction_universe
+      `);
+      const tickers = tickerRes.rows.map(r => r.ticker);
+      const scored = [];
+      const errors = [];
+
+      // Process in batches of 3 with 500ms delay
+      for (let i = 0; i < tickers.length; i += 3) {
+        const batch = tickers.slice(i, i + 3);
+        convictionScan.progress = `${i}/${tickers.length}`;
+
+        const results = await Promise.allSettled(
+          batch.map(t => scoreConvictionSetup(t, db))
+        );
+
+        for (let j = 0; j < results.length; j++) {
+          if (results[j].status === 'rejected') {
+            errors.push({ ticker: batch[j], error: results[j].reason?.message });
+            continue;
+          }
+          const r = results[j].value;
+          if (r.recommendation === 'STRONG_PUT' || r.recommendation === 'MONITOR') {
+            scored.push(r);
+            console.log(`[CONVICTION SCAN] ${r.ticker} score=${r.conviction_score} rec=${r.recommendation} red_flags=${r.eight_k_red_flags?.length || 0}`);
+          }
+        }
+
+        if (i + 3 < tickers.length) await new Promise(r => setTimeout(r, 500));
+      }
+
+      scored.sort((a, b) => b.conviction_score - a.conviction_score);
+
+      convictionScan.status = 'complete';
+      convictionScan.completed_at = new Date().toISOString();
+      convictionScan.progress = `${tickers.length}/${tickers.length}`;
+      convictionScan.results = {
+        results: scored.slice(0, 30),
+        total_scanned: tickers.length,
+        total_qualifying: scored.length,
+        errors: errors.length,
+        scanned_at: convictionScan.completed_at,
+      };
+      console.log(`[CONVICTION SCAN] Complete: ${scored.length} qualifying out of ${tickers.length}, ${errors.length} errors`);
+    } catch (err) {
+      console.error('[CONVICTION SCAN] Fatal:', err);
+      convictionScan.status = 'error';
+      convictionScan.error = err.message;
+      convictionScan.completed_at = new Date().toISOString();
+    }
+  })();
+});
+
+app.get('/api/conviction/status', (req, res) => {
+  const resp = {
+    status: convictionScan.status,
+    started_at: convictionScan.started_at,
+    completed_at: convictionScan.completed_at,
+    progress: convictionScan.progress,
+    error: convictionScan.error,
+  };
+  if (convictionScan.status === 'complete' && convictionScan.results) {
+    resp.total_scanned = convictionScan.results.total_scanned;
+    resp.total_qualifying = convictionScan.results.total_qualifying;
+    resp.errors = convictionScan.results.errors;
+    resp.results = convictionScan.results.results;
+  }
+  res.json(resp);
 });
 
 // Catch-all — serve dashboard
