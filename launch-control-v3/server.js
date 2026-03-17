@@ -486,6 +486,38 @@ app.get('/api/seed-bars/status', (req, res) => {
   res.json({ running: seedRunning, result: seedResult, output: seedRunning ? seedOutput.slice(-2000) : undefined });
 });
 
+// One-off AMAT reseed
+app.post('/api/seed-amat', async (req, res) => {
+  res.json({ ok: true, message: 'AMAT reseed started' });
+  const { spawn } = await import('child_process');
+  const child = spawn('node', ['scripts/seed-amat.js'], { cwd: process.cwd(), env: { ...process.env } });
+  child.stdout.on('data', d => console.log(d.toString().trim()));
+  child.stderr.on('data', d => console.error(d.toString().trim()));
+  child.on('close', code => console.log(`[AMAT] reseed ${code === 0 ? 'complete' : 'failed code=' + code}`));
+});
+
+// Run strategy backtest
+let btRunning = false, btResult = null, btOutput = '';
+app.post('/api/backtest/run-strategies', async (req, res) => {
+  if (btRunning) return res.json({ ok: false, error: 'Already running' });
+  btRunning = true; btResult = null; btOutput = '';
+  res.json({ ok: true, message: 'Backtest started' });
+  const { spawn } = await import('child_process');
+  const child = spawn('node', ['scripts/backtest-strategies.js'], { cwd: process.cwd(), env: { ...process.env } });
+  child.stdout.on('data', d => { btOutput = (btOutput + d.toString()).slice(-8000); });
+  child.stderr.on('data', d => { btOutput = (btOutput + d.toString()).slice(-8000); });
+  child.on('close', code => {
+    btResult = code === 0
+      ? { ok: true, output: btOutput.slice(-6000) }
+      : { ok: false, error: `exit code ${code}`, output: btOutput.slice(-6000) };
+    btRunning = false;
+    console.log(`[BACKTEST] strategies ${code === 0 ? 'complete' : 'failed code=' + code}`);
+  });
+});
+app.get('/api/backtest/run-strategies/status', (req, res) => {
+  res.json({ running: btRunning, result: btResult, output: btRunning ? btOutput.slice(-4000) : undefined });
+});
+
 // Seed daily bars (2 years)
 let dailySeedRunning = false;
 let dailySeedResult = null;
