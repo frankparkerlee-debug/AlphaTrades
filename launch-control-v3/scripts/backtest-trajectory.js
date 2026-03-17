@@ -25,17 +25,18 @@ const STRATEGY_DTE = {
 // ── Greeks model parameters ──────────────────────────────────────────────────
 const INITIAL_DELTA = 0.50;
 const GAMMA_PER_PCT = 0.02;        // delta change per 1% stock move
-const VEGA_PER_PCT_IV = 0.004;     // option value change per 1% IV change (as fraction)
+const VEGA_MULTIPLIER = 0.0025;    // 10% IV change → 2.5% option price move (0.25% per 1% IV)
 const MAX_DELTA = 0.99;
 const MIN_DELTA = 0.05;
 
 /**
  * Theta decay rate as fraction of option value per day.
- * ATM theta ≈ -1 / (2 * sqrt(DTE)) roughly.
+ * Calibrated from real ATM option theta observations.
  */
+const THETA_BY_DTE = { 0: -0.18, 1: -0.10, 2: -0.07, 3: -0.055, 4: -0.045, 5: -0.04 };
 function thetaPerDay(dte) {
-  if (dte <= 0) return -0.50;
-  return -1 / (2 * Math.sqrt(dte));
+  const rounded = Math.max(0, Math.min(5, Math.round(dte)));
+  return THETA_BY_DTE[rounded] ?? -0.04;
 }
 
 // ── Strategy detection (copied from backtest-strategies.js) ──────────────────
@@ -208,7 +209,7 @@ function buildTrajectory(signal, entryBarIdx, todayBars, nextDayBars, baselines)
     const gammaGain = 0.5 * GAMMA_PER_PCT * (favorableMove * 100) ** 2 / 100;
 
     // vega_gain: vega_sensitivity * IV_change
-    const vegaGain = VEGA_PER_PCT_IV * cumulativeIVChange;
+    const vegaGain = VEGA_MULTIPLIER * cumulativeIVChange;
 
     // theta_decay: cumulative (negative)
     const thetaDecay = cumulativeTheta * 100; // as %
