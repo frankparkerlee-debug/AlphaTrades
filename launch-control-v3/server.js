@@ -108,6 +108,8 @@ app.get('/api/signals', async (req, res) => {
       composite_history: s.composite_history            || [],
       momentum_trend:    s.momentum_trend              || null,
       strategy:          ((s.news_headline || '').match(/strategy=(\w+)/) || [])[1] || null,
+      news_warning:      (s.news_headline || '').includes('news_warning=true'),
+      news_text:         ((s.news_headline || '').match(/news_text=(.+?)(?:\s·|$)/) || [])[1] || null,
       // Intelligence overlay
       earnings_date:     s.earnings_date               || null,
       earnings_days_away: s.earnings_days_away != null ? Number(s.earnings_days_away) : null,
@@ -1876,10 +1878,33 @@ async function startRestPoller() {
               // Non-fatal — skip earnings check
             }
 
+            // News warning for CAPITULATION_BOUNCE — check if recent news drove the drop
+            let newsWarning = false;
+            let newsHeadlineText = null;
+            if (sig.strategy === 'CAPITULATION_BOUNCE') {
+              try {
+                const newsCheck = await db.query(`
+                  SELECT news_headline FROM lc_v3.signals
+                  WHERE ticker = $1
+                    AND created_at >= NOW() - INTERVAL '4 hours'
+                    AND news_headline IS NOT NULL
+                    AND news_headline NOT LIKE 'strategy=%'
+                  ORDER BY created_at DESC LIMIT 1
+                `, [sig.ticker]);
+                if (newsCheck.rows.length > 0) {
+                  newsWarning = true;
+                  newsHeadlineText = newsCheck.rows[0].news_headline;
+                  console.log(`[STRATEGY] ${sig.ticker} CAPITULATION_BOUNCE has recent news: ${newsHeadlineText.slice(0, 80)}`);
+                }
+              } catch { /* non-fatal */ }
+            }
+
             const signalNote = [
               `strategy=${sig.strategy}`,
               `confidence=${sig.confidence}%`,
               nearEarnings ? 'NEAR_EARNINGS' : null,
+              newsWarning ? `news_warning=true` : null,
+              newsHeadlineText ? `news_text=${newsHeadlineText.slice(0, 120)}` : null,
               sig.gap_pct != null ? `gap=${sig.gap_pct}%` : null,
               sig.intraday_drop_pct != null ? `drop=${sig.intraday_drop_pct}%` : null,
               sig.volume_ratio != null ? `volRatio=${sig.volume_ratio}x` : null,

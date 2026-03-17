@@ -739,6 +739,7 @@ function buildCard(s) {
   <div class="card ${g}${stale?' stale':''}${isBreakdown?' breakdown-card':''}${isWeakening?' weakening-card':''}" id="card-${s.signal_id}">
     <div class="card-glow"></div>
     ${buildStratBanner(strategy)}
+    ${s.news_warning && strategy === 'CAPITULATION_BOUNCE' ? '<div style="background:rgba(245,158,11,0.12);border:1px solid var(--amber);border-radius:3px;padding:6px 10px;margin-bottom:8px;font-family:var(--mono);font-size:10px;color:var(--amber);font-weight:600;letter-spacing:0.5px">CAUTION — Recent news detected. Verify drop is not fundamental before entering.' + (s.news_text ? '<div style="font-weight:400;margin-top:3px;font-size:9px;color:var(--text2);letter-spacing:0">' + s.news_text.replace(/</g,'&lt;') + '</div>' : '') + '</div>' : ''}
     ${statusOverlay}
     <div class="card-head">
       <div class="card-left">
