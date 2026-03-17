@@ -1201,7 +1201,7 @@ app.get('/api/conviction', async (req, res) => {
     for (const ticker of tickers) {
       try {
         const result = await scoreConvictionSetup(ticker, db);
-        if (result.conviction_score >= 50) {
+        if (result.conviction_score >= 50 || result.recommendation === 'DEAL_RISK_PUT') {
           scored.push(result);
         }
       } catch (err) {
@@ -1260,9 +1260,9 @@ app.post('/api/conviction/scan', (req, res) => {
             continue;
           }
           const r = results[j].value;
-          if (r.recommendation === 'STRONG_PUT' || r.recommendation === 'MONITOR') {
+          if (r.recommendation === 'STRONG_PUT' || r.recommendation === 'MONITOR' || r.recommendation === 'DEAL_RISK_PUT') {
             scored.push(r);
-            console.log(`[CONVICTION SCAN] ${r.ticker} score=${r.conviction_score} rec=${r.recommendation} red_flags=${r.eight_k_red_flags?.length || 0}`);
+            console.log(`[CONVICTION SCAN] ${r.ticker} score=${r.conviction_score} rec=${r.recommendation} thesis=${r.thesis} red_flags=${r.eight_k_red_flags?.length || 0}`);
           }
         }
 

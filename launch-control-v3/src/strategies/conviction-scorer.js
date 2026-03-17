@@ -1,4 +1,4 @@
-import { getCIKMap, getRecentEightKs, analyzeEightKText } from '../data/edgar.js';
+import { getCIKMap, getRecentEightKs, analyzeEightKText, analyzeMAndA } from '../data/edgar.js';
 
 /**
  * Conviction Scorer — scores tickers for put setups based on
@@ -189,6 +189,81 @@ export async function scoreConvictionSetup(ticker, db) {
   score += edgarScore;
   breakdown.edgar_8k = edgarScore;
 
+  // ── M&A DEAL ANALYSIS ─────────────────────────────────────────────────────
+  let maStatus = null;   // null | 'MA_ABOVE_OFFER' | 'MA_AT_OFFER' | 'MA_DEAL_UNCERTAINTY'
+  let maDetails = null;
+  try {
+    const cikMap = await getCIKMap();
+    const cik = cikMap.get(ticker.toUpperCase());
+    if (cik) {
+      const filings = await getRecentEightKs(cik, ticker, 180);
+      for (const filing of filings) {
+        const ma = await analyzeMAndA(filing.raw_text, ticker);
+        if (!ma.is_ma) continue;
+
+        // Found M&A activity — get current price
+        let currentPrice = null;
+        try {
+          const priceRes = await db.query(
+            `SELECT price FROM lc_v3.equity_profiles WHERE ticker = $1`,
+            [ticker]
+          );
+          if (priceRes.rows[0]?.price) currentPrice = parseFloat(priceRes.rows[0].price);
+        } catch { /* ignore */ }
+
+        const offerPrice = ma.offer_price;
+        const dealDate = ma.deal_date ? new Date(ma.deal_date) : new Date(filing.filing_date);
+        const daysSinceDeal = Math.round((new Date() - dealDate) / 86400000);
+
+        maDetails = {
+          acquirer: ma.acquirer,
+          offer_price: offerPrice,
+          deal_type: ma.deal_type,
+          deal_date: ma.deal_date || filing.filing_date,
+          days_since_deal: daysSinceDeal,
+          current_price: currentPrice,
+          summary: ma.summary,
+          filing_date: filing.filing_date,
+          document_url: filing.document_url,
+        };
+
+        if (offerPrice && currentPrice) {
+          const premium = (currentPrice - offerPrice) / offerPrice;
+          maDetails.price_vs_offer_pct = +(premium * 100).toFixed(2);
+
+          if (premium > 0.05) {
+            // Stock trading >5% above offer — deal may fall through
+            maStatus = 'MA_ABOVE_OFFER';
+            score += 30;
+            breakdown.ma_deal_risk = 30;
+            riskFactors.push(`Trading ${(premium * 100).toFixed(1)}% ABOVE M&A offer ($${currentPrice.toFixed(2)} vs $${offerPrice.toFixed(2)}) — deal break risk`);
+            console.log(`[CONVICTION] ${ticker} M&A ABOVE OFFER: $${currentPrice.toFixed(2)} vs offer $${offerPrice.toFixed(2)} (+${(premium * 100).toFixed(1)}%)`);
+          } else if (premium >= -0.05) {
+            // Within 5% of offer — limited downside, skip
+            maStatus = 'MA_AT_OFFER';
+            breakdown.ma_deal_risk = 0;
+            console.log(`[CONVICTION] ${ticker} M&A AT OFFER: $${currentPrice.toFixed(2)} vs offer $${offerPrice.toFixed(2)} — skipping`);
+          }
+        }
+
+        // Deal dragging >60 days without close
+        if (!maStatus && daysSinceDeal > 60) {
+          maStatus = 'MA_DEAL_UNCERTAINTY';
+          score += 25;
+          breakdown.ma_deal_risk = 25;
+          riskFactors.push(`M&A deal announced ${daysSinceDeal}d ago, not yet closed — deal uncertainty rising`);
+          console.log(`[CONVICTION] ${ticker} M&A DEAL UNCERTAINTY: ${daysSinceDeal} days since announcement`);
+        }
+
+        // Only process the most recent M&A filing
+        break;
+      }
+    }
+  } catch (err) {
+    console.warn(`[CONVICTION] M&A analysis failed for ${ticker}:`, err.message);
+  }
+  if (!maDetails) breakdown.ma_deal_risk = 0;
+
   // ── TICKER INTELLIGENCE ──────────────────────────────────────────────────
   const tiRes = await db.query(
     `SELECT earnings_date, iv_rank_30d, insider_signal
@@ -274,15 +349,26 @@ export async function scoreConvictionSetup(ticker, db) {
   // Cap at 100
   score = Math.min(score, 100);
 
-  const recommendation = score >= 70 ? 'STRONG_PUT'
-                       : score >= 50 ? 'MONITOR'
-                       : 'PASS';
+  // M&A-aware recommendation logic
+  let recommendation;
+  if (maStatus === 'MA_AT_OFFER') {
+    recommendation = 'PASS';  // Limited downside, skip entirely
+  } else if (maStatus === 'MA_ABOVE_OFFER' || maStatus === 'MA_DEAL_UNCERTAINTY') {
+    recommendation = 'DEAL_RISK_PUT';
+  } else {
+    recommendation = score >= 70 ? 'STRONG_PUT'
+                   : score >= 50 ? 'MONITOR'
+                   : 'PASS';
+  }
 
   return {
     ticker,
     conviction_score: score,
     score_breakdown: breakdown,
     recommendation,
+    thesis: maStatus ? 'DEAL_FAILURE' : 'FUNDAMENTAL_DETERIORATION',
+    ma_status: maStatus,
+    ma_details: maDetails,
     earnings_date: earningsDate,
     iv_rank_30d: ivRank,
     days_to_earnings: daysToEarnings,

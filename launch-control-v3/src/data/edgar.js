@@ -138,6 +138,57 @@ export async function getRecentEightKs(cik, ticker, days = 90) {
  * @param {string} ticker   - ticker symbol (for logging)
  * @returns {Object}        - { is_red_flag, red_flag_reason, severity, keywords_found }
  */
+/**
+ * Analyze 8-K filing text for M&A activity using Claude Sonnet.
+ * Returns offer price and deal details if merger/acquisition detected.
+ *
+ * @param {string} rawText  - first 2000 chars of the 8-K document
+ * @param {string} ticker   - ticker symbol (for logging)
+ * @returns {Object}        - { is_ma, offer_price, acquirer, deal_date, deal_type, summary }
+ */
+export async function analyzeMAndA(rawText, ticker) {
+  const fallback = {
+    is_ma: false,
+    offer_price: null,
+    acquirer: null,
+    deal_date: null,
+    deal_type: null,
+    summary: null,
+  };
+
+  if (!client) return fallback;
+
+  try {
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 300,
+      messages: [
+        {
+          role: 'user',
+          content: `You are analyzing an SEC 8-K filing for merger or acquisition activity. Given this filing text return JSON only with fields: is_ma (boolean — true if this filing announces or relates to a merger, acquisition, buyout, or tender offer), offer_price (number or null — the per-share offer/acquisition price if stated), acquirer (string or null — name of acquiring company), deal_date (string or null — announcement date YYYY-MM-DD), deal_type (string or null — one of "merger", "acquisition", "tender_offer", "going_private", "asset_sale"), summary (string or null — one sentence summary of the deal). Text to analyze:\n\n${rawText}\n\nReturn JSON only.`,
+        },
+      ],
+    });
+
+    const text = response.content[0]?.text || '';
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return fallback;
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    return {
+      is_ma: !!parsed.is_ma,
+      offer_price: parsed.offer_price != null ? parseFloat(parsed.offer_price) : null,
+      acquirer: parsed.acquirer || null,
+      deal_date: parsed.deal_date || null,
+      deal_type: parsed.deal_type || null,
+      summary: parsed.summary || null,
+    };
+  } catch (err) {
+    console.warn(`[EDGAR] ${ticker} M&A analysis error:`, err.message);
+    return fallback;
+  }
+}
+
 export async function analyzeEightKText(rawText, ticker) {
   const fallback = {
     is_red_flag: false,

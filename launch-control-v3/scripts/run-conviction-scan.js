@@ -34,7 +34,7 @@ async function main() {
         continue;
       }
       const result = r.value;
-      if (result.recommendation === 'STRONG_PUT' || result.recommendation === 'MONITOR') {
+      if (result.recommendation === 'STRONG_PUT' || result.recommendation === 'MONITOR' || result.recommendation === 'DEAL_RISK_PUT') {
         const rfCount = result.eight_k_red_flags?.length || 0;
         console.log(
           `[CONVICTION] ${result.ticker} score=${result.conviction_score} rec=${result.recommendation} factors=${result.top_risk_factors.length} red_flags=${rfCount}`
