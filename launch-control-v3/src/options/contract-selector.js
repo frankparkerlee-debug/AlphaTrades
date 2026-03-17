@@ -134,7 +134,11 @@ function selectContract(snapshots, direction, currentPrice, grade) {
       const sm = symbol.match(/\d{8}$/);
       if (sm) strike = parseInt(sm[0]) / 1000;
     }
-    return { symbol, delta, bid, ask, mid, oi, iv, strike, greeks, quote };
+    const gamma  = Math.abs(greeks.gamma || 0);
+    const theta  = greeks.theta || 0;
+    const vega   = greeks.vega || 0;
+    const volume = snap.dayBar?.v || 0;
+    return { symbol, delta, gamma, theta, vega, bid, ask, mid, oi, iv, volume, strike, greeks, quote };
   });
 
   console.log(`[contract] ${all.length} contracts in chain, delta range ${deltaRange.min}-${deltaRange.max}`);
@@ -223,8 +227,12 @@ function buildRecommendation(contract, expiry, grade, direction, ticker) {
     entry_hi:     parseFloat(entry_hi.toFixed(2)),
     // Greeks
     delta:        parseFloat((contract.delta || 0).toFixed(3)),
+    gamma:        parseFloat((contract.gamma || 0).toFixed(5)),
+    theta:        parseFloat((contract.theta || 0).toFixed(4)),
+    vega:         parseFloat((contract.vega || 0).toFixed(4)),
     iv:           parseFloat(((contract.iv || 0) * 100).toFixed(1)),
     open_interest: contract.oi,
+    options_volume: contract.volume || 0,
     // Targets
     t1:           parseFloat(t1.toFixed(2)),
     t2:           t2 ? parseFloat(t2.toFixed(2)) : null,

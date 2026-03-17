@@ -55,6 +55,9 @@ app.get('/api/signals', async (req, res) => {
         s.contract_delta, s.contract_iv,
         s.contract_t1, s.contract_t2, s.contract_t3, s.contract_stop,
         s.contract_estimated,
+        s.options_delta, s.options_gamma, s.options_theta, s.options_vega,
+        s.options_iv, s.options_bid, s.options_ask, s.options_mid,
+        s.options_volume, s.options_open_interest,
         s.first_seen_at, s.last_confirmed_at, s.confirmation_count,
         s.peak_composite, s.peak_grade, s.composite_history, s.momentum_trend,
         s.expires_at, s.created_at,
@@ -2025,7 +2028,7 @@ async function startRestPoller() {
             // VOL_DROP_PUT fires as PAPER_ONLY — track but don't prompt for live entry
             const signalStatus = sig.strategy === 'VOL_DROP_PUT' ? 'PAPER_ONLY' : 'ACTIVE';
 
-            await db.query(`
+            const insertRes = await db.query(`
               INSERT INTO lc_v3.signals (
                 ticker, direction, grade, status, composite_raw, signal_tier,
                 price_at_signal, news_headline,
@@ -2035,9 +2038,45 @@ async function startRestPoller() {
               ) VALUES ($1,$2,'A',$3,$4,'primary',$5,$6,
                 NOW(), NOW(), 1, $4, 'A', '[]'::jsonb, 'NEW',
                 NOW() + INTERVAL '${expiryInterval}', NOW())
+              RETURNING signal_id
             `, [sig.ticker, sig.direction, signalStatus, compositeRaw, sig.entry_price, signalNote]);
 
+            const newSignalId = insertRes.rows[0]?.signal_id;
             console.log(`[STRATEGY] ${sig.ticker} ${sig.direction} ${sig.strategy} ${sig.confidence}% ${signalStatus === 'PAPER_ONLY' ? '(PAPER)' : ''}`);
+
+            // Capture options greeks at signal creation time
+            if (newSignalId) {
+              try {
+                const minDTE = STRATEGY_MIN_DTE[sig.strategy] ?? 0;
+                const contract = await selectOptionsContract(sig.ticker, sig.direction, 'A', sig.entry_price, 0.025, { minDTE });
+                if (contract) {
+                  await db.query(`
+                    UPDATE lc_v3.signals SET
+                      options_delta = $1, options_gamma = $2, options_theta = $3, options_vega = $4,
+                      options_iv = $5, options_bid = $6, options_ask = $7, options_mid = $8,
+                      options_volume = $9, options_open_interest = $10,
+                      contract_symbol = $11, contract_strike = $12, contract_expiry = $13,
+                      contract_expiry_label = $14, contract_bid = $6, contract_ask = $7,
+                      contract_mid = $8, contract_entry_lo = $15, contract_entry_hi = $16,
+                      contract_delta = $1, contract_iv = $5,
+                      contract_t1 = $17, contract_t2 = $18, contract_t3 = $19, contract_stop = $20,
+                      contract_estimated = false
+                    WHERE signal_id = $21
+                  `, [
+                    contract.delta, contract.gamma, contract.theta, contract.vega,
+                    contract.iv, contract.bid, contract.ask, contract.mid,
+                    contract.options_volume, contract.open_interest,
+                    contract.symbol, contract.strike, contract.expiry,
+                    contract.expiry_label, contract.entry_lo, contract.entry_hi,
+                    contract.t1, contract.t2, contract.t3, contract.stop,
+                    newSignalId,
+                  ]);
+                  console.log(`[GREEKS] ${sig.ticker} delta=${contract.delta} gamma=${contract.gamma} theta=${contract.theta} vega=${contract.vega} iv=${contract.iv}%`);
+                }
+              } catch (greeksErr) {
+                console.warn(`[GREEKS] ${sig.ticker} capture failed: ${greeksErr.message}`);
+              }
+            }
           }
 
           if (allStratSignals.length > 0) {
@@ -2279,6 +2318,30 @@ async function backfillContracts() {
     console.error('[BACKFILL] Error:', err.message);
   }
 }
+
+// ── GREEKS COLUMNS MIGRATION ─────────────────────────────────────────────────
+(async () => {
+  try {
+    const greeksCols = [
+      ['options_delta', 'NUMERIC'],
+      ['options_gamma', 'NUMERIC'],
+      ['options_theta', 'NUMERIC'],
+      ['options_vega', 'NUMERIC'],
+      ['options_iv', 'NUMERIC'],
+      ['options_bid', 'NUMERIC'],
+      ['options_ask', 'NUMERIC'],
+      ['options_mid', 'NUMERIC'],
+      ['options_volume', 'INTEGER'],
+      ['options_open_interest', 'INTEGER'],
+    ];
+    for (const [col, type] of greeksCols) {
+      await db.query(`ALTER TABLE lc_v3.signals ADD COLUMN IF NOT EXISTS ${col} ${type}`);
+    }
+    console.log('[MIGRATE] Greeks columns ensured on lc_v3.signals');
+  } catch (err) {
+    console.error('[MIGRATE] Greeks columns error:', err.message);
+  }
+})();
 
 // Run backfill 15s after startup, then every 5 min
 setTimeout(backfillContracts, 15000);
