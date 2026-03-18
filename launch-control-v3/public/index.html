@@ -250,6 +250,70 @@ body::after {
   color: var(--text3); letter-spacing: 1px; margin-bottom: 8px;
 }
 
+/* ── WORKSPACE TOGGLE ── */
+#workspaceToggle {
+  display: flex; gap: 0; padding: 8px 16px;
+  background: var(--bg1); border-bottom: 1px solid var(--border);
+}
+.ws-btn {
+  flex: 1; padding: 10px 16px; border: 1px solid var(--border);
+  font-family: var(--mono); font-size: 12px; font-weight: 700;
+  letter-spacing: 1.5px; cursor: pointer; transition: all 0.15s;
+  text-align: center; background: transparent; color: var(--text3);
+}
+.ws-btn:first-child { border-radius: 4px 0 0 4px; }
+.ws-btn:last-child  { border-radius: 0 4px 4px 0; }
+.ws-btn.ws-active-live  { background: rgba(16,185,129,0.15); color: var(--green); border-color: var(--green); }
+.ws-btn.ws-active-paper { background: rgba(139,92,246,0.15); color: var(--purple); border-color: var(--purple); }
+
+/* ── PERSISTENT STATS BAR ── */
+#persistentStats {
+  display: flex; align-items: center; gap: 16px;
+  padding: 6px 16px; background: var(--bg1); border-bottom: 1px solid var(--border);
+  font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.5px;
+}
+.ps-item { display: flex; align-items: center; gap: 5px; }
+.ps-dot { width: 6px; height: 6px; border-radius: 50%; }
+.ps-label { color: var(--text3); }
+.ps-value { font-weight: 700; }
+
+/* ── LIVE POSITION CARD ── */
+.live-pos-card {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+  padding: 12px 14px; margin-bottom: 8px; border-left: 3px solid var(--green);
+}
+.live-pos-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.live-pos-ticker { font-family: var(--mono); font-size: 16px; font-weight: 700; color: var(--text1); }
+.live-pos-pnl { font-family: var(--mono); font-size: 15px; font-weight: 700; }
+.cont-banner {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 10px 14px; border-radius: 5px; margin-bottom: 8px;
+  font-family: var(--mono); font-size: 13px; font-weight: 700; letter-spacing: 1px;
+}
+.cont-banner-hold     { background: rgba(16,185,129,0.15); color: var(--green); border: 1px solid var(--green); }
+.cont-banner-exit     { background: rgba(239,68,68,0.15); color: var(--red); border: 1px solid var(--red); }
+.cont-banner-partial  { background: rgba(245,158,11,0.15); color: var(--amber); border: 1px solid var(--amber); }
+.cont-banner-accelerate { background: rgba(59,130,246,0.15); color: var(--blue); border: 1px solid var(--blue); }
+.btn-close-live {
+  width: 100%; padding: 10px; border: none; border-radius: 4px;
+  font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 1px;
+  cursor: pointer; background: var(--red); color: #fff; transition: opacity 0.15s;
+}
+.btn-close-live:hover { opacity: 0.85; }
+.btn-close-paper {
+  padding: 6px 12px; border: 1px solid var(--red); border-radius: 3px;
+  font-family: var(--mono); font-size: 9px; font-weight: 700;
+  cursor: pointer; background: transparent; color: var(--red); transition: all 0.15s;
+}
+.btn-close-paper:hover { background: rgba(239,68,68,0.15); }
+.greeks-panel {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: 6px;
+  font-family: var(--mono); font-size: 9px;
+}
+.greeks-cell { text-align: center; background: var(--bg3); border-radius: 3px; padding: 4px 2px; }
+.greeks-cell-label { color: var(--text4); font-size: 7px; letter-spacing: 0.5px; }
+.greeks-cell-value { color: var(--text2); font-weight: 600; }
+
 /* Hold instruction */
 .hold-instruction {
   display: flex; align-items: center; justify-content: center; gap: 6px;
@@ -452,6 +516,20 @@ body::after {
   <span style="margin-left:auto;font-size:9px;color:var(--text4)" id="lastUpdate">—</span>
 </div>
 
+<!-- PERSISTENT STATS BAR -->
+<div id="persistentStats">
+  <div class="ps-item"><div class="ps-dot" style="background:var(--green)"></div><span class="ps-label">LIVE</span><span class="ps-value" style="color:var(--green)" id="psLiveCount">0</span></div>
+  <div class="ps-item"><div class="ps-dot" style="background:var(--purple)"></div><span class="ps-label">PAPER</span><span class="ps-value" style="color:var(--purple)" id="psPaperCount">0</span></div>
+  <div class="ps-item"><span class="ps-label">LIVE P&L</span><span class="ps-value" id="psLivePnl" style="color:var(--text3)">—</span></div>
+  <div class="ps-item"><span class="ps-label">PAPER P&L</span><span class="ps-value" id="psPaperPnl" style="color:var(--text3)">—</span></div>
+</div>
+
+<!-- WORKSPACE TOGGLE -->
+<div id="workspaceToggle">
+  <button class="ws-btn ws-active-live" onclick="switchWorkspace('live')">LIVE TRADING</button>
+  <button class="ws-btn" onclick="switchWorkspace('paper')">PAPER TRADING</button>
+</div>
+
 <!-- MAIN -->
 <div id="main">
   <!-- LEFT: SIGNALS -->
@@ -494,8 +572,10 @@ body::after {
       </div>
     </div>
 
-    <!-- Open paper positions with continuation badges -->
-    <div id="openPositions" style="margin-top:14px"></div>
+    <!-- Live open positions (LIVE workspace) -->
+    <div id="livePositions" style="margin-top:14px"></div>
+    <!-- Paper open positions (PAPER workspace) -->
+    <div id="paperPositions" style="margin-top:14px"></div>
   </div>
 
   <!-- RIGHT: SIDEBAR -->
@@ -545,7 +625,21 @@ body::after {
 let signals = [], gradeF = 'all', stratF = 'all', showHist = false;
 let countdowns = {};
 let lastRenderHash = '';
+let workspace = 'live'; // 'live' or 'paper'
+let paperPositions = [];
 const ACCOUNT = parseFloat('{{ACCOUNT_SIZE}}') || 7500;
+
+function switchWorkspace(ws) {
+  workspace = ws;
+  const btns = document.querySelectorAll('.ws-btn');
+  btns[0].className = 'ws-btn' + (ws === 'live' ? ' ws-active-live' : '');
+  btns[1].className = 'ws-btn' + (ws === 'paper' ? ' ws-active-paper' : '');
+  // Show/hide position sections
+  document.getElementById('livePositions').style.display = ws === 'live' ? '' : 'none';
+  document.getElementById('paperPositions').style.display = ws === 'paper' ? '' : 'none';
+  lastRenderHash = ''; // force re-render for button changes
+  render();
+}
 
 // Format OCC symbol: BKR260320P00033000 → BKR 3/20 $33 P
 function formatOCC(sym) {
@@ -623,7 +717,7 @@ function render() {
   }
 
   const html = list.map(buildCard).join('');
-  const hash = list.map(s => `${s.signal_id}:${s.composite_raw}:${s.grade}:${s.status}:${s.confirmation_count}:${s.contract_mid}:${s.momentum_trend}`).join('|');
+  const hash = workspace + '|' + list.map(s => `${s.signal_id}:${s.composite_raw}:${s.grade}:${s.status}:${s.confirmation_count}:${s.contract_mid}:${s.momentum_trend}`).join('|');
   if (hash !== lastRenderHash) {
     document.getElementById('signalGrid').innerHTML = html;
     lastRenderHash = hash;
@@ -794,26 +888,30 @@ function buildCard(s) {
     ? `<div class="auto-status-banner auto-invalid">INVALID — ${(s.human_notes||'').includes('CONDITIONS_CHANGED') ? 'CONDITIONS CHANGED' : 'SETUP INVALIDATED'}</div>`
     : '';
 
-  // Actions — only 3 human buttons: TOOK IT, PAPER, SKIP (PAPER_ONLY hides TOOK IT)
+  // Actions — workspace-aware buttons
   const isPaperOnly = s.paper_only;
-  const actions = (stale || isAutoExpired || isAutoMissed || isAutoInvalid)
-    ? (s.human_taken
+  let actions;
+  if (stale || isAutoExpired || isAutoMissed || isAutoInvalid) {
+    actions = s.human_taken
       ? `<div class="action-row-primary"><button class="btn btn-taken" disabled>✓ TOOK IT</button></div>
          <div class="action-row-primary"><button class="btn btn-edit" onclick="editTrade('${s.signal_id}',${s.human_entry_price||0},${s.human_exit_price||0})">EDIT</button></div>`
-      : `${autoStatusBanner}`)
-    : s.human_taken===true
-      ? `<div class="action-row-primary"><button class="btn btn-taken" disabled>✓ TOOK IT</button></div>
-         <div class="action-row-primary"><button class="btn btn-edit" onclick="editTrade('${s.signal_id}',${s.human_entry_price||0},${s.human_exit_price||0})">EDIT</button></div>`
-      : isPaperOnly
-        ? `<div class="action-row-primary">
-             <button class="btn btn-paper" onclick="paperSignal('${s.signal_id}',this)">PAPER</button>
-             <button class="btn btn-skip" onclick="skipSignal('${s.signal_id}',this)">SKIP</button>
-           </div>`
-        : `<div class="action-row-primary">
-             <button class="btn btn-take" onclick="takeSignal('${s.signal_id}',this)">TOOK IT</button>
-             <button class="btn btn-paper" onclick="paperSignal('${s.signal_id}',this)">PAPER</button>
-             <button class="btn btn-skip" onclick="skipSignal('${s.signal_id}',this)">SKIP</button>
-           </div>`;
+      : `${autoStatusBanner}`;
+  } else if (s.human_taken===true) {
+    actions = `<div class="action-row-primary"><button class="btn btn-taken" disabled>✓ TOOK IT</button></div>
+       <div class="action-row-primary"><button class="btn btn-edit" onclick="editTrade('${s.signal_id}',${s.human_entry_price||0},${s.human_exit_price||0})">EDIT</button></div>`;
+  } else if (isPaperOnly || workspace === 'paper') {
+    // Paper workspace OR paper-only signals: PAPER + SKIP
+    actions = `<div class="action-row-primary">
+         <button class="btn btn-paper" onclick="paperSignal('${s.signal_id}',this)">PAPER</button>
+         <button class="btn btn-skip" onclick="skipSignal('${s.signal_id}',this)">SKIP</button>
+       </div>`;
+  } else {
+    // Live workspace: TOOK IT + SKIP
+    actions = `<div class="action-row-primary">
+         <button class="btn btn-take" onclick="takeSignal('${s.signal_id}',this)">TOOK IT</button>
+         <button class="btn btn-skip" onclick="skipSignal('${s.signal_id}',this)">SKIP</button>
+       </div>`;
+  }
 
   return `
   <div class="card ${g}${stale?' stale':''}${isBreakdown?' breakdown-card':''}${isWeakening?' weakening-card':''}" id="card-${s.signal_id}">
@@ -1163,19 +1261,116 @@ async function loadAll() {
 
     render();
 
-    // Open paper positions with continuation badges
+    // Fetch paper positions and render workspace-specific sections
     try {
       const posRes = await fetch('/api/paper-trades/open').then(r=>r.json());
-      renderPositions(posRes);
-    } catch { /* non-fatal */ }
+      paperPositions = posRes || [];
+    } catch { paperPositions = []; }
+
+    // Live positions = taken signals without exit price
+    const liveOpen = signals.filter(s => s.human_taken === true && !s.human_exit_price);
+
+    // Persistent stats bar
+    document.getElementById('psLiveCount').textContent = liveOpen.length;
+    document.getElementById('psPaperCount').textContent = paperPositions.length;
+
+    const livePnl = taken.filter(s => s.human_exit_price).reduce((a, b) => a + (b.human_pnl_pct || 0), 0);
+    const psLive = document.getElementById('psLivePnl');
+    psLive.textContent = livePnl ? `${livePnl >= 0 ? '+' : ''}${(livePnl * 100).toFixed(2)}%` : '—';
+    psLive.style.color = livePnl > 0 ? 'var(--green)' : livePnl < 0 ? 'var(--red)' : 'var(--text3)';
+
+    const paperPnl = paperPositions.reduce((a, b) => a + (parseFloat(b.unrealized_pnl_pct) || 0), 0);
+    const psPaper = document.getElementById('psPaperPnl');
+    psPaper.textContent = paperPositions.length > 0 ? `${paperPnl >= 0 ? '+' : ''}${paperPnl.toFixed(2)}%` : '—';
+    psPaper.style.color = paperPnl > 0 ? 'var(--green)' : paperPnl < 0 ? 'var(--red)' : 'var(--purple)';
+
+    // Render workspace-specific positions
+    renderLivePositions(signals);
+    renderPaperPositions(paperPositions);
+
+    // Set visibility based on current workspace
+    document.getElementById('livePositions').style.display = workspace === 'live' ? '' : 'none';
+    document.getElementById('paperPositions').style.display = workspace === 'paper' ? '' : 'none';
   } catch(e) {
     console.error('Load error:', e);
     document.getElementById('liveDot').style.color = 'var(--red)';
   }
 }
 
-function renderPositions(positions) {
-  const el = document.getElementById('openPositions');
+// ── LIVE POSITIONS (from taken signals without exit price) ────────
+function renderLivePositions(sigs) {
+  const el = document.getElementById('livePositions');
+  if (!el) return;
+  // Live positions = taken signals with no exit price
+  const livePos = sigs.filter(s => s.human_taken === true && !s.human_exit_price);
+  if (livePos.length === 0) { el.innerHTML = ''; return; }
+
+  const html = livePos.map(s => {
+    const strategy = parseStrategy(s);
+    const dir = (s.direction || 'CALL');
+    const dirClass = dir === 'CALL' ? 'dir-call' : 'dir-put';
+    const entryPrice = s.human_entry_price || s.price_at_signal || 0;
+    // Find continuation data from paper trades if available
+    const paperMatch = paperPositions.find(p => p.signal_id?.toString() === s.signal_id?.toString());
+    const contAction = paperMatch?.continuation_action || '';
+    const contReason = (paperMatch?.continuation_reason || '').replace(/_/g, ' ');
+
+    const bannerCls = contAction === 'EXIT' ? 'cont-banner-exit'
+      : contAction === 'PARTIAL_EXIT' ? 'cont-banner-partial'
+      : contAction === 'ACCELERATE' ? 'cont-banner-accelerate'
+      : 'cont-banner-hold';
+    const bannerLabel = contAction === 'PARTIAL_EXIT' ? 'PARTIAL EXIT' : contAction || 'HOLD';
+
+    // Locked targets
+    const lockEntry = s.locked_entry;
+    const lockStop = s.locked_stop;
+    const lockT1 = s.locked_t1;
+    const lockT2 = s.locked_t2;
+
+    return `<div class="live-pos-card" style="border-left-color:${contAction==='EXIT'?'var(--red)':contAction==='PARTIAL_EXIT'?'var(--amber)':'var(--green)'}">
+      <div class="live-pos-header">
+        <div>
+          <span class="live-pos-ticker">${s.ticker}</span>
+          <span class="dir-badge ${dirClass}" style="font-size:9px;margin-left:6px">${dir}</span>
+          <span style="font-size:9px;color:var(--text3);margin-left:8px">${strategy||''}</span>
+        </div>
+        <div style="text-align:right">
+          <span class="live-pos-pnl" id="live-pnl-${s.signal_id}">—</span>
+        </div>
+      </div>
+      <div class="cont-banner ${bannerCls}">${bannerLabel}${contReason ? ` — ${contReason}` : ''}</div>
+      ${lockEntry != null || lockStop != null || lockT1 != null ? `
+      <div class="locked-grid" style="margin-bottom:8px">
+        ${lockEntry != null ? `<div class="locked-cell"><div class="locked-cell-label">ENTRY</div><div class="locked-cell-value entry">$${lockEntry.toFixed(2)}</div></div>` : ''}
+        ${lockStop != null ? `<div class="locked-cell"><div class="locked-cell-label">STOP</div><div class="locked-cell-value stop">$${lockStop.toFixed(2)}</div></div>` : ''}
+        ${lockT1 != null ? `<div class="locked-cell"><div class="locked-cell-label">T1</div><div class="locked-cell-value t1">$${lockT1.toFixed(2)}</div></div>` : ''}
+        ${lockT2 != null ? `<div class="locked-cell"><div class="locked-cell-label">T2</div><div class="locked-cell-value t2">$${lockT2.toFixed(2)}</div></div>` : ''}
+      </div>` : ''}
+      <div class="current-price-row" style="margin-bottom:8px">
+        <span class="current-price-label">CURRENT</span>
+        <span class="current-price-value" id="live-cp-${s.signal_id}">--</span>
+      </div>
+      <button class="btn-close-live" onclick="closeLivePosition('${s.signal_id}')">CLOSED</button>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `<div class="pos-section-title" style="color:var(--green)">OPEN LIVE POSITIONS (${livePos.length})</div>${html}`;
+}
+
+async function closeLivePosition(signalId) {
+  const rec = document.querySelector(`#livePositions .live-pos-card button[onclick*="${signalId}"]`);
+  if (rec) { rec.disabled = true; rec.textContent = 'CLOSING...'; }
+  // Prompt for exit price
+  const exitPrice = prompt('Exit price?');
+  if (!exitPrice) { if (rec) { rec.disabled = false; rec.textContent = 'CLOSED'; } return; }
+  await fetch('/api/edit', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({signal_id: signalId, exit_price: parseFloat(exitPrice)})});
+  loadAll();
+}
+
+// ── PAPER POSITIONS ──────────────────────────────────────────────
+function renderPaperPositions(positions) {
+  const el = document.getElementById('paperPositions');
   if (!el) return;
   if (!positions || positions.length === 0) { el.innerHTML = ''; return; }
 
@@ -1190,6 +1385,10 @@ function renderPositions(positions) {
     const held = p.entry_time ? Math.round((Date.now() - new Date(p.entry_time).getTime()) / 60000) : 0;
     const dir = p.direction || 'CALL';
     const dirClass = dir === 'CALL' ? 'dir-call' : 'dir-put';
+    const delta = p.current_delta != null ? parseFloat(p.current_delta).toFixed(3) : '—';
+    const iv = p.current_iv != null ? parseFloat(p.current_iv).toFixed(1) + '%' : '—';
+    const spread = p.current_spread != null ? '$' + parseFloat(p.current_spread).toFixed(2) : '—';
+    const theta = p.cumulative_theta != null ? parseFloat(p.cumulative_theta).toFixed(3) : '—';
 
     return `<div class="pos-card" style="border-left:3px solid ${action==='EXIT'?'var(--red)':action==='PARTIAL_EXIT'?'var(--amber)':action==='ACCELERATE'?'var(--blue)':'var(--green)'}">
       <div class="pos-header">
@@ -1198,19 +1397,35 @@ function renderPositions(positions) {
           <span class="dir-badge ${dirClass}" style="font-size:8px;margin-left:5px">${dir}</span>
           <span style="font-size:9px;color:var(--text3);margin-left:6px">${p.strategy||''}</span>
         </div>
-        <div style="text-align:right">
-          <span class="pos-pnl ${pnl>=0?'pos':'neg'}">${pnlStr}</span>
-          <div class="pos-meta">${held}min held</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="text-align:right">
+            <span class="pos-pnl ${pnl>=0?'pos':'neg'}">${pnlStr}</span>
+            <div class="pos-meta">${held}min held</div>
+          </div>
+          <button class="btn-close-paper" onclick="closePaperPosition('${p.paper_id}',this)">CLOSE</button>
         </div>
       </div>
-      <div style="display:flex;align-items:center;gap:8px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
         ${action ? `<span class="cont-badge ${badgeClass(action)}">${badgeLabel(action)}</span>` : '<span class="cont-badge cont-hold" style="opacity:0.4">SCORING...</span>'}
         <span class="pos-reason">${reason}</span>
+      </div>
+      <div class="greeks-panel">
+        <div class="greeks-cell"><div class="greeks-cell-label">DELTA</div><div class="greeks-cell-value">${delta}</div></div>
+        <div class="greeks-cell"><div class="greeks-cell-label">IV</div><div class="greeks-cell-value">${iv}</div></div>
+        <div class="greeks-cell"><div class="greeks-cell-label">SPREAD</div><div class="greeks-cell-value">${spread}</div></div>
+        <div class="greeks-cell"><div class="greeks-cell-label">THETA</div><div class="greeks-cell-value">${theta}</div></div>
       </div>
     </div>`;
   }).join('');
 
-  el.innerHTML = `<div class="pos-section-title">OPEN POSITIONS (${positions.length})</div>${html}`;
+  el.innerHTML = `<div class="pos-section-title" style="color:var(--purple)">OPEN PAPER POSITIONS (${positions.length})</div>${html}`;
+}
+
+async function closePaperPosition(paperId, btn) {
+  btn.disabled = true; btn.textContent = 'CLOSING...';
+  await fetch('/api/paper-trades/close', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({paper_id: paperId})});
+  loadAll();
 }
 
 // ── CLOCK ─────────────────────────────────────────────────────────
@@ -1248,6 +1463,27 @@ async function updateCurrentPrices() {
       const sign = pnlPct >= 0 ? '+' : '';
       pnlEl.textContent = sign + pnlPct.toFixed(2) + '%';
       pnlEl.style.color = pnlPct >= 0 ? 'var(--green)' : 'var(--red)';
+      el.style.color = pnlPct >= 0 ? 'var(--green)' : 'var(--red)';
+    });
+    // Also update live position current prices
+    document.querySelectorAll('[id^="live-cp-"]').forEach(el => {
+      const sigId = el.id.replace('live-cp-', '');
+      const sig = signals.find(s => s.signal_id?.toString() === sigId);
+      if (!sig) return;
+      const ticker = sig.ticker;
+      if (!ticker || prices[ticker] == null) return;
+      const curPrice = prices[ticker];
+      el.textContent = '$' + curPrice.toFixed(2);
+      // Compute P&L
+      const entryPrice = sig.human_entry_price || sig.locked_entry || sig.price_at_signal;
+      if (!entryPrice) return;
+      const dir = sig.direction || 'CALL';
+      const pnlPct = dir === 'PUT' ? ((entryPrice - curPrice) / entryPrice * 100) : ((curPrice - entryPrice) / entryPrice * 100);
+      const pnlEl = document.getElementById('live-pnl-' + sigId);
+      if (pnlEl) {
+        pnlEl.textContent = `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`;
+        pnlEl.style.color = pnlPct >= 0 ? 'var(--green)' : 'var(--red)';
+      }
       el.style.color = pnlPct >= 0 ? 'var(--green)' : 'var(--red)';
     });
   } catch { /* non-fatal */ }

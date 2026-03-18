@@ -239,6 +239,22 @@ app.get('/api/paper-trades/open', async (req, res) => {
   }
 });
 
+// Close a paper trade
+app.post('/api/paper-trades/close', async (req, res) => {
+  try {
+    const { paper_id } = req.body;
+    await db.query(`
+      UPDATE lc_v3.paper_trades SET
+        status = 'CLOSED',
+        exit_time = NOW()
+      WHERE paper_id = $1
+    `, [paper_id]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.json({ ok: false, error: err.message });
+  }
+});
+
 // Edit a previously recorded trade
 app.post('/api/edit', async (req, res) => {
   try {
