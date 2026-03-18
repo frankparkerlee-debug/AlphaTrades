@@ -371,5 +371,25 @@ export async function scoreContinuation(paperTrade, recentBars, marketContext, c
     ` thesis=${thesis.intact ? 'OK' : 'BROKEN:' + thesis.reasons.join(',')}`
   );
 
+  // Auto-close auto_traded positions on EXIT or STOP_HIT
+  if ((action === 'EXIT' || reason === 'STOP_HIT') && paperTrade.auto_traded === true) {
+    try {
+      const pnl = momentum.unrealizedPnl;
+      const outcome = pnl > 0 ? 'WIN' : pnl < 0 ? 'LOSS' : 'FLAT';
+      await db.query(`
+        UPDATE lc_v3.paper_trades SET
+          status = 'CLOSED',
+          exit_time = NOW(),
+          exit_reason = $1,
+          final_pnl_pct = $2,
+          outcome = $3
+        WHERE paper_id = $4
+      `, [reason, pnl, outcome, paperTrade.paper_id]);
+      console.log(`[AUTO-PAPER] ${paperTrade.ticker} — auto-closed reason=${reason} pnl=${pnl.toFixed(2)}%`);
+    } catch (closeErr) {
+      console.error(`[AUTO-PAPER] ${paperTrade.ticker} close failed: ${closeErr.message}`);
+    }
+  }
+
   return { action, reason, details };
 }

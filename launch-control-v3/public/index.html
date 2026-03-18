@@ -617,6 +617,14 @@ body::after {
       <div class="stream-row"><span class="stream-name">Bars</span><span class="stream-status" id="streamBars" style="color:var(--text4)">—</span></div>
       <div class="stream-row"><span class="stream-name">News</span><span class="stream-status" id="streamNews" style="color:var(--text4)">—</span></div>
     </div>
+
+    <!-- Machine performance -->
+    <div class="panel">
+      <div class="panel-title">&#x1F916; Machine Performance</div>
+      <div id="machineStats">
+        <div style="font-family:var(--mono);font-size:10px;color:var(--text3)">Loading...</div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1291,6 +1299,27 @@ async function loadAll() {
     // Set visibility based on current workspace
     document.getElementById('livePositions').style.display = workspace === 'live' ? '' : 'none';
     document.getElementById('paperPositions').style.display = workspace === 'paper' ? '' : 'none';
+
+    // Machine performance stats
+    try {
+      const machRes = await fetch('/api/paper/stats?auto_traded=true').then(r=>r.json());
+      const ms = document.getElementById('machineStats');
+      if (machRes && machRes.total_trades > 0) {
+        const wr = parseFloat(machRes.win_rate) || 0;
+        const avgPnl = parseFloat(machRes.avg_pnl) || 0;
+        ms.innerHTML = `
+          <div class="mini-grid">
+            <div class="mini-cell"><div class="mini-label">Win Rate</div><div class="mini-value" style="color:${wr>=50?'var(--green)':'var(--red)'}">${wr}%</div></div>
+            <div class="mini-cell"><div class="mini-label">Trades</div><div class="mini-value">${machRes.total_trades}</div></div>
+            <div class="mini-cell"><div class="mini-label">Avg P&L</div><div class="mini-value" style="color:${avgPnl>=0?'var(--green)':'var(--red)'}">${avgPnl>=0?'+':''}${avgPnl}%</div></div>
+            <div class="mini-cell"><div class="mini-label">W / L</div><div class="mini-value"><span style="color:var(--green)">${machRes.wins||0}</span> / <span style="color:var(--red)">${machRes.losses||0}</span></div></div>
+            <div class="mini-cell"><div class="mini-label">Best</div><div class="mini-value" style="color:var(--green)">${machRes.best_trade!=null?'+'+machRes.best_trade+'%':'—'}</div></div>
+            <div class="mini-cell"><div class="mini-label">Worst</div><div class="mini-value" style="color:var(--red)">${machRes.worst_trade!=null?machRes.worst_trade+'%':'—'}</div></div>
+          </div>`;
+      } else {
+        ms.innerHTML = `<div style="font-family:var(--mono);font-size:10px;color:var(--text4)">No auto-traded results yet</div>`;
+      }
+    } catch { /* non-fatal */ }
   } catch(e) {
     console.error('Load error:', e);
     document.getElementById('liveDot').style.color = 'var(--red)';
@@ -1390,10 +1419,13 @@ function renderPaperPositions(positions) {
     const spread = p.current_spread != null ? '$' + parseFloat(p.current_spread).toFixed(2) : '—';
     const theta = p.cumulative_theta != null ? parseFloat(p.cumulative_theta).toFixed(3) : '—';
 
+    const sourceIcon = p.auto_traded ? '<span title="Auto-traded" style="font-size:11px">&#x1F916;</span>' : '<span title="Manual" style="font-size:11px">&#x1F9D1;</span>';
+
     return `<div class="pos-card" style="border-left:3px solid ${action==='EXIT'?'var(--red)':action==='PARTIAL_EXIT'?'var(--amber)':action==='ACCELERATE'?'var(--blue)':'var(--green)'}">
       <div class="pos-header">
         <div>
-          <span class="pos-ticker">${p.ticker}</span>
+          ${sourceIcon}
+          <span class="pos-ticker" style="margin-left:4px">${p.ticker}</span>
           <span class="dir-badge ${dirClass}" style="font-size:8px;margin-left:5px">${dir}</span>
           <span style="font-size:9px;color:var(--text3);margin-left:6px">${p.strategy||''}</span>
         </div>

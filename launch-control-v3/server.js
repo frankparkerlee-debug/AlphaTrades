@@ -228,7 +228,8 @@ app.get('/api/paper-trades/open', async (req, res) => {
              hit_t1, hit_t2, hit_stop,
              current_delta, current_iv, current_spread, cumulative_theta,
              continuation_action, continuation_reason, continuation_details,
-             continuation_scored_at, greeks_updated_at, last_updated
+             continuation_scored_at, greeks_updated_at, last_updated,
+             auto_traded
       FROM lc_v3.paper_trades
       WHERE status IN ('OPEN', 'WEAKENING')
       ORDER BY entry_time DESC
@@ -252,6 +253,33 @@ app.post('/api/paper-trades/close', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     res.json({ ok: false, error: err.message });
+  }
+});
+
+// Paper trade stats — accepts ?auto_traded=true or false
+app.get('/api/paper/stats', async (req, res) => {
+  try {
+    const autoFilter = req.query.auto_traded;
+    let where = `WHERE status = 'CLOSED' AND final_pnl_pct IS NOT NULL`;
+    const params = [];
+    if (autoFilter === 'true') { where += ` AND auto_traded = TRUE`; }
+    else if (autoFilter === 'false') { where += ` AND (auto_traded = FALSE OR auto_traded IS NULL)`; }
+
+    const result = await db.query(`
+      SELECT
+        COUNT(*) as total_trades,
+        COUNT(*) FILTER (WHERE outcome = 'WIN') as wins,
+        COUNT(*) FILTER (WHERE outcome = 'LOSS') as losses,
+        ROUND(AVG(final_pnl_pct)::numeric, 2) as avg_pnl,
+        ROUND(MAX(final_pnl_pct)::numeric, 2) as best_trade,
+        ROUND(MIN(final_pnl_pct)::numeric, 2) as worst_trade,
+        ROUND((COUNT(*) FILTER (WHERE outcome = 'WIN')::numeric / NULLIF(COUNT(*), 0) * 100)::numeric, 1) as win_rate
+      FROM lc_v3.paper_trades
+      ${where}
+    `, params);
+    res.json(result.rows[0] || {});
+  } catch (err) {
+    res.json({ error: err.message });
   }
 });
 
@@ -2139,6 +2167,43 @@ async function startRestPoller() {
               } catch (greeksErr) {
                 console.warn(`[GREEKS] ${sig.ticker} capture failed: ${greeksErr.message}`);
               }
+
+              // Auto-open paper trade for every strategy signal
+              try {
+                // Re-read the signal to get contract fields that were just updated
+                const sigRow = await db.query(`SELECT * FROM lc_v3.signals WHERE signal_id = $1`, [newSignalId]);
+                const s = sigRow.rows[0];
+                if (s) {
+                  await db.query(`
+                    INSERT INTO lc_v3.paper_trades (
+                      signal_id, ticker, direction, grade, strategy,
+                      entry_stock_price, entry_contract_mid,
+                      entry_t1, entry_t2, entry_t3, entry_stop,
+                      position_size_pct,
+                      entry_contract_symbol, entry_contract_strike, entry_contract_expiry,
+                      entry_contract_delta, entry_contract_iv,
+                      status, auto_traded
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'OPEN',TRUE)
+                  `, [
+                    newSignalId, sig.ticker, sig.direction, 'A', sig.strategy,
+                    sig.entry_price,
+                    s.contract_mid ? parseFloat(s.contract_mid) : null,
+                    s.contract_t1 ? parseFloat(s.contract_t1) : null,
+                    s.contract_t2 ? parseFloat(s.contract_t2) : null,
+                    s.contract_t3 ? parseFloat(s.contract_t3) : null,
+                    s.contract_stop ? parseFloat(s.contract_stop) : null,
+                    s.position_size_pct ? parseFloat(s.position_size_pct) : null,
+                    s.contract_symbol || null,
+                    s.contract_strike ? parseFloat(s.contract_strike) : null,
+                    s.contract_expiry || null,
+                    s.contract_delta ? parseFloat(s.contract_delta) : null,
+                    s.contract_iv ? parseFloat(s.contract_iv) : null,
+                  ]);
+                  console.log(`[AUTO-PAPER] ${sig.ticker} ${sig.strategy} — paper trade opened`);
+                }
+              } catch (paperErr) {
+                console.warn(`[AUTO-PAPER] ${sig.ticker} insert failed: ${paperErr.message}`);
+              }
             }
           }
 
@@ -2481,6 +2546,10 @@ async function backfillContracts() {
       await db.query(`ALTER TABLE lc_v3.paper_trades ADD COLUMN IF NOT EXISTS ${col} ${type}`);
     }
     console.log('[MIGRATE] Continuation scorer columns ensured on lc_v3.paper_trades');
+
+    // Auto-paper trading column
+    await db.query(`ALTER TABLE lc_v3.paper_trades ADD COLUMN IF NOT EXISTS auto_traded BOOLEAN DEFAULT FALSE`);
+    console.log('[MIGRATE] auto_traded column ensured on lc_v3.paper_trades');
   } catch (err) {
     console.error('[MIGRATE] Greeks columns error:', err.message);
   }
