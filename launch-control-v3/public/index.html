@@ -620,7 +620,7 @@ body::after {
 
     <!-- Machine performance -->
     <div class="panel">
-      <div class="panel-title">&#x1F916; Machine Performance</div>
+      <div class="panel-title">Machine Performance</div>
       <div id="machineStats">
         <div style="font-family:var(--mono);font-size:10px;color:var(--text3)">Loading...</div>
       </div>
@@ -882,7 +882,7 @@ function buildCard(s) {
 
   // Propagation context
   const propCtx = s.signal_tier==='propagation' && s.leader_ticker
-    ? `<div class="ctx-line">🔗 Propagation from ${s.leader_ticker} · lag ${s.propagation_lag_min||'?'}min</div>` : '';
+    ? `<div class="ctx-line">PROP from ${s.leader_ticker} · lag ${s.propagation_lag_min||'?'}min</div>` : '';
 
   // Machine-set status banner
   const isAutoExpired = s.status === 'EXPIRED';
@@ -1104,8 +1104,8 @@ function updateSession(session) {
   const lbl = document.getElementById('sessionLabel');
   const map = {
     REGULAR:    ['var(--green)',  'MARKET OPEN'],
-    PRE_MARKET: ['var(--blue)',   '🌅 PRE-MARKET'],
-    POST_MARKET:['var(--blue)',   '🌆 POST-MARKET'],
+    PRE_MARKET: ['var(--blue)',   'PRE-MARKET'],
+    POST_MARKET:['var(--blue)',   'POST-MARKET'],
     OVERNIGHT:  ['var(--text3)',  'OVERNIGHT'],
     WEEKEND:    ['var(--text3)',  'WEEKEND'],
   };
@@ -1419,7 +1419,9 @@ function renderPaperPositions(positions) {
     const spread = p.current_spread != null ? '$' + parseFloat(p.current_spread).toFixed(2) : '—';
     const theta = p.cumulative_theta != null ? parseFloat(p.cumulative_theta).toFixed(3) : '—';
 
-    const sourceIcon = p.auto_traded ? '<span title="Auto-traded" style="font-size:11px">&#x1F916;</span>' : '<span title="Manual" style="font-size:11px">&#x1F9D1;</span>';
+    const sourceIcon = p.auto_traded
+      ? '<span title="Auto-traded" style="font-family:var(--mono);font-size:8px;font-weight:700;color:var(--amber);letter-spacing:0.5px;padding:1px 4px;border:1px solid var(--amber);border-radius:2px;background:rgba(245,158,11,0.1)">AUTO</span>'
+      : '<span title="Manual" style="font-family:var(--mono);font-size:8px;font-weight:700;color:var(--purple);letter-spacing:0.5px;padding:1px 4px;border:1px solid var(--purple);border-radius:2px;background:rgba(139,92,246,0.1)">MANUAL</span>';
 
     return `<div class="pos-card" style="border-left:3px solid ${action==='EXIT'?'var(--red)':action==='PARTIAL_EXIT'?'var(--amber)':action==='ACCELERATE'?'var(--blue)':'var(--green)'}">
       <div class="pos-header">
