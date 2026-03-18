@@ -18,6 +18,7 @@ import { scanSectorRotationBounce } from './src/strategies/sector-rotation-bounc
 import { scanGapUpReversal } from './src/strategies/gap-up-reversal.js';
 import { scoreConvictionSetup } from './src/strategies/conviction-scorer.js';
 import { monitorOpenPositions } from './src/jobs/options-monitor.js';
+import { scoreContinuation } from './src/jobs/continuation-scorer.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app  = express();
@@ -213,6 +214,28 @@ app.post('/api/outcome', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     res.json({ ok: false, error: err.message });
+  }
+});
+
+// Open paper trades with continuation status
+app.get('/api/paper-trades/open', async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT paper_id, signal_id, ticker, direction, strategy, grade,
+             entry_time, entry_stock_price, entry_contract_symbol, entry_contract_mid,
+             current_stock_price, current_contract_est, unrealized_pnl_pct,
+             peak_pnl_pct, max_adverse_pnl_pct, status,
+             hit_t1, hit_t2, hit_stop,
+             current_delta, current_iv, current_spread, cumulative_theta,
+             continuation_action, continuation_reason, continuation_details,
+             continuation_scored_at, greeks_updated_at, last_updated
+      FROM lc_v3.paper_trades
+      WHERE status IN ('OPEN', 'WEAKENING')
+      ORDER BY entry_time DESC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    res.json([]);
   }
 });
 
@@ -1484,6 +1507,7 @@ async function startRestPoller() {
     'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY,
   };
   const dataUrl = process.env.ALPACA_DATA_URL || 'https://data.alpaca.markets';
+  let continuationCycle = 0;
 
   async function poll() {
     const session = getSessionPoller();
@@ -2123,6 +2147,54 @@ async function startRestPoller() {
         console.error('[GREEKS] Monitor cycle error:', greeksErr.message);
       }
 
+      // Continuation scoring — every 3rd cycle (~3 minutes) during market hours
+      continuationCycle++;
+      if (continuationCycle % 3 === 0 && session === 'REGULAR') {
+        try {
+          const openTrades = await db.query(`
+            SELECT * FROM lc_v3.paper_trades
+            WHERE status IN ('OPEN', 'WEAKENING')
+              AND entry_contract_symbol IS NOT NULL
+          `);
+          for (const trade of openTrades.rows) {
+            try {
+              // Fetch recent 1-min bars for this ticker (last 30 bars)
+              const barsRes = await axios.get(`${dataUrl}/v2/stocks/${trade.ticker}/bars`, {
+                headers: alpacaHdrs,
+                params: { timeframe: '1Min', limit: 30, feed: ALPACA_FEED },
+                timeout: 5000,
+              });
+              const recentBars = (barsRes.data?.bars || []).map(b => ({
+                open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v,
+              }));
+
+              // Market context: SPY change since this trade's entry
+              const entrySpyPrice = parseFloat(trade.entry_stock_price) || 0;
+              const currentSpySnap = allSnaps?.['SPY'];
+              const spyNow = currentSpySnap?.latestTrade?.p || currentSpySnap?.dailyBar?.c || 0;
+              const spyAtEntry = spyPct; // use today's SPY pct as proxy
+              const mktCtx = {
+                spyChangeSinceEntry: spyPct || 0,
+                currentRegime: typeof currentRegime !== 'undefined' ? currentRegime : null,
+              };
+
+              const greeks = {
+                delta: parseFloat(trade.current_delta) || 0,
+                iv: parseFloat(trade.current_iv) || 0,
+                spread: parseFloat(trade.current_spread) || 0,
+                theta: parseFloat(trade.cumulative_theta) || 0,
+              };
+
+              await scoreContinuation(trade, recentBars, mktCtx, greeks, db);
+            } catch (tradeErr) {
+              console.warn(`[CONTINUATION] ${trade.ticker} error: ${tradeErr.message}`);
+            }
+          }
+        } catch (contErr) {
+          console.error('[CONTINUATION] Scorer error:', contErr.message);
+        }
+      }
+
       // ── AUTO-STATUS: expire, miss, and invalidate signals ────────────
       try {
         const et = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -2381,6 +2453,18 @@ async function backfillContracts() {
       await db.query(`ALTER TABLE lc_v3.paper_trades ADD COLUMN IF NOT EXISTS ${col} ${type}`);
     }
     console.log('[MIGRATE] Greeks monitor columns ensured on lc_v3.paper_trades');
+
+    // Continuation scorer columns
+    const contCols = [
+      ['continuation_action', 'VARCHAR(20)'],
+      ['continuation_reason', 'VARCHAR(40)'],
+      ['continuation_details', 'JSONB'],
+      ['continuation_scored_at', 'TIMESTAMPTZ'],
+    ];
+    for (const [col, type] of contCols) {
+      await db.query(`ALTER TABLE lc_v3.paper_trades ADD COLUMN IF NOT EXISTS ${col} ${type}`);
+    }
+    console.log('[MIGRATE] Continuation scorer columns ensured on lc_v3.paper_trades');
   } catch (err) {
     console.error('[MIGRATE] Greeks columns error:', err.message);
   }

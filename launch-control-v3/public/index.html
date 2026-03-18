@@ -224,6 +224,32 @@ body::after {
   color: var(--purple); font-weight: 600; letter-spacing: 0.5px; text-align: center;
 }
 
+/* Continuation badges */
+.cont-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  padding: 3px 8px; border-radius: 3px; letter-spacing: 0.5px;
+}
+.cont-hold      { background: rgba(16,185,129,0.15); color: var(--green); border: 1px solid var(--green); }
+.cont-partial   { background: rgba(245,158,11,0.15); color: var(--amber); border: 1px solid var(--amber); }
+.cont-exit      { background: rgba(239,68,68,0.15); color: var(--red); border: 1px solid var(--red); }
+.cont-accelerate{ background: rgba(59,130,246,0.15); color: var(--blue); border: 1px solid var(--blue); }
+.pos-card {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+  padding: 10px 14px; margin-bottom: 6px; font-family: var(--mono);
+}
+.pos-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.pos-ticker { font-size: 14px; font-weight: 700; color: var(--text1); }
+.pos-meta { font-size: 9px; color: var(--text3); }
+.pos-pnl { font-size: 13px; font-weight: 700; }
+.pos-pnl.pos { color: var(--green); }
+.pos-pnl.neg { color: var(--red); }
+.pos-reason { font-size: 9px; color: var(--text3); margin-top: 3px; }
+.pos-section-title {
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  color: var(--text3); letter-spacing: 1px; margin-bottom: 8px;
+}
+
 /* Hold instruction */
 .hold-instruction {
   display: flex; align-items: center; justify-content: center; gap: 6px;
@@ -467,6 +493,9 @@ body::after {
         <div class="empty-sub">Signals appear when scoring thresholds are met</div>
       </div>
     </div>
+
+    <!-- Open paper positions with continuation badges -->
+    <div id="openPositions" style="margin-top:14px"></div>
   </div>
 
   <!-- RIGHT: SIDEBAR -->
@@ -1133,10 +1162,55 @@ async function loadAll() {
       new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
 
     render();
+
+    // Open paper positions with continuation badges
+    try {
+      const posRes = await fetch('/api/paper-trades/open').then(r=>r.json());
+      renderPositions(posRes);
+    } catch { /* non-fatal */ }
   } catch(e) {
     console.error('Load error:', e);
     document.getElementById('liveDot').style.color = 'var(--red)';
   }
+}
+
+function renderPositions(positions) {
+  const el = document.getElementById('openPositions');
+  if (!el) return;
+  if (!positions || positions.length === 0) { el.innerHTML = ''; return; }
+
+  const badgeClass = a => a === 'HOLD' ? 'cont-hold' : a === 'PARTIAL_EXIT' ? 'cont-partial' : a === 'EXIT' ? 'cont-exit' : a === 'ACCELERATE' ? 'cont-accelerate' : 'cont-hold';
+  const badgeLabel = a => a === 'PARTIAL_EXIT' ? 'PARTIAL EXIT' : a || 'PENDING';
+
+  const html = positions.map(p => {
+    const pnl = parseFloat(p.unrealized_pnl_pct) || 0;
+    const pnlStr = `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`;
+    const action = p.continuation_action || '';
+    const reason = (p.continuation_reason || '').replace(/_/g, ' ');
+    const held = p.entry_time ? Math.round((Date.now() - new Date(p.entry_time).getTime()) / 60000) : 0;
+    const dir = p.direction || 'CALL';
+    const dirClass = dir === 'CALL' ? 'dir-call' : 'dir-put';
+
+    return `<div class="pos-card" style="border-left:3px solid ${action==='EXIT'?'var(--red)':action==='PARTIAL_EXIT'?'var(--amber)':action==='ACCELERATE'?'var(--blue)':'var(--green)'}">
+      <div class="pos-header">
+        <div>
+          <span class="pos-ticker">${p.ticker}</span>
+          <span class="dir-badge ${dirClass}" style="font-size:8px;margin-left:5px">${dir}</span>
+          <span style="font-size:9px;color:var(--text3);margin-left:6px">${p.strategy||''}</span>
+        </div>
+        <div style="text-align:right">
+          <span class="pos-pnl ${pnl>=0?'pos':'neg'}">${pnlStr}</span>
+          <div class="pos-meta">${held}min held</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        ${action ? `<span class="cont-badge ${badgeClass(action)}">${badgeLabel(action)}</span>` : '<span class="cont-badge cont-hold" style="opacity:0.4">SCORING...</span>'}
+        <span class="pos-reason">${reason}</span>
+      </div>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `<div class="pos-section-title">OPEN POSITIONS (${positions.length})</div>${html}`;
 }
 
 // ── CLOCK ─────────────────────────────────────────────────────────
