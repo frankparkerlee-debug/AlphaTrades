@@ -1881,10 +1881,6 @@ async function startRestPoller() {
         ].filter(Boolean).join(' · ');
 
         // ── MOMENTUM SIGNALS DISABLED — only strategy signals write to DB ──
-        // Momentum scorer still runs for composite/grade calculation but
-        // does not insert into lc_v3.signals. Only data-proven strategy
-        // scanners (GAP_REVERSAL, CAPITULATION_BOUNCE, VOL_DROP_PUT,
-        // CONSEC_BOUNCE, SECTOR_ROTATION_BOUNCE) write signals.
         continue;
 
         // ── MOMENTUM UPSERT — one signal per ticker+direction per day ──
@@ -2115,7 +2111,7 @@ async function startRestPoller() {
             console.error('[STRATEGY] Daily bars query error:', dbErr.message);
           }
 
-          // Run all four scanners
+          // Run all strategy scanners
           const gapSignals = scanGapReversal(stratSnapshots, prevCloses, firstCandles);
           const capSignals = scanCapitulationBounce(stratSnapshots, prevCloses, volumeBaselines);
           const putSignals = scanVolumeDropPut(stratSnapshots, prevCloses, volumeBaselines);
@@ -2126,7 +2122,23 @@ async function startRestPoller() {
           const allStratSignals = [...gapSignals, ...capSignals, ...putSignals, ...consecSignals,
             ...(macroEvent ? [] : sectorSignals), ...gapUpSignals, ...calendarSignals];
 
+          // Diagnostic: log scanner inputs + outputs every 5th cycle
+          if (continuationCycle % 5 === 0) {
+            // Sample a few tickers to show gap calculations
+            const sampleTickers = ['ADBE', 'NVDA', 'TSLA', 'AAPL', 'MSFT'].filter(t => stratSnapshots[t]);
+            for (const t of sampleTickers.slice(0, 3)) {
+              const o = stratSnapshots[t]?.open;
+              const pc = prevCloses[t];
+              const fc = firstCandles[t];
+              const gap = o && pc ? ((o - pc) / pc * 100).toFixed(2) : 'N/A';
+              const fcColor = fc ? (fc.close > fc.open ? 'GREEN' : 'RED') : 'NONE';
+              console.log(`[DIAG] ${t} open=${o} prevClose=${pc} gap=${gap}% firstCandle=${fcColor} fc=${JSON.stringify(fc||null)}`);
+            }
+          }
+
           for (const sig of allStratSignals) {
+            console.log(`[STRATEGY CANDIDATE] ${sig.ticker} ${sig.direction} ${sig.strategy} confidence=${sig.confidence} entry=$${sig.entry_price}`);
+
             // Dedup: skip if strategy signal already exists today for this ticker+direction+strategy
             const dupCheck = await db.query(`
               SELECT 1 FROM lc_v3.signals
@@ -2135,17 +2147,21 @@ async function startRestPoller() {
                 AND news_headline LIKE $3
               LIMIT 1
             `, [sig.ticker, sig.direction, `%strategy=${sig.strategy}%`]);
-            if (dupCheck.rows.length > 0) continue;
+            if (dupCheck.rows.length > 0) {
+              console.log(`[STRATEGY DEDUP] ${sig.ticker} ${sig.strategy} — already exists today`);
+              continue;
+            }
 
             // Options volume gate — skip if total options volume < 2000 contracts
             try {
               const optVol = await getOptionsVolume(sig.ticker);
               if (optVol < 2000) {
-                console.log(`[STRATEGY] ${sig.ticker} ${sig.strategy} skipped — options vol ${optVol} < 2000`);
+                console.log(`[STRATEGY BLOCKED] ${sig.ticker} ${sig.strategy} — options vol ${optVol} < 2000`);
                 continue;
               }
+              console.log(`[STRATEGY PASS] ${sig.ticker} ${sig.strategy} — options vol ${optVol} OK`);
             } catch (volErr) {
-              console.warn(`[STRATEGY] ${sig.ticker} options volume check failed: ${volErr.message}`);
+              console.warn(`[STRATEGY VOL-ERR] ${sig.ticker} options volume check failed: ${volErr.message} — allowing through`);
               // Allow signal through if volume check fails (API error)
             }
 
@@ -2339,7 +2355,10 @@ async function startRestPoller() {
           }
 
           // Debug summary — always log so we know scanners ran
-          console.log(`[POLL SUMMARY] checked=${Object.keys(stratSnapshots).length} GAP_DOWN=${gapSignals.length} GAP_UP=${gapUpSignals.length} SECTOR_ROTATION=${sectorSignals.length} CAPITULATION=${capSignals.length} VOL_DROP=${putSignals.length} CONSEC=${consecSignals.length} CALENDAR=${calendarSignals.length}`);
+          console.log(`[POLL SUMMARY] checked=${Object.keys(stratSnapshots).length} prevCloses=${Object.keys(prevCloses).length} firstCandles=${Object.keys(firstCandles).length} GAP_DOWN=${gapSignals.length} GAP_UP=${gapUpSignals.length} SECTOR=${sectorSignals.length} CAPIT=${capSignals.length} VOL_DROP=${putSignals.length} CONSEC=${consecSignals.length} CAL=${calendarSignals.length}`);
+          if (gapSignals.length > 0 || capSignals.length > 0 || gapUpSignals.length > 0 || sectorSignals.length > 0) {
+            console.log(`[STRATEGY FIRED] ${[...gapSignals, ...capSignals, ...gapUpSignals, ...sectorSignals].map(s => `${s.ticker}:${s.strategy}`).join(', ')}`);
+          }
         } catch (stratErr) {
           console.error('[STRATEGY] Scanner error:', stratErr.message);
         }

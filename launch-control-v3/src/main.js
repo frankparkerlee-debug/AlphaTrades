@@ -36,20 +36,12 @@ async function startup() {
     process.exit(1);
   }
 
-  // 2. Load ticker universe — merge equity_profiles + conviction_universe
+  // 2. Load ticker universe — equity_profiles only for WebSocket (Alpaca caps at ~200 symbols)
+  //    conviction_universe tickers get data via REST snapshots in the poller
   const profilesRes = await query('SELECT ticker FROM lc_v3.equity_profiles ORDER BY ticker');
   const tickers = profilesRes.rows.map(r => r.ticker);
-  try {
-    const convRes = await query('SELECT ticker FROM lc_v3.conviction_universe ORDER BY ticker');
-    const convTickers = convRes.rows.map(r => r.ticker);
-    const merged = [...new Set([...tickers, ...convTickers])];
-    logger.info(`✓ Loaded ${tickers.length} profile tickers + ${convTickers.length} conviction tickers = ${merged.length} unique`);
-    // Use merged set for WebSocket subscriptions (ensures all conviction tickers get bars)
-    setTrackedTickers([...merged, ...REFERENCE_ETFS]);
-  } catch {
-    logger.warn('conviction_universe query failed — using equity_profiles only');
-    setTrackedTickers([...tickers, ...REFERENCE_ETFS]);
-  }
+  logger.info(`✓ Loaded ${tickers.length} profile tickers for WebSocket subscriptions`);
+  setTrackedTickers([...tickers, ...REFERENCE_ETFS]);
 
   // 4. Fetch previous close and prev day high/low for all tickers
   logger.info('Fetching previous close data...');
