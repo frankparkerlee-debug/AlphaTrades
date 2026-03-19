@@ -8,7 +8,36 @@ import {
   setStreamStatus, initTicker,
 } from './state.js';
 import { classifyCatalyst } from '../scoring/news.js';
+import { query as dbQuery } from './db.js';
 import logger from '../utils/logger.js';
+
+// ── BAR PERSISTENCE ─────────────────────────────────────
+function getBarSession(tsStr) {
+  const et = new Date(new Date(tsStr).toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const mins = et.getHours() * 60 + et.getMinutes();
+  if (mins >= 570 && mins < 960) return 'REGULAR';
+  if (mins >= 240 && mins < 570) return 'PRE_MARKET';
+  if (mins >= 960 && mins < 1200) return 'POST_MARKET';
+  return 'OVERNIGHT';
+}
+
+function getWindowKey(tsStr) {
+  const et = new Date(new Date(tsStr).toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const totalMins = et.getHours() * 60 + et.getMinutes();
+  const floored = Math.floor(totalMins / 15) * 15;
+  return `${Math.floor(floored / 60).toString().padStart(2, '0')}:${(floored % 60).toString().padStart(2, '0')}`;
+}
+
+function persistBar(ticker, msg) {
+  const ts = msg.t;
+  if (!ts) return;
+  dbQuery(`
+    INSERT INTO lc_v3.bars (ticker, ts, open, high, low, close, volume, vwap, session, window_key)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    ON CONFLICT (ticker, ts) DO NOTHING
+  `, [ticker, ts, msg.o, msg.h, msg.l, msg.c, msg.v, msg.vw || null, getBarSession(ts), getWindowKey(ts)])
+    .catch(err => logger.error(`[BAR-PERSIST] ${ticker} write failed: ${err.message}`));
+}
 
 // ── CLAUDE HAIKU NEWS CLASSIFIER ─────────────────────────
 const anthropicKey = process.env.ANTHROPIC_API_KEY;
@@ -165,8 +194,10 @@ function handleStockMessage(msg) {
     case 'b': // bar
       if (REFERENCE_ETFS.includes(msg.S)) {
         updateMarketEtf(msg.S, msg);
+        persistBar(msg.S, msg);
       } else if (trackedTickers.includes(msg.S)) {
         updateTickerBar(msg.S, msg);
+        persistBar(msg.S, msg);
         // Notify scoring loop that new bar is ready
         if (onSignalCallback) onSignalCallback(msg.S);
       }

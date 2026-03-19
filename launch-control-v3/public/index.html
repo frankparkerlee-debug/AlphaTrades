@@ -71,6 +71,15 @@ body::after {
 @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.5} }
 
 .clock { font-family: var(--mono); font-size: 10px; color: var(--text3); }
+.hdr-toggle {
+  font-family: var(--mono); font-size: 12px; font-weight: 700;
+  padding: 3px 7px; border-radius: 3px; border: 1px solid var(--border);
+  background: transparent; color: var(--text3); cursor: pointer; transition: all 0.15s;
+  line-height: 1;
+}
+.hdr-toggle:hover { border-color: var(--text2); color: var(--text2); }
+.hdr-toggle.on { border-color: var(--green); color: var(--green); }
+.hdr-toggle.off { border-color: var(--text4); color: var(--text4); opacity: 0.5; }
 
 /* ── SESSION BAR ── */
 #sessionBar {
@@ -135,8 +144,9 @@ body::after {
   font-family: var(--mono); font-size: 9px; font-weight: 700;
   padding: 2px 6px; border-radius: 2px;
 }
-.dir-call { background: #065f4640; color: var(--green); border: 1px solid var(--green); }
-.dir-put  { background: #7f1d1d40; color: var(--red);   border: 1px solid var(--red); }
+.dir-call     { background: #065f4640; color: var(--green); border: 1px solid var(--green); }
+.dir-put      { background: #7f1d1d40; color: var(--red);   border: 1px solid var(--red); }
+.dir-calendar { background: #581c8740; color: #a855f7;      border: 1px solid #a855f7; }
 .card-time { font-size: 9px; color: var(--text3); font-family: var(--mono); }
 
 .card-right { text-align: right; }
@@ -217,6 +227,8 @@ body::after {
 .strat-consec  { background: rgba(139,92,246,0.1); color: var(--purple); border-bottom: 3px solid var(--purple); }
 .strat-gapup   { background: rgba(249,115,22,0.1); color: #f97316; border-bottom: 3px solid #f97316; }
 .strat-sector  { background: rgba(34,211,238,0.1); color: #22d3ee; border-bottom: 3px solid #22d3ee; }
+.strat-calendar { background: rgba(168,85,247,0.1); color: #a855f7; border-bottom: 3px solid #a855f7; }
+.strat-erput    { background: rgba(239,68,68,0.12); color: #ef4444; border-bottom: 3px solid #ef4444; }
 .strat-momentum{ background: rgba(245,158,11,0.08); color: var(--amber); border-bottom: 3px solid var(--amber); }
 .paper-only-banner {
   background: rgba(139,92,246,0.12); border: 1px solid var(--purple); border-radius: 3px;
@@ -501,6 +513,8 @@ body::after {
     <span id="warnBadge" class="badge" style="display:none;font-family:var(--mono);font-size:9px;padding:3px 8px;border-radius:3px;border:1px solid currentColor"></span>
     <span id="conflBadge" class="badge badge-gold" style="display:none"></span>
     <span id="activeBadge" class="badge badge-amber" style="display:none"></span>
+    <button id="soundToggle" class="hdr-toggle on" onclick="toggleSound()" title="Sound alerts">SND</button>
+    <button id="notifToggle" class="hdr-toggle" onclick="requestNotifPermission()" title="Browser notifications">NTF</button>
     <span id="clock" class="clock">--:--:--</span>
     <span id="liveDot" style="color:var(--text4);font-size:16px">●</span>
   </div>
@@ -559,6 +573,8 @@ body::after {
       <button class="filter-btn"         onclick="strat('VOL_DROP_PUT',this)">VOL PUT</button>
       <button class="filter-btn"         onclick="strat('CONSEC_BOUNCE',this)">CONSEC</button>
       <button class="filter-btn"         onclick="strat('SECTOR_ROTATION_BOUNCE',this)">SECTOR</button>
+      <button class="filter-btn"         onclick="strat('OVERNIGHT_CALENDAR',this)">CALENDAR</button>
+      <button class="filter-btn"         onclick="strat('PRE_EARNINGS_PUT',this)">ER PUT</button>
       <div class="filter-divider"></div>
       <button class="filter-btn" id="histBtn" onclick="toggleHist(this)" style="margin-left:auto">+ HISTORY</button>
     </div>
@@ -637,6 +653,153 @@ let workspace = 'live'; // 'live' or 'paper'
 let paperPositions = [];
 const ACCOUNT = parseFloat('{{ACCOUNT_SIZE}}') || 7500;
 
+// ── ALERT SYSTEM ─────────────────────────────────────────────────
+let alertedSignalIds = new Set();
+let alertedContActions = new Set(); // track paper_id:action for continuation alerts
+let soundEnabled = localStorage.getItem('lc_sound_enabled') !== 'false';
+let audioCtx = null;
+let previousSignalIds = new Set();
+
+// Clear alerted IDs at midnight
+function scheduleMidnightClear() {
+  const now = new Date();
+  const midnight = new Date(now);
+  midnight.setHours(24, 0, 0, 0);
+  setTimeout(() => {
+    alertedSignalIds.clear();
+    alertedContActions.clear();
+    scheduleMidnightClear();
+  }, midnight - now);
+}
+scheduleMidnightClear();
+
+// Init sound toggle button state
+(function initSoundBtn() {
+  const btn = document.getElementById('soundToggle');
+  if (btn) { btn.className = 'hdr-toggle ' + (soundEnabled ? 'on' : 'off'); }
+})();
+
+function toggleSound() {
+  soundEnabled = !soundEnabled;
+  localStorage.setItem('lc_sound_enabled', soundEnabled);
+  const btn = document.getElementById('soundToggle');
+  btn.className = 'hdr-toggle ' + (soundEnabled ? 'on' : 'off');
+  // Init AudioContext on first user interaction
+  if (soundEnabled && !audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch {}
+  }
+}
+
+function requestNotifPermission() {
+  if (!('Notification' in window)) return;
+  Notification.requestPermission().then(p => {
+    const btn = document.getElementById('notifToggle');
+    btn.className = 'hdr-toggle ' + (p === 'granted' ? 'on' : 'off');
+  });
+}
+
+// Init AudioContext on any user click (autoplay policy)
+document.addEventListener('click', function initAudio() {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch {}
+  }
+}, { once: false });
+
+// Init notification button state
+if ('Notification' in window) {
+  const nb = document.getElementById('notifToggle');
+  if (nb) nb.className = 'hdr-toggle ' + (Notification.permission === 'granted' ? 'on' : 'off');
+  if (Notification.permission === 'default') Notification.requestPermission().then(p => {
+    if (nb) nb.className = 'hdr-toggle ' + (p === 'granted' ? 'on' : 'off');
+  });
+}
+
+function isMarketHours() {
+  const ct = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }));
+  const mins = ct.getHours() * 60 + ct.getMinutes();
+  return mins >= 505 && mins <= 945; // 8:25 AM to 3:45 PM CT
+}
+
+function playTone(freq, durationMs, startTime) {
+  if (!audioCtx || !soundEnabled) return;
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.frequency.value = freq;
+  osc.type = 'sine';
+  gain.gain.setValueAtTime(0.15, startTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, startTime + durationMs / 1000);
+  osc.start(startTime);
+  osc.stop(startTime + durationMs / 1000);
+}
+
+function playAlert(strategy) {
+  if (!audioCtx || !soundEnabled || !isMarketHours()) return;
+  const t = audioCtx.currentTime;
+  if (strategy === 'GAP_REVERSAL' || strategy === 'GAP_UP_REVERSAL') {
+    // Urgent: 3 beeps at 880hz
+    playTone(880, 200, t);
+    playTone(880, 200, t + 0.3);
+    playTone(880, 200, t + 0.6);
+  } else if (strategy === 'SECTOR_ROTATION_BOUNCE') {
+    // 2 beeps at 660hz
+    playTone(660, 200, t);
+    playTone(660, 200, t + 0.3);
+  } else if (strategy === 'CAPITULATION_BOUNCE' || strategy === 'CONSEC_BOUNCE') {
+    // Soft single tone at 440hz
+    playTone(440, 400, t);
+  } else {
+    // Default: single tone
+    playTone(550, 300, t);
+  }
+}
+
+function playContinuationAlert(action) {
+  if (!audioCtx || !soundEnabled || !isMarketHours()) return;
+  const t = audioCtx.currentTime;
+  if (action === 'EXIT') {
+    // Descending two tones
+    playTone(550, 250, t);
+    playTone(440, 250, t + 0.3);
+  } else if (action === 'PARTIAL_EXIT') {
+    playTone(550, 300, t);
+  }
+}
+
+function fireSignalAlert(sig) {
+  if (!isMarketHours()) return;
+  const id = sig.signal_id?.toString();
+  if (!id || alertedSignalIds.has(id)) return;
+  alertedSignalIds.add(id);
+
+  const strategy = parseStrategy(sig) || 'SIGNAL';
+  const stratLabel = (strategy || '').replace(/_/g, ' ');
+  const dir = sig.direction || 'CALL';
+
+  // Browser notification
+  if ('Notification' in window && Notification.permission === 'granted') {
+    new Notification(`${stratLabel} — ${sig.ticker} ${dir}`, {
+      body: `Grade: ${sig.grade}  Composite: ${sig.composite_raw}`,
+      tag: id,
+    });
+  }
+
+  // Audio alert
+  playAlert(strategy);
+}
+
+function fireContinuationAlert(pos) {
+  if (!isMarketHours()) return;
+  const action = pos.continuation_action;
+  if (!action || action === 'HOLD' || action === 'ACCELERATE') return;
+  const key = `${pos.paper_id}:${action}`;
+  if (alertedContActions.has(key)) return;
+  alertedContActions.add(key);
+  playContinuationAlert(action);
+}
+
 function switchWorkspace(ws) {
   workspace = ws;
   const btns = document.querySelectorAll('.ws-btn');
@@ -688,7 +851,7 @@ function grade(v, btn) {
 function strat(v, btn) {
   stratF = v;
   document.querySelectorAll('#filterBar .filter-btn').forEach(b => {
-    if (['ALL','GAP REV','GAP UP','CAPIT','VOL PUT','CONSEC','SECTOR'].includes(b.textContent)) b.classList.remove('on-blue');
+    if (['ALL','GAP REV','GAP UP','CAPIT','VOL PUT','CONSEC','SECTOR','CALENDAR','ER PUT'].includes(b.textContent)) b.classList.remove('on-blue');
   });
   btn.classList.add('on-blue');
   render();
@@ -770,6 +933,8 @@ function buildStratBanner(strategy) {
     VOL_DROP_PUT:            { cls: 'strat-vdp',    label: 'VOL DROP PUT', win: '57% WIN', hold: 'PUT · OVERNIGHT' },
     CONSEC_BOUNCE:           { cls: 'strat-consec', label: 'CONSEC BOUNCE', win: '64-85%', hold: 'MULTI-DAY HOLD' },
     SECTOR_ROTATION_BOUNCE:  { cls: 'strat-sector', label: 'SECTOR BOUNCE', win: '90% WIN', hold: 'SAME DAY · EXIT 2PM' },
+    OVERNIGHT_CALENDAR:      { cls: 'strat-calendar', label: 'OVERNIGHT CALENDAR', win: '82% WIN', hold: 'OVERNIGHT · EXIT 9:30AM' },
+    PRE_EARNINGS_PUT:        { cls: 'strat-erput', label: 'PRE-EARNINGS PUT', win: 'CONVICTION', hold: 'MULTI-DAY · HARD EXIT' },
   };
   const info = map[strategy];
   if (!info) {
@@ -816,6 +981,81 @@ function buildHoldInstruction(strategy, createdAt) {
     return `<div class="hold-instruction" style="color:#f97316">EXIT BY ${exitCT} CT</div>`;
   }
   if (strategy === 'SECTOR_ROTATION_BOUNCE') return `<div class="hold-instruction" style="color:var(--green)">EXIT BY 2:00 PM CT</div>`;
+  if (strategy === 'OVERNIGHT_CALENDAR') return `<div class="hold-instruction" style="color:#a855f7">EXIT TOMORROW 9:30 AM ET</div>`;
+  if (strategy === 'PRE_EARNINGS_PUT') {
+    const hl = typeof createdAt === 'object' ? '' : createdAt;
+    return `<div class="hold-instruction" style="color:#ef4444">HARD EXIT — DAY AFTER EARNINGS</div>`;
+  }
+  return '';
+}
+
+function parseSignalField(s, key) {
+  const hl = s.news_headline || '';
+  const m = hl.match(new RegExp(key + '=([^ ·]+)'));
+  return m ? m[1] : null;
+}
+
+function buildStrategyDetails(s, strategy) {
+  if (strategy === 'OVERNIGHT_CALENDAR') {
+    const frontLeg = parseSignalField(s, 'frontLeg')?.replace(/_/g, ' ') || 'SELL 1DTE ATM CALL';
+    const backLeg = parseSignalField(s, 'backLeg')?.replace(/_/g, ' ') || 'BUY 7DTE ATM CALL';
+    const rangePct = parseSignalField(s, 'rangePct') || '—';
+    const vixLevel = parseSignalField(s, 'vixLevel') || '—';
+    return `<div style="background:rgba(168,85,247,0.06);border:1px solid rgba(168,85,247,0.2);border-radius:4px;padding:8px 10px;margin:6px 0;font-family:var(--mono);font-size:10px">
+      <div style="color:#a855f7;font-weight:700;letter-spacing:0.5px;margin-bottom:6px">CALENDAR SPREAD LEGS</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+        <div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:3px;padding:5px 7px">
+          <div style="color:var(--red);font-size:9px;font-weight:600">FRONT (SELL)</div>
+          <div style="color:var(--text1);font-size:11px;margin-top:2px">${frontLeg}</div>
+        </div>
+        <div style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.2);border-radius:3px;padding:5px 7px">
+          <div style="color:var(--green);font-size:9px;font-weight:600">BACK (BUY)</div>
+          <div style="color:var(--text1);font-size:11px;margin-top:2px">${backLeg}</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:12px;margin-top:6px;color:var(--text2)">
+        <span>ENTRY: 2:45-2:55 PM ET</span>
+        <span>EXIT: 9:30 AM ET +1</span>
+      </div>
+      <div style="display:flex;gap:12px;margin-top:4px;color:var(--text2)">
+        <span>RANGE: <span style="color:var(--green)">${rangePct}</span></span>
+        <span>VIX: <span style="color:var(--green)">${vixLevel}</span></span>
+      </div>
+    </div>`;
+  }
+
+  if (strategy === 'PRE_EARNINGS_PUT') {
+    const conviction = parseSignalField(s, 'conviction') || '—';
+    const erDate = parseSignalField(s, 'earningsDate') || '—';
+    const daysToER = parseSignalField(s, 'daysToER') || '—';
+    const ivRank = parseSignalField(s, 'ivRank') || '—';
+    const belowHigh = parseSignalField(s, 'belowHigh') || '—';
+    const strike = parseSignalField(s, 'strike') || '—';
+    const hardExit = parseSignalField(s, 'hardExit') || '—';
+    const sizePct = parseSignalField(s, 'size') || '1.5%';
+    return `<div style="background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);border-radius:4px;padding:8px 10px;margin:6px 0;font-family:var(--mono);font-size:10px">
+      <div style="color:#ef4444;font-weight:700;letter-spacing:0.5px;margin-bottom:6px">PRE-EARNINGS CONVICTION PUT</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px">
+        <div><span style="color:var(--text3)">EARNINGS</span> <span style="color:var(--amber);font-weight:600">${erDate}</span></div>
+        <div><span style="color:var(--text3)">DAYS TO ER</span> <span style="color:var(--amber);font-weight:600">${daysToER}</span></div>
+        <div><span style="color:var(--text3)">CONVICTION</span> <span style="color:#ef4444;font-weight:600">${conviction}/100</span></div>
+        <div><span style="color:var(--text3)">IV RANK</span> <span style="color:var(--green);font-weight:600">${ivRank}</span></div>
+        <div><span style="color:var(--text3)">BELOW 52W HI</span> <span style="color:var(--red)">${belowHigh}</span></div>
+        <div><span style="color:var(--text3)">SIZE</span> <span style="color:var(--text1)">${sizePct}</span></div>
+      </div>
+      <div style="margin-top:6px;display:flex;gap:12px">
+        <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:3px;padding:4px 8px">
+          <span style="color:var(--text3);font-size:9px">STRIKE</span>
+          <span style="color:var(--amber);font-weight:600;margin-left:4px">${strike}</span>
+        </div>
+        <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:3px;padding:4px 8px">
+          <span style="color:var(--text3);font-size:9px">HARD EXIT</span>
+          <span style="color:#ef4444;font-weight:600;margin-left:4px">${hardExit}</span>
+        </div>
+      </div>
+    </div>`;
+  }
+
   return '';
 }
 
@@ -986,6 +1226,7 @@ function buildCard(s) {
     })() : ''}
     ${mkt?`<div class="ctx-line">${mkt}</div>`:''}
     ${buildIntelBar(s)}
+    ${buildStrategyDetails(s, strategy)}
     ${contract}
     ${strategy ? buildLockedTargets(s) : ''}
     ${buildHoldInstruction(strategy, s.created_at)}
@@ -1141,6 +1382,17 @@ async function loadAll() {
     ]);
 
     signals = sigRes.signals||[];
+
+    // Fire alerts for new signals
+    const currentIds = new Set(signals.map(s => s.signal_id?.toString()));
+    for (const s of signals) {
+      const id = s.signal_id?.toString();
+      if (id && !previousSignalIds.has(id) && previousSignalIds.size > 0) {
+        fireSignalAlert(s);
+      }
+    }
+    previousSignalIds = currentIds;
+
     const active  = signals.filter(s=>s.status==='ACTIVE');
     const taken   = signals.filter(s=>s.human_taken===true);
     const wins    = taken.filter(s=>(s.human_pnl_pct||0)>0);
@@ -1273,6 +1525,8 @@ async function loadAll() {
     try {
       const posRes = await fetch('/api/paper-trades/open').then(r=>r.json());
       paperPositions = posRes || [];
+      // Fire continuation alerts for EXIT / PARTIAL_EXIT
+      for (const p of paperPositions) fireContinuationAlert(p);
     } catch { paperPositions = []; }
 
     // Live positions = taken signals without exit price

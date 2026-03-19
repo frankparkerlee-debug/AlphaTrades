@@ -17,6 +17,8 @@ import { scanConsecutiveDrop } from './src/strategies/consecutive-drop.js';
 import { scanSectorRotationBounce } from './src/strategies/sector-rotation-bounce.js';
 import { scanGapUpReversal } from './src/strategies/gap-up-reversal.js';
 import { scoreConvictionSetup } from './src/strategies/conviction-scorer.js';
+import { scanOvernightCalendar } from './src/strategies/overnight-calendar.js';
+import { scanPreEarningsPut } from './src/strategies/pre-earnings-put.js';
 import { monitorOpenPositions } from './src/jobs/options-monitor.js';
 import { scoreContinuation } from './src/jobs/continuation-scorer.js';
 
@@ -29,6 +31,47 @@ const db = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
+
+// ── MACRO EVENT CALENDAR 2026 ─────────────────────────────────────────────────
+const MACRO_EVENTS_2026 = [
+  // FOMC decisions
+  { date: '2026-03-18', event: 'FOMC' },
+  { date: '2026-05-07', event: 'FOMC' },
+  { date: '2026-06-18', event: 'FOMC' },
+  { date: '2026-07-30', event: 'FOMC' },
+  { date: '2026-09-17', event: 'FOMC' },
+  { date: '2026-11-05', event: 'FOMC' },
+  { date: '2026-12-17', event: 'FOMC' },
+  // CPI (~10th of each month)
+  { date: '2026-01-14', event: 'CPI' }, { date: '2026-02-12', event: 'CPI' },
+  { date: '2026-03-11', event: 'CPI' }, { date: '2026-04-10', event: 'CPI' },
+  { date: '2026-05-12', event: 'CPI' }, { date: '2026-06-10', event: 'CPI' },
+  { date: '2026-07-14', event: 'CPI' }, { date: '2026-08-12', event: 'CPI' },
+  { date: '2026-09-10', event: 'CPI' }, { date: '2026-10-13', event: 'CPI' },
+  { date: '2026-11-10', event: 'CPI' }, { date: '2026-12-10', event: 'CPI' },
+  // NFP (first Friday of each month)
+  { date: '2026-01-02', event: 'NFP' }, { date: '2026-02-06', event: 'NFP' },
+  { date: '2026-03-06', event: 'NFP' }, { date: '2026-04-03', event: 'NFP' },
+  { date: '2026-05-01', event: 'NFP' }, { date: '2026-06-05', event: 'NFP' },
+  { date: '2026-07-02', event: 'NFP' }, { date: '2026-08-07', event: 'NFP' },
+  { date: '2026-09-04', event: 'NFP' }, { date: '2026-10-02', event: 'NFP' },
+  { date: '2026-11-06', event: 'NFP' }, { date: '2026-12-04', event: 'NFP' },
+  // PPI (~11th of each month)
+  { date: '2026-01-15', event: 'PPI' }, { date: '2026-02-13', event: 'PPI' },
+  { date: '2026-03-12', event: 'PPI' }, { date: '2026-04-11', event: 'PPI' },
+  { date: '2026-05-13', event: 'PPI' }, { date: '2026-06-11', event: 'PPI' },
+  { date: '2026-07-15', event: 'PPI' }, { date: '2026-08-13', event: 'PPI' },
+  { date: '2026-09-11', event: 'PPI' }, { date: '2026-10-14', event: 'PPI' },
+  { date: '2026-11-12', event: 'PPI' }, { date: '2026-12-11', event: 'PPI' },
+];
+
+function isHighImpactMacroDay() {
+  const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const todayStr = `${etNow.getFullYear()}-${String(etNow.getMonth() + 1).padStart(2, '0')}-${String(etNow.getDate()).padStart(2, '0')}`;
+  const matches = MACRO_EVENTS_2026.filter(e => e.date === todayStr);
+  if (matches.length === 0) return null;
+  return matches.map(e => e.event).join('+');
+}
 
 // ── MIDDLEWARE ────────────────────────────────────────────────────────────────
 app.use(express.json());
@@ -173,7 +216,8 @@ app.get('/api/status', async (req, res) => {
     const regime  = global.currentRegime || { regime: 'NEUTRAL', regimeNote: '', sizeMult: 1.0 };
 
     const mktCtx = global.marketContext || {};
-    res.json({ session, propagation: prop, streams, regime: regime.regime, regimeNote: regime.regimeNote, market: mktCtx, time: now.toISOString() });
+    const macroEvent = isHighImpactMacroDay();
+    res.json({ session, propagation: prop, streams, regime: regime.regime, regimeNote: regime.regimeNote, macro_event_today: macroEvent, market: mktCtx, time: now.toISOString() });
   } catch (err) {
     res.json({ session: 'UNKNOWN', propagation: [], streams: {}, error: err.message });
   }
@@ -390,6 +434,53 @@ app.get('/api/debug/contract/:ticker/:direction', async (req, res) => {
     } catch (e) { contract = { error: e.message }; }
 
     res.json({ ticker, direction, price, stockSnap: !!stockSnap, optSnap, contract });
+  } catch (err) {
+    res.json({ error: err.message });
+  }
+});
+
+// Debug: check ticker subscription and data availability
+app.get('/api/debug/ticker-check/:ticker', async (req, res) => {
+  try {
+    const { ticker } = req.params;
+    const [conv, prof, volBl, barCount, recentBars] = await Promise.all([
+      db.query('SELECT ticker FROM lc_v3.conviction_universe WHERE ticker = $1', [ticker]),
+      db.query('SELECT ticker, atr_20d FROM lc_v3.equity_profiles WHERE ticker = $1', [ticker]),
+      db.query('SELECT COUNT(*)::int as count FROM lc_v3.volume_baselines WHERE ticker = $1', [ticker]),
+      db.query('SELECT COUNT(*)::int as count FROM lc_v3.bars WHERE ticker = $1 AND ts >= NOW() - INTERVAL \'3 days\'', [ticker]),
+      db.query(`SELECT DATE(ts AT TIME ZONE 'America/New_York') as day, COUNT(*)::int as bars,
+                MIN(ts) as first_bar, MAX(ts) as last_bar
+                FROM lc_v3.bars WHERE ticker = $1 AND ts >= NOW() - INTERVAL '10 days'
+                GROUP BY DATE(ts AT TIME ZONE 'America/New_York') ORDER BY day DESC LIMIT 5`, [ticker]),
+    ]);
+    res.json({
+      ticker,
+      in_conviction_universe: conv.rows.length > 0,
+      in_equity_profiles: prof.rows.length > 0,
+      equity_profile: prof.rows[0] || null,
+      volume_baselines_count: volBl.rows[0]?.count || 0,
+      bars_last_3_days: barCount.rows[0]?.count || 0,
+      recent_bar_days: recentBars.rows,
+    });
+  } catch (err) {
+    res.json({ error: err.message });
+  }
+});
+
+// Debug: paper trade stats
+app.get('/api/debug/paper-stats', async (req, res) => {
+  try {
+    const r = await db.query(`
+      SELECT COUNT(*)::int as total,
+        COUNT(*) FILTER (WHERE auto_traded = true)::int as auto_traded,
+        COUNT(*) FILTER (WHERE auto_traded = false OR auto_traded IS NULL)::int as manual,
+        COUNT(*) FILTER (WHERE status = 'OPEN')::int as open_count,
+        COUNT(*) FILTER (WHERE status = 'CLOSED')::int as closed_count,
+        COUNT(*) FILTER (WHERE outcome = 'WIN')::int as wins,
+        COUNT(*) FILTER (WHERE outcome = 'LOSS')::int as losses
+      FROM lc_v3.paper_trades
+    `);
+    res.json(r.rows[0]);
   } catch (err) {
     res.json({ error: err.message });
   }
@@ -1930,6 +2021,11 @@ async function startRestPoller() {
       if (written > 0) console.log(`[POLL] ${written} signals written/updated`);
 
       // ── DATA-PROVEN STRATEGY SCANNERS ───────────────────────────────
+      const macroEvent = isHighImpactMacroDay();
+      if (macroEvent) {
+        console.log(`[MACRO] ${macroEvent} detected — confidence -20, SECTOR_ROTATION blocked`);
+      }
+
       if (session === 'REGULAR') {
         try {
           // Build prevCloses from snapshots
@@ -1987,19 +2083,25 @@ async function startRestPoller() {
             }
           }
 
-          // Build dailyBars for consecutive-drop scanner (last 5 daily bars per ticker from Alpaca)
+          // Build dailyBars for consecutive-drop scanner — derive daily OHLCV from minute bars
           const dailyBars = {};
           try {
             const dbRes = await db.query(`
-              SELECT ticker, DATE(ts AT TIME ZONE 'America/New_York') as day,
-                     (array_agg(open ORDER BY ts))[1] as o,
-                     MAX(high) as h, MIN(low) as l,
-                     (array_agg(close ORDER BY ts DESC))[1] as c,
-                     SUM(volume) as v
-              FROM lc_v3.bars
-              WHERE session = 'REGULAR'
-                AND ts >= NOW() - INTERVAL '10 days'
-              GROUP BY ticker, DATE(ts AT TIME ZONE 'America/New_York')
+              WITH daily AS (
+                SELECT ticker,
+                       DATE(ts AT TIME ZONE 'America/New_York') as day,
+                       (array_agg(open ORDER BY ts))[1] as o,
+                       MAX(high) as h,
+                       MIN(low) as l,
+                       (array_agg(close ORDER BY ts DESC))[1] as c,
+                       SUM(volume) as v
+                FROM lc_v3.bars
+                WHERE session = 'REGULAR'
+                  AND ts >= NOW() - INTERVAL '10 days'
+                GROUP BY ticker, DATE(ts AT TIME ZONE 'America/New_York')
+              )
+              SELECT * FROM daily
+              WHERE day < CURRENT_DATE
               ORDER BY ticker, day
             `);
             for (const row of dbRes.rows) {
@@ -2020,7 +2122,9 @@ async function startRestPoller() {
           const consecSignals = scanConsecutiveDrop(Object.keys(allSnaps), dailyBars);
           const sectorSignals = scanSectorRotationBounce(stratSnapshots, prevCloses, spyPct, firstCandles, qqqPct);
           const gapUpSignals = scanGapUpReversal(stratSnapshots, prevCloses, firstCandles);
-          const allStratSignals = [...gapSignals, ...capSignals, ...putSignals, ...consecSignals, ...sectorSignals, ...gapUpSignals];
+          const calendarSignals = scanOvernightCalendar(stratSnapshots, mkt.SPY, vix, macroEvent);
+          const allStratSignals = [...gapSignals, ...capSignals, ...putSignals, ...consecSignals,
+            ...(macroEvent ? [] : sectorSignals), ...gapUpSignals, ...calendarSignals];
 
           for (const sig of allStratSignals) {
             // Dedup: skip if strategy signal already exists today for this ticker+direction+strategy
@@ -2050,7 +2154,12 @@ async function startRestPoller() {
                              : sig.strategy === 'SECTOR_ROTATION_BOUNCE' ? 88
                              : sig.strategy === 'GAP_UP_REVERSAL' ? 88
                              : sig.strategy === 'CONSEC_BOUNCE' ? (sig.consecutive_days >= 3 ? 85 : 64)
+                             : sig.strategy === 'OVERNIGHT_CALENDAR' ? 82
+                             : sig.strategy === 'PRE_EARNINGS_PUT' ? sig.confidence
                              : 57;
+
+            // Macro event penalty: reduce confidence by 20 on high-impact days
+            if (macroEvent) compositeRaw -= 20;
 
             // Pre-earnings filter: reduce confidence if earnings within 5 days
             let nearEarnings = false;
@@ -2110,11 +2219,26 @@ async function startRestPoller() {
               sig.consecutive_days ? `consec=${sig.consecutive_days}d` : null,
               sig.total_drop_pct != null ? `totalDrop=${sig.total_drop_pct}%` : null,
               sig.exit_within_days ? `exitWithin=${sig.exit_within_days}d` : null,
+              sig.front_leg ? `frontLeg=${sig.front_leg}` : null,
+              sig.back_leg ? `backLeg=${sig.back_leg}` : null,
+              sig.exit_time ? `exitTime=${sig.exit_time}` : null,
+              sig.range_pct != null ? `rangePct=${sig.range_pct}%` : null,
+              sig.vix_level != null ? `vixLevel=${sig.vix_level}` : null,
+              sig.conviction_score != null ? `conviction=${sig.conviction_score}` : null,
+              sig.earnings_date ? `earningsDate=${sig.earnings_date}` : null,
+              sig.days_to_earnings != null ? `daysToER=${sig.days_to_earnings}` : null,
+              sig.iv_rank != null ? `ivRank=${sig.iv_rank}%` : null,
+              sig.pct_below_high != null ? `belowHigh=${sig.pct_below_high}%` : null,
+              sig.strike_range ? `strike=${sig.strike_range}` : null,
+              sig.hard_exit ? `hardExit=${sig.hard_exit}` : null,
+              sig.position_size_pct != null ? `size=${sig.position_size_pct}%` : null,
               sig.note || null,
             ].filter(Boolean).join(' · ');
 
-            const expiryInterval = sig.strategy === 'CONSEC_BOUNCE'
-              ? '2 days' : '4 hours';
+            const expiryInterval = sig.strategy === 'CONSEC_BOUNCE' ? '2 days'
+              : sig.strategy === 'OVERNIGHT_CALENDAR' ? '18 hours'
+              : sig.strategy === 'PRE_EARNINGS_PUT' ? `${(sig.exit_within_days || 22)} days`
+              : '4 hours';
 
             // VOL_DROP_PUT fires as PAPER_ONLY — track but don't prompt for live entry
             const signalStatus = sig.strategy === 'VOL_DROP_PUT' ? 'PAPER_ONLY' : 'ACTIVE';
@@ -2169,6 +2293,7 @@ async function startRestPoller() {
               }
 
               // Auto-open paper trade for every strategy signal
+              console.log(`[AUTO-PAPER ATTEMPT] ${sig.ticker} ${sig.strategy} signal_id=${newSignalId}`);
               try {
                 // Re-read the signal to get contract fields that were just updated
                 const sigRow = await db.query(`SELECT * FROM lc_v3.signals WHERE signal_id = $1`, [newSignalId]);
@@ -2199,10 +2324,12 @@ async function startRestPoller() {
                     s.contract_delta ? parseFloat(s.contract_delta) : null,
                     s.contract_iv ? parseFloat(s.contract_iv) : null,
                   ]);
-                  console.log(`[AUTO-PAPER] ${sig.ticker} ${sig.strategy} — paper trade opened`);
+                  console.log(`[AUTO-PAPER SUCCESS] ${sig.ticker} ${sig.strategy} signal_id=${newSignalId}`);
+                } else {
+                  console.warn(`[AUTO-PAPER FAILED] ${sig.ticker} — signal row not found after insert`);
                 }
               } catch (paperErr) {
-                console.warn(`[AUTO-PAPER] ${sig.ticker} insert failed: ${paperErr.message}`);
+                console.error(`[AUTO-PAPER FAILED] ${sig.ticker} ${sig.strategy} error: ${paperErr.message}`);
               }
             }
           }
@@ -2212,9 +2339,102 @@ async function startRestPoller() {
           }
 
           // Debug summary — always log so we know scanners ran
-          console.log(`[POLL SUMMARY] checked=${Object.keys(stratSnapshots).length} GAP_DOWN=${gapSignals.length} GAP_UP=${gapUpSignals.length} SECTOR_ROTATION=${sectorSignals.length} CAPITULATION=${capSignals.length} VOL_DROP=${putSignals.length} CONSEC=${consecSignals.length}`);
+          console.log(`[POLL SUMMARY] checked=${Object.keys(stratSnapshots).length} GAP_DOWN=${gapSignals.length} GAP_UP=${gapUpSignals.length} SECTOR_ROTATION=${sectorSignals.length} CAPITULATION=${capSignals.length} VOL_DROP=${putSignals.length} CONSEC=${consecSignals.length} CALENDAR=${calendarSignals.length}`);
         } catch (stratErr) {
           console.error('[STRATEGY] Scanner error:', stratErr.message);
+        }
+      }
+
+      // ── PRE-EARNINGS PUT SCANNER (runs hourly using conviction data) ──
+      if (session === 'REGULAR' && continuationCycle % 60 === 5) {
+        try {
+          // Fetch conviction scores for all tickers
+          const convTickerRes = await db.query(`
+            SELECT ticker FROM lc_v3.equity_profiles
+            UNION SELECT ticker FROM lc_v3.conviction_universe
+          `);
+          const convTickers = convTickerRes.rows.map(r => r.ticker);
+          const convScores = [];
+          for (const ticker of convTickers) {
+            try {
+              const result = await scoreConvictionSetup(ticker, db);
+              if (result.conviction_score >= 50) {
+                // Enrich with price vs 52w high
+                const priceRes = await db.query(
+                  'SELECT price, year_high FROM lc_v3.equity_profiles WHERE ticker = $1',
+                  [ticker]
+                );
+                if (priceRes.rows[0]?.price && priceRes.rows[0]?.year_high) {
+                  const price = parseFloat(priceRes.rows[0].price);
+                  const high = parseFloat(priceRes.rows[0].year_high);
+                  result.current_price = price;
+                  result.price_vs_52w_high_pct = high > 0 ? -((high - price) / high * 100) : null;
+                }
+                convScores.push(result);
+              }
+            } catch { /* skip ticker */ }
+          }
+
+          // Build ticker intelligence map
+          const tiRes = await db.query(`
+            SELECT ticker, earnings_date, iv_rank_30d, analyst_consensus
+            FROM lc_v3.ticker_intelligence
+          `);
+          const tiMap = {};
+          for (const row of tiRes.rows) {
+            tiMap[row.ticker] = row;
+          }
+
+          const preEarningsSignals = scanPreEarningsPut(convScores, tiMap);
+          if (preEarningsSignals.length > 0) {
+            console.log(`[PRE-EARNINGS] ${preEarningsSignals.length} candidates found`);
+          }
+
+          // Insert pre-earnings signals using same pipeline
+          for (const sig of preEarningsSignals) {
+            const dupCheck = await db.query(`
+              SELECT 1 FROM lc_v3.signals
+              WHERE ticker = $1 AND direction = $2
+                AND DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
+                AND news_headline LIKE $3
+              LIMIT 1
+            `, [sig.ticker, sig.direction, `%strategy=${sig.strategy}%`]);
+            if (dupCheck.rows.length > 0) continue;
+
+            const compositeRaw = sig.confidence;
+            const signalNote = [
+              `strategy=${sig.strategy}`,
+              `confidence=${sig.confidence}%`,
+              `conviction=${sig.conviction_score}`,
+              `earningsDate=${sig.earnings_date}`,
+              `daysToER=${sig.days_to_earnings}`,
+              `ivRank=${sig.iv_rank}%`,
+              `belowHigh=${sig.pct_below_high}%`,
+              `strike=${sig.strike_range}`,
+              `hardExit=${sig.hard_exit}`,
+              `size=${sig.position_size_pct}%`,
+              sig.note || null,
+            ].filter(Boolean).join(' · ');
+
+            const expiryInterval = `${sig.exit_within_days || 22} days`;
+
+            await db.query(`
+              INSERT INTO lc_v3.signals (
+                ticker, direction, grade, status, composite_raw, signal_tier,
+                price_at_signal, news_headline,
+                first_seen_at, last_confirmed_at, confirmation_count,
+                peak_composite, peak_grade, composite_history, momentum_trend,
+                expires_at, created_at
+              ) VALUES ($1,$2,'A','ACTIVE',$3,'primary',$4,$5,
+                NOW(), NOW(), 1, $3, 'A', '[]'::jsonb, 'NEW',
+                NOW() + INTERVAL '${expiryInterval}', NOW())
+              RETURNING signal_id
+            `, [sig.ticker, sig.direction, compositeRaw, sig.entry_price, signalNote]);
+
+            console.log(`[PRE-EARNINGS] ${sig.ticker} PUT conviction=${sig.conviction_score} ER=${sig.days_to_earnings}d IV=${sig.iv_rank}%`);
+          }
+        } catch (preEarnErr) {
+          console.error('[PRE-EARNINGS] Scanner error:', preEarnErr.message);
         }
       }
 
@@ -2371,6 +2591,8 @@ const STRATEGY_MIN_DTE = {
   CAPITULATION_BOUNCE: 1,
   VOL_DROP_PUT: 2,
   CONSEC_BOUNCE: 3,
+  OVERNIGHT_CALENDAR: 1,
+  PRE_EARNINGS_PUT: 7,
 };
 
 // ── POST-SIGNAL MONITORING ────────────────────────────────────────────────────
