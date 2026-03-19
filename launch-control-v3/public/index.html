@@ -1745,7 +1745,7 @@ async function updateCurrentPrices() {
       // since we only have stock prices, not live contract prices
       if (sig?.human_entry_price && sig.human_entry_price < sig.price_at_signal * 0.5) {
         pnlEl.textContent = '';
-        continue;
+        return;
       }
       const entryEl = card.querySelector('.locked-cell-value.entry');
       if (!entryEl) return;
