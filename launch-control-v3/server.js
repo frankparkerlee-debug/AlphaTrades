@@ -2791,9 +2791,11 @@ async function backfillContracts() {
     }
     console.log('[MIGRATE] Continuation scorer columns ensured on lc_v3.paper_trades');
 
-    // Auto-paper trading column
+    // Strategy + auto-paper columns
+    await db.query(`ALTER TABLE lc_v3.paper_trades ADD COLUMN IF NOT EXISTS strategy VARCHAR(50)`);
     await db.query(`ALTER TABLE lc_v3.paper_trades ADD COLUMN IF NOT EXISTS auto_traded BOOLEAN DEFAULT FALSE`);
-    console.log('[MIGRATE] auto_traded column ensured on lc_v3.paper_trades');
+    await db.query(`ALTER TABLE lc_v3.paper_trades ADD COLUMN IF NOT EXISTS position_size_pct NUMERIC`);
+    console.log('[MIGRATE] strategy + auto_traded columns ensured on lc_v3.paper_trades');
   } catch (err) {
     console.error('[MIGRATE] Greeks columns error:', err.message);
   }
