@@ -2153,16 +2153,15 @@ async function startRestPoller() {
             }
 
             // Options volume gate — skip if total options volume < 2000 contracts
-            try {
-              const optVol = await getOptionsVolume(sig.ticker);
-              if (optVol < 2000) {
-                console.log(`[STRATEGY BLOCKED] ${sig.ticker} ${sig.strategy} — options vol ${optVol} < 2000`);
-                continue;
-              }
+            // If API fails (returns null), allow signal through rather than blocking
+            const optVol = await getOptionsVolume(sig.ticker);
+            if (optVol === null) {
+              console.warn(`[STRATEGY VOL-SKIP] ${sig.ticker} ${sig.strategy} — options API failed, allowing through`);
+            } else if (optVol < 2000) {
+              console.log(`[STRATEGY BLOCKED] ${sig.ticker} ${sig.strategy} — options vol ${optVol} < 2000`);
+              continue;
+            } else {
               console.log(`[STRATEGY PASS] ${sig.ticker} ${sig.strategy} — options vol ${optVol} OK`);
-            } catch (volErr) {
-              console.warn(`[STRATEGY VOL-ERR] ${sig.ticker} options volume check failed: ${volErr.message} — allowing through`);
-              // Allow signal through if volume check fails (API error)
             }
 
             let compositeRaw = sig.strategy === 'GAP_REVERSAL' ? 85

@@ -278,6 +278,7 @@ export async function selectOptionsContract(ticker, direction, grade, currentPri
 export async function getOptionsVolume(ticker) {
   try {
     let totalVol = 0;
+    let contractCount = 0;
     for (const type of ['call', 'put']) {
       const res = await axios.get(`${DATA_URL}/v1beta1/options/snapshots/${ticker}`, {
         headers,
@@ -286,14 +287,18 @@ export async function getOptionsVolume(ticker) {
       });
       const snaps = res.data?.snapshots || {};
       for (const snap of Object.values(snaps)) {
-        totalVol += snap.latestTrade?.v || 0;
-        totalVol += snap.dayBar?.v || 0;
+        contractCount++;
+        // Alpaca options: latestTrade.s = trade size, latestQuote.bs/as = bid/ask sizes
+        totalVol += snap.latestTrade?.s || 0;
+        // dailyBar not present in options snapshots — use openInterest if available
+        totalVol += snap.openInterest || 0;
       }
     }
+    console.log(`[contract] ${ticker} options: ${contractCount} contracts, totalVol=${totalVol}`);
     return totalVol;
   } catch (err) {
     console.warn(`[contract] Options volume check failed for ${ticker}:`, err.message);
-    return 0;
+    return null;  // null = API error, let caller decide whether to block
   }
 }
 
