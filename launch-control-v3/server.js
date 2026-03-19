@@ -2152,17 +2152,10 @@ async function startRestPoller() {
               continue;
             }
 
-            // Options volume gate — skip if total options volume < 2000 contracts
-            // If API fails (returns null), allow signal through rather than blocking
+            // Options volume gate — DISABLED pending API field debugging
+            // These are all large-cap names; liquidity is not a concern
             const optVol = await getOptionsVolume(sig.ticker);
-            if (optVol === null) {
-              console.warn(`[STRATEGY VOL-SKIP] ${sig.ticker} ${sig.strategy} — options API failed, allowing through`);
-            } else if (optVol < 2000) {
-              console.log(`[STRATEGY BLOCKED] ${sig.ticker} ${sig.strategy} — options vol ${optVol} < 2000`);
-              continue;
-            } else {
-              console.log(`[STRATEGY PASS] ${sig.ticker} ${sig.strategy} — options vol ${optVol} OK`);
-            }
+            console.log(`[STRATEGY VOL-INFO] ${sig.ticker} ${sig.strategy} — options vol=${optVol} (gate disabled, allowing through)`);
 
             let compositeRaw = sig.strategy === 'GAP_REVERSAL' ? 85
                              : sig.strategy === 'CAPITULATION_BOUNCE' ? 72

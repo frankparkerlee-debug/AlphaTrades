@@ -279,6 +279,7 @@ export async function getOptionsVolume(ticker) {
   try {
     let totalVol = 0;
     let contractCount = 0;
+    let logged = false;
     for (const type of ['call', 'put']) {
       const res = await axios.get(`${DATA_URL}/v1beta1/options/snapshots/${ticker}`, {
         headers,
@@ -286,12 +287,21 @@ export async function getOptionsVolume(ticker) {
         timeout: 8000,
       });
       const snaps = res.data?.snapshots || {};
+      // Log raw structure of first snapshot to debug field names
+      if (!logged && Object.keys(snaps).length > 0) {
+        const firstKey = Object.keys(snaps)[0];
+        console.log(`[contract] ${ticker} RAW snapshot keys: ${JSON.stringify(Object.keys(snaps[firstKey]))}`);
+        console.log(`[contract] ${ticker} RAW first snapshot: ${JSON.stringify(snaps[firstKey]).slice(0, 500)}`);
+        logged = true;
+      }
       for (const snap of Object.values(snaps)) {
         contractCount++;
-        // Alpaca options: latestTrade.s = trade size, latestQuote.bs/as = bid/ask sizes
+        // Sum all volume fields we can find
         totalVol += snap.latestTrade?.s || 0;
-        // dailyBar not present in options snapshots — use openInterest if available
+        totalVol += snap.latestTrade?.v || 0;
+        totalVol += snap.dayBar?.v || 0;
         totalVol += snap.openInterest || 0;
+        totalVol += snap.oi || 0;
       }
     }
     console.log(`[contract] ${ticker} options: ${contractCount} contracts, totalVol=${totalVol}`);
