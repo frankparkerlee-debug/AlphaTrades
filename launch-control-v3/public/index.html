@@ -1740,6 +1740,13 @@ async function updateCurrentPrices() {
       // Compute P&L vs locked entry
       const pnlEl = document.getElementById('cpnl-' + sigId);
       if (!pnlEl) return;
+      const sig = signals.find(s => s.signal_id?.toString() === sigId);
+      // If user entered an options contract price (human_entry_price), skip stock-based P&L
+      // since we only have stock prices, not live contract prices
+      if (sig?.human_entry_price && sig.human_entry_price < sig.price_at_signal * 0.5) {
+        pnlEl.textContent = '';
+        continue;
+      }
       const entryEl = card.querySelector('.locked-cell-value.entry');
       if (!entryEl) return;
       const entry = parseFloat(entryEl.textContent.replace('$', ''));
@@ -1762,12 +1769,17 @@ async function updateCurrentPrices() {
       if (!ticker || prices[ticker] == null) return;
       const curPrice = prices[ticker];
       el.textContent = '$' + curPrice.toFixed(2);
-      // Compute P&L
+      // Compute P&L — skip if user entered an options contract price (not comparable to stock price)
       const entryPrice = sig.human_entry_price || sig.locked_entry || sig.price_at_signal;
       if (!entryPrice) return;
+      const isContractEntry = sig.human_entry_price && sig.human_entry_price < sig.price_at_signal * 0.5;
+      const pnlEl = document.getElementById('live-pnl-' + sigId);
+      if (isContractEntry) {
+        if (pnlEl) { pnlEl.textContent = 'OPTIONS'; pnlEl.style.color = 'var(--text3)'; }
+        return;
+      }
       const dir = sig.direction || 'CALL';
       const pnlPct = dir === 'PUT' ? ((entryPrice - curPrice) / entryPrice * 100) : ((curPrice - entryPrice) / entryPrice * 100);
-      const pnlEl = document.getElementById('live-pnl-' + sigId);
       if (pnlEl) {
         pnlEl.textContent = `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`;
         pnlEl.style.color = pnlPct >= 0 ? 'var(--green)' : 'var(--red)';

@@ -2258,18 +2258,29 @@ async function startRestPoller() {
             // VOL_DROP_PUT fires as PAPER_ONLY — track but don't prompt for live entry
             const signalStatus = sig.strategy === 'VOL_DROP_PUT' ? 'PAPER_ONLY' : 'ACTIVE';
 
+            // Strategy sub-scores: distribute composite across pillars
+            // PA gets the bulk (strategy = price-action driven), rest split evenly
+            const stratPA  = Math.round(compositeRaw * 0.40);
+            const stratVOL = Math.round(compositeRaw * 0.20);
+            const stratNEWS = Math.round(compositeRaw * 0.10);
+            const stratMKT = Math.round(compositeRaw * 0.15);
+            const stratTIM = Math.round(compositeRaw * 0.15);
+
             const insertRes = await db.query(`
               INSERT INTO lc_v3.signals (
                 ticker, direction, grade, status, composite_raw, signal_tier,
                 price_at_signal, news_headline,
+                score_price_action, score_volume, score_news, score_market, score_timing,
                 first_seen_at, last_confirmed_at, confirmation_count,
                 peak_composite, peak_grade, composite_history, momentum_trend,
                 expires_at, created_at
               ) VALUES ($1,$2,'A',$3,$4,'primary',$5,$6,
+                $7,$8,$9,$10,$11,
                 NOW(), NOW(), 1, $4, 'A', '[]'::jsonb, 'NEW',
                 NOW() + INTERVAL '${expiryInterval}', NOW())
               RETURNING signal_id
-            `, [sig.ticker, sig.direction, signalStatus, compositeRaw, sig.entry_price, signalNote]);
+            `, [sig.ticker, sig.direction, signalStatus, compositeRaw, sig.entry_price, signalNote,
+                stratPA, stratVOL, stratNEWS, stratMKT, stratTIM]);
 
             const newSignalId = insertRes.rows[0]?.signal_id;
             console.log(`[STRATEGY] ${sig.ticker} ${sig.direction} ${sig.strategy} ${sig.confidence}% ${signalStatus === 'PAPER_ONLY' ? '(PAPER)' : ''}`);
