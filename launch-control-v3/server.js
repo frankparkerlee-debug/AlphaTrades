@@ -2271,11 +2271,22 @@ async function startRestPoller() {
             console.error('[STRATEGY] Daily bars query error:', dbErr.message);
           }
 
+          // Build support/resistance level data for bounce-confirmation scanners
+          const prevDayLows = {}, prevDayHighs = {}, todayLows = {}, todayHighs = {}, currentPrices = {};
+          for (const [ticker, snap] of Object.entries(allSnaps)) {
+            if (snap.prevDailyBar?.l) prevDayLows[ticker] = snap.prevDailyBar.l;
+            if (snap.prevDailyBar?.h) prevDayHighs[ticker] = snap.prevDailyBar.h;
+            if (snap.dailyBar?.l) todayLows[ticker] = snap.dailyBar.l;
+            if (snap.dailyBar?.h) todayHighs[ticker] = snap.dailyBar.h;
+            if (snap.latestTrade?.p) currentPrices[ticker] = snap.latestTrade.p;
+          }
+          const levelData = { prevDayLows, prevDayHighs, todayLows, todayHighs, dailyBars };
+
           // Run all strategy scanners
-          const gapSignals = scanGapReversal(stratSnapshots, prevCloses, firstCandles);
-          const capSignals = scanCapitulationBounce(stratSnapshots, prevCloses, volumeBaselines);
+          const gapSignals = scanGapReversal(stratSnapshots, prevCloses, firstCandles, levelData);
+          const capSignals = scanCapitulationBounce(stratSnapshots, prevCloses, volumeBaselines, levelData);
           const putSignals = scanVolumeDropPut(stratSnapshots, prevCloses, volumeBaselines);
-          const consecSignals = scanConsecutiveDrop(Object.keys(allSnaps), dailyBars);
+          const consecSignals = scanConsecutiveDrop(Object.keys(allSnaps), dailyBars, { currentPrices, prevCloses, prevDayLows, prevDayHighs, todayLows, todayHighs });
           const sectorSignals = scanSectorRotationBounce(stratSnapshots, prevCloses, spyPct, firstCandles, qqqPct);
           const gapUpSignals = scanGapUpReversal(stratSnapshots, prevCloses, firstCandles);
           const calendarSignals = scanOvernightCalendar(stratSnapshots, mkt.SPY, vix, macroEvent);

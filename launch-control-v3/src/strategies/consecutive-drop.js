@@ -1,18 +1,18 @@
+import { checkBounceStructure } from './support-check.js';
+
 /**
  * Consecutive Drop Bounce Strategy
  *
- * Based on data analysis finding: 2 consecutive days down 3%+ →
- * 64.3% bounce (avg +0.82%). 3 consecutive days down 3%+ →
- * 100% bounced (3/3, avg +2.74%). Hold multiday, exit within 3 days.
+ * 2 consecutive days down 3%+ -> 64.3% bounce. 3 consecutive days -> 100%
+ * bounce historically. Trend structure flags attached — consecutive drops
+ * into a higher low zone flagged clean, extending lower lows flagged 'downtrend'.
  *
- * @param {string[]} tickers - list of tickers to scan
- * @param {Object} dailyBars - { ticker: [{ day, o, h, l, c, v }, ...] } sorted by day asc
- * @returns {Array} array of signal objects
+ * Horizon: MULTIDAY (exit within 3 days)
  */
-export function scanConsecutiveDrop(tickers, dailyBars) {
+export function scanConsecutiveDrop(tickers, dailyBars, levelData = {}) {
   const signals = [];
+  const { currentPrices = {}, todayLows = {}, todayHighs = {} } = levelData;
 
-  // Current week number for dedup
   const now = new Date();
   const startOfYear = new Date(now.getFullYear(), 0, 1);
   const weekNum = Math.ceil(((now - startOfYear) / 86400000 + startOfYear.getDay() + 1) / 7);
@@ -22,19 +22,17 @@ export function scanConsecutiveDrop(tickers, dailyBars) {
     if (!bars || bars.length < 3) continue;
 
     const n = bars.length;
-    const c0 = bars[n - 3].c; // 3 days ago close
-    const c1 = bars[n - 2].c; // 2 days ago close
-    const c2 = bars[n - 1].c; // yesterday close
+    const c0 = bars[n - 3].c;
+    const c1 = bars[n - 2].c;
+    const c2 = bars[n - 1].c;
 
     if (!c0 || !c1 || !c2) continue;
 
-    const drop1 = (c1 - c0) / c0; // day 1 return
-    const drop2 = (c2 - c1) / c1; // day 2 return
+    const drop1 = (c1 - c0) / c0;
+    const drop2 = (c2 - c1) / c1;
 
-    // Need at least 2 consecutive 3%+ drops
     if (drop1 > -0.03 || drop2 > -0.03) continue;
 
-    // Check for 3-day: need bar n-4
     let consecutiveDays = 2;
     let totalDrop = (c2 - c0) / c0;
 
@@ -49,6 +47,19 @@ export function scanConsecutiveDrop(tickers, dailyBars) {
       }
     }
 
+    // Trend structure analysis — flags, never blocks
+    const price = currentPrices[ticker];
+    let structure = { flags: [], trend: 'UNKNOWN', nearestSupport: null, nearestResistance: null, resistanceRoom: null, trendConfidence: 0 };
+    if (price) {
+      structure = checkBounceStructure(price, bars, {
+        todayLow: todayLows[ticker], todayHigh: todayHighs[ticker],
+      }, 'multiday');
+
+      if (structure.flags.length > 0) {
+        console.log(`[CONSEC] ${ticker} ${consecutiveDays}-day drop ${(totalDrop*100).toFixed(1)}% — flagged: ${structure.flags.join(', ')} (trend=${structure.trend})`);
+      }
+    }
+
     signals.push({
       ticker,
       direction: 'CALL',
@@ -59,6 +70,11 @@ export function scanConsecutiveDrop(tickers, dailyBars) {
       hold: 'MULTIDAY',
       exit_within_days: 3,
       dedup_key: `${ticker}-W${weekNum}`,
+      trend: structure.trend,
+      trend_flags: structure.flags,
+      support_at: structure.nearestSupport,
+      resistance_at: structure.nearestResistance,
+      resistance_room: structure.resistanceRoom,
     });
   }
 

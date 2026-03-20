@@ -26,3 +26,59 @@ services:
         value: wss://stream.data.alpaca.markets
       - key: ANTHROPIC_API_KEY
         sync: false
+
+  # MM Engine — options market making worker
+  - type: worker
+    name: lc-mm-engine
+    runtime: python
+    rootDir: launch-control-v3/mm-engine
+    region: ohio
+    plan: standard
+    buildCommand: pip install -r requirements.txt
+    startCommand: python engine.py
+    envVars:
+      - key: ALPACA_API_KEY
+        sync: false
+      - key: ALPACA_API_SECRET
+        sync: false
+      - key: ALPACA_PAPER_API_KEY
+        sync: false
+      - key: ALPACA_PAPER_API_SECRET
+        sync: false
+      - key: ALPACA_PAPER_BASE_URL
+        value: https://paper-api.alpaca.markets
+      - key: UNIVERSE
+        value: JPM,GS,BAC,MS,WFC
+      - key: KILL_SWITCH_THRESHOLD
+        value: "-800"
+      - key: MAX_CONCURRENT_POSITIONS
+        value: "8"
+      - key: TTL_SECONDS
+        value: "60"
+      - key: CONTRACTS_PER_TRADE
+        value: "10"
+      - key: HEARTBEAT_BACKEND
+        value: alpaca
+    disk:
+      name: lc-mm-logs
+      mountPath: /data
+      sizeGB: 1
+
+  # Dead man's switch — separate worker
+  - type: worker
+    name: lc-mm-dms
+    runtime: python
+    rootDir: launch-control-v3/mm-engine
+    region: ohio
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python dead_mans_switch_render.py
+    envVars:
+      - key: ALPACA_PAPER_API_KEY
+        sync: false
+      - key: ALPACA_PAPER_API_SECRET
+        sync: false
+      - key: ALPACA_PAPER_BASE_URL
+        value: https://paper-api.alpaca.markets
+      - key: HEARTBEAT_BACKEND
+        value: alpaca

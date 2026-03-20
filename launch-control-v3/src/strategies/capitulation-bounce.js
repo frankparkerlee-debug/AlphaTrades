@@ -1,18 +1,17 @@
+import { checkBounceStructure } from './support-check.js';
+
 /**
  * Capitulation Bounce Strategy
  *
- * Based on data analysis finding: 3%+ intraday drops on high volume
- * (>1.5x baseline) are capitulation events — only 28.1% continue down
- * the next day, with average +0.78% bounce. Hold overnight, exit at
- * next open.
+ * 3%+ intraday drops on >1.5x volume are capitulation events — only 28.1%
+ * continue down the next day. Trend structure flags attached — a 3% drop
+ * into a higher low is flagged clean, into a lower low is flagged 'downtrend'.
  *
- * @param {Object} snapshots - { ticker: { open, price, volume, windowKey } }
- * @param {Object} prevCloses - { ticker: number }
- * @param {Object} volumeBaselines - { "TICKER:windowKey": number }
- * @returns {Array} array of signal objects
+ * Horizon: OVERNIGHT (exit at next open)
  */
-export function scanCapitulationBounce(snapshots, prevCloses, volumeBaselines) {
+export function scanCapitulationBounce(snapshots, prevCloses, volumeBaselines, levelData = {}) {
   const signals = [];
+  const { todayLows = {}, todayHighs = {}, dailyBars = {} } = levelData;
 
   for (const ticker of Object.keys(snapshots)) {
     const snap = snapshots[ticker];
@@ -24,7 +23,6 @@ export function scanCapitulationBounce(snapshots, prevCloses, volumeBaselines) {
 
     if (intradayDrop > -0.03) continue;
 
-    // Guard: if price has already bounced >1.5% above open, the move happened — skip
     const bounceFromOpen = (currentPrice - todayOpen) / todayOpen;
     if (bounceFromOpen > 0.015) continue;
 
@@ -37,6 +35,15 @@ export function scanCapitulationBounce(snapshots, prevCloses, volumeBaselines) {
     const volumeRatio = snap.volume / baseline;
     if (volumeRatio < 1.5) continue;
 
+    // Trend structure analysis — flags, never blocks
+    const structure = checkBounceStructure(currentPrice, dailyBars[ticker], {
+      todayLow: todayLows[ticker], todayHigh: todayHighs[ticker], todayOpen,
+    }, 'overnight');
+
+    if (structure.flags.length > 0) {
+      console.log(`[CAPIT] ${ticker} dropped ${(intradayDrop*100).toFixed(1)}% — flagged: ${structure.flags.join(', ')} (trend=${structure.trend})`);
+    }
+
     signals.push({
       ticker,
       direction: 'CALL',
@@ -47,6 +54,11 @@ export function scanCapitulationBounce(snapshots, prevCloses, volumeBaselines) {
       confidence: 72.0,
       hold: 'OVERNIGHT',
       exit_at: 'NEXT_OPEN',
+      trend: structure.trend,
+      trend_flags: structure.flags,
+      support_at: structure.nearestSupport,
+      resistance_at: structure.nearestResistance,
+      resistance_room: structure.resistanceRoom,
     });
   }
 

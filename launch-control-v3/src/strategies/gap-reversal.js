@@ -1,17 +1,16 @@
+import { checkBounceStructure } from './support-check.js';
+
 /**
  * Gap Reversal Strategy
  *
- * Based on data analysis finding: 2-3% gap downs with a green first
- * 5-minute candle recover to close green 83.9% of the time, with
- * an average 77% gap fill. Targets derived from observed fill rates.
+ * 2-3% gap downs with a green first 5-min candle recover to close green
+ * 83.9% of the time. Trend structure flags attached — never blocked.
  *
- * @param {Object} snapshots  - { ticker: { open, ... } } today's session data
- * @param {Object} prevCloses - { ticker: number } previous day's closing price
- * @param {Object} firstCandles - { ticker: { open, close } } first 5-min candle
- * @returns {Array} array of signal objects
+ * Horizon: INTRADAY (exit by 13:00)
  */
-export function scanGapReversal(snapshots, prevCloses, firstCandles) {
+export function scanGapReversal(snapshots, prevCloses, firstCandles, levelData = {}) {
   const signals = [];
+  const { todayLows = {}, todayHighs = {}, dailyBars = {} } = levelData;
 
   for (const ticker of Object.keys(snapshots)) {
     const snap = snapshots[ticker];
@@ -24,13 +23,22 @@ export function scanGapReversal(snapshots, prevCloses, firstCandles) {
     if (!todayOpen || !prevClose) continue;
 
     const gap = (todayOpen - prevClose) / prevClose;
-
     if (gap < -0.03 || gap > -0.02) continue;
 
     const isGreen = candle.close > candle.open;
     if (!isGreen) continue;
 
+    const currentPrice = snap.price || candle.close;
     const gapAmount = prevClose - todayOpen;
+
+    // Trend structure analysis — flags, never blocks
+    const structure = checkBounceStructure(currentPrice, dailyBars[ticker], {
+      todayLow: todayLows[ticker], todayHigh: todayHighs[ticker], todayOpen,
+    }, 'intraday');
+
+    if (structure.flags.length > 0) {
+      console.log(`[GAP_REV] ${ticker} gapped ${(gap*100).toFixed(1)}% — flagged: ${structure.flags.join(', ')} (trend=${structure.trend})`);
+    }
 
     signals.push({
       ticker,
@@ -43,6 +51,11 @@ export function scanGapReversal(snapshots, prevCloses, firstCandles) {
       t2_target: +(todayOpen + gapAmount * 0.77).toFixed(2),
       confidence: 83.9,
       exit_by: '13:00',
+      trend: structure.trend,
+      trend_flags: structure.flags,
+      support_at: structure.nearestSupport,
+      resistance_at: structure.nearestResistance,
+      resistance_room: structure.resistanceRoom,
     });
   }
 
