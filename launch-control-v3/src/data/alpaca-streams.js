@@ -43,13 +43,53 @@ function persistBar(ticker, msg) {
 const anthropicKey = process.env.ANTHROPIC_API_KEY;
 const haikuClient = anthropicKey ? new Anthropic({ apiKey: anthropicKey }) : null;
 
+// ── HYBRID CLASSIFIER: keywords first, Haiku only for ambiguous/high-impact ──
+// Headlines that keywords can confidently classify skip the API call entirely.
+// Cache prevents re-classifying duplicate headlines.
+
+const classificationCache = new Map(); // headline -> result
+const MAX_CACHE = 500;
+
+// Keywords that signal high-impact news worth sending to Haiku
+const HIGH_IMPACT_KEYWORDS = [
+  'fda', 'sec ', 'doj', 'ftc', 'antitrust', 'investigation', 'subpoena',
+  'merger', 'acqui', 'buyout', 'takeover', 'tender offer',
+  'bankrupt', 'default', 'restat', 'fraud', 'recall',
+  'guidance', 'outlook', 'raises', 'lowers', 'cuts forecast',
+  'beat', 'miss', 'surpris', 'warn', 'profit warning',
+  'layoff', 'restructur', 'ceo ', 'cfo ', 'depart', 'resign',
+  'halt', 'suspend', 'delist',
+];
+
+function needsHaiku(headline, keywordResult) {
+  const hl = headline.toLowerCase();
+  // If keywords matched a specific catalyst (not "other"), trust them
+  if (keywordResult.catalyst.type !== 'other') return false;
+  // Check if headline contains high-impact language that keywords missed
+  return HIGH_IMPACT_KEYWORDS.some(kw => hl.includes(kw));
+}
+
 /**
- * Classify a headline using Claude Haiku.
- * Falls back to keyword-based classifyCatalyst if no API key or on error.
+ * Classify a headline using hybrid approach:
+ * 1. Check cache
+ * 2. Run keyword classifier
+ * 3. Only call Haiku if keywords returned "other" AND headline has high-impact language
  */
 async function classifyWithHaiku(headline, ticker) {
-  if (!haikuClient) {
-    return classifyWithKeywords(headline, ticker);
+  // Cache check
+  const cacheKey = headline.slice(0, 120);
+  if (classificationCache.has(cacheKey)) {
+    return classificationCache.get(cacheKey);
+  }
+
+  // Always run keywords first (free)
+  const kwResult = await classifyWithKeywords(headline, ticker);
+
+  // Only escalate to Haiku if keywords can't handle it
+  if (!haikuClient || !needsHaiku(headline, kwResult)) {
+    if (classificationCache.size >= MAX_CACHE) classificationCache.clear();
+    classificationCache.set(cacheKey, kwResult);
+    return kwResult;
   }
 
   try {
@@ -78,13 +118,17 @@ Headline: "${headline.replace(/"/g, '\\"')}"`,
 
     logger.info(`[HAIKU] ${ticker}: polarity=${polarity} catalyst=${catalystType} relevance=${relevance}`);
 
-    return {
+    const result = {
       polarity,
       catalyst: { type: catalystType, sensitivity: relevance >= 0.7 ? 1.2 : 1.0, affectsCluster: false, decayHours: Math.abs(polarity) >= 2 ? 8 : 4 },
     };
+    if (classificationCache.size >= MAX_CACHE) classificationCache.clear();
+    classificationCache.set(cacheKey, result);
+    return result;
   } catch (err) {
     logger.error(`[HAIKU] Classification failed for ${ticker}: ${err.message} — falling back to keywords`);
-    return classifyWithKeywords(headline, ticker);
+    classificationCache.set(cacheKey, kwResult);
+    return kwResult;
   }
 }
 

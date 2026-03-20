@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { Pool } from 'pg';
 import cron from 'node-cron';
+import { readFileSync, existsSync } from 'fs';
 import { createServer } from 'http';
 import { selectOptionsContract, getOptionsVolume } from './src/options/contract-selector.js';
 import { getNewsEvents } from './src/data/state.js';
@@ -75,6 +76,165 @@ function isHighImpactMacroDay() {
 
 // ── MIDDLEWARE ────────────────────────────────────────────────────────────────
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
+
+// ── MM ENGINE (password-protected, registered BEFORE express.static) ────────
+
+function parseCookies(req) {
+  const cookies = {};
+  (req.headers.cookie || '').split(';').forEach(c => {
+    const [k, ...v] = c.trim().split('=');
+    if (k) cookies[k] = decodeURIComponent(v.join('='));
+  });
+  return cookies;
+}
+
+function mmAuth(req, res, next) {
+  const pw = process.env.MM_PASSWORD;
+  if (!pw) return res.status(503).json({ error: 'MM_PASSWORD not configured' });
+  const cookies = parseCookies(req);
+  if (cookies.mm_session === pw) return next();
+  return res.status(401).json({ error: 'Unauthorized' });
+}
+
+const MM_LOGIN_HTML = `<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Launch Control -- MM Engine</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root { --bg0:#060a0f; --bg1:#0b1118; --border:#1e2d3d; --amber:#f59e0b; --green:#10b981; --red:#ef4444; --text1:#e2e8f0; --text3:#6b7f94; --mono:'IBM Plex Mono',monospace; --sans:'IBM Plex Sans',sans-serif; }
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg0);color:var(--text1);font-family:var(--sans);font-size:13px}
+body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.025) 2px,rgba(0,0,0,0.025) 4px)}
+.login-box{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg1);border:1px solid var(--border);border-radius:4px;padding:32px;width:340px;text-align:center}
+.login-title{font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:2px;color:var(--text3);margin-bottom:20px}
+.login-input{width:100%;background:var(--bg0);border:1px solid var(--border);border-radius:3px;padding:10px 12px;color:var(--text1);font-family:var(--mono);font-size:13px;margin-bottom:12px;outline:none}
+.login-input:focus{border-color:var(--amber)}
+.login-btn{width:100%;background:rgba(245,158,11,0.1);border:1px solid var(--amber);border-radius:3px;padding:10px;color:var(--amber);font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:1px;cursor:pointer;text-transform:uppercase}
+.login-btn:hover{background:rgba(245,158,11,0.2)}
+.login-err{font-family:var(--mono);font-size:10px;color:var(--red);margin-top:10px;display:none}
+.login-warn{font-family:var(--mono);font-size:10px;color:var(--amber);margin-top:14px}
+</style></head><body>
+<div class="login-box">
+  <div class="login-title">MM ENGINE ACCESS</div>
+  <form method="POST" action="/mm/login">
+    <input class="login-input" type="password" name="password" placeholder="Password" autofocus>
+    <button class="login-btn" type="submit">AUTHENTICATE</button>
+  </form>
+  <div class="login-err" id="err">INVALID PASSWORD</div>
+</div>
+<script>if(location.search.includes('invalid'))document.getElementById('err').style.display='block';</script>
+</body></html>`;
+
+const MM_NOPASS_HTML = `<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Launch Control -- MM Engine</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root { --bg0:#060a0f; --bg1:#0b1118; --border:#1e2d3d; --amber:#f59e0b; --text1:#e2e8f0; --text3:#6b7f94; --mono:'IBM Plex Mono',monospace; --sans:'IBM Plex Sans',sans-serif; }
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg0);color:var(--text1);font-family:var(--sans);font-size:13px}
+body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.025) 2px,rgba(0,0,0,0.025) 4px)}
+.msg-box{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg1);border:1px solid var(--border);border-radius:4px;padding:32px;width:400px;text-align:center}
+.msg-title{font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:2px;color:var(--amber);margin-bottom:16px}
+.msg-body{font-family:var(--mono);font-size:11px;color:var(--text3);line-height:1.6}
+code{background:rgba(245,158,11,0.1);color:var(--amber);padding:2px 6px;border-radius:3px;font-size:11px}
+</style></head><body>
+<div class="msg-box">
+  <div class="msg-title">CONFIGURATION REQUIRED</div>
+  <div class="msg-body">The <code>MM_PASSWORD</code> environment variable is not set.<br><br>Add it in the Render dashboard under Environment Variables, then redeploy.</div>
+</div>
+</body></html>`;
+
+app.get('/mm', (req, res) => {
+  const pw = process.env.MM_PASSWORD;
+  if (!pw) return res.send(MM_NOPASS_HTML);
+  const cookies = parseCookies(req);
+  if (cookies.mm_session === pw) {
+    return res.sendFile(join(__dirname, 'templates', 'mm.html'));
+  }
+  res.send(MM_LOGIN_HTML);
+});
+
+app.post('/mm/login', (req, res) => {
+  const pw = process.env.MM_PASSWORD;
+  if (!pw) return res.send(MM_NOPASS_HTML);
+  if (req.body.password === pw) {
+    res.setHeader('Set-Cookie', `mm_session=${encodeURIComponent(pw)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`);
+    return res.redirect('/mm');
+  }
+  res.redirect('/mm?invalid=1');
+});
+
+// MM data directory — defaults to cwd, override with MM_DATA_DIR
+const mmDataDir = process.env.MM_DATA_DIR || process.cwd();
+
+function todayDateStr() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }).replace(/-/g, '');
+}
+
+function readHeartbeat() {
+  const p = join(mmDataDir, 'data', 'heartbeat.json');
+  if (!existsSync(p)) return null;
+  try { return JSON.parse(readFileSync(p, 'utf-8')); } catch { return null; }
+}
+
+function readFillsToday() {
+  const dateStr = todayDateStr();
+  const jsonlPath = join(mmDataDir, 'data', `fills_${dateStr}.jsonl`);
+  if (existsSync(jsonlPath)) {
+    try {
+      const lines = readFileSync(jsonlPath, 'utf-8').trim().split('\n').filter(Boolean);
+      return lines.map(l => JSON.parse(l));
+    } catch { /* fall through to CSV */ }
+  }
+  const csvPath = join(mmDataDir, 'logs', `fills_${dateStr}.csv`);
+  if (!existsSync(csvPath)) return [];
+  try {
+    const lines = readFileSync(csvPath, 'utf-8').trim().split('\n');
+    if (lines.length < 2) return [];
+    const headers = lines[0].split(',');
+    return lines.slice(1).map(line => {
+      const vals = line.split(',');
+      const obj = {};
+      headers.forEach((h, i) => { obj[h.trim()] = (vals[i] || '').trim(); });
+      return obj;
+    });
+  } catch { return []; }
+}
+
+app.get('/api/mm/status', mmAuth, (req, res) => {
+  const hb = readHeartbeat();
+  const fills = readFillsToday();
+  const totalFills = fills.length;
+  const wins = fills.filter(f => f.win === true || f.win === 'True' || f.win === '1').length;
+  const adverse = fills.filter(f => f.adverse_selection === true || f.adverse_selection === 'True' || f.adverse_selection === '1').length;
+  const dailyPnl = fills.reduce((sum, f) => sum + (parseFloat(f.net_pnl) || 0), 0);
+  res.json({
+    daily_pnl: +dailyPnl.toFixed(2),
+    total_fills: totalFills,
+    win_rate: totalFills > 0 ? Math.round(wins / totalFills * 100) : null,
+    adverse_rate: totalFills > 0 ? Math.round(adverse / totalFills * 100) : null,
+    open_positions: hb?.positions?.length || 0,
+    kill_switch: hb ? 'OK' : null,
+    pdt_status: null,
+    rate_blocked: null,
+    data_fresh: hb ? true : null,
+    heartbeat_ts: hb?.timestamp || null,
+    engine_pid: hb?.engine_pid || null,
+  });
+});
+
+app.get('/api/mm/fills', mmAuth, (req, res) => {
+  res.json(readFillsToday());
+});
+
+app.get('/api/mm/positions', mmAuth, (req, res) => {
+  const hb = readHeartbeat();
+  res.json(hb?.positions || []);
+});
+
+// Static files AFTER /mm routes so they can't be intercepted
 app.use(express.static(join(__dirname, 'public')));
 
 // ── API ROUTES ────────────────────────────────────────────────────────────────
