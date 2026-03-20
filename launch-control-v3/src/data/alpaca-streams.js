@@ -50,45 +50,54 @@ const haikuClient = anthropicKey ? new Anthropic({ apiKey: anthropicKey }) : nul
 const classificationCache = new Map(); // headline -> result
 const MAX_CACHE = 500;
 
+// ── HAIKU CLASSIFICATION (ON-DEMAND ONLY) ────────────────────────────────────
+// Stream uses keywords only (free). Haiku is called on-demand via
+// classifyWithHaiku() only when PA/VOL gatekeepers pass.
+
 // Keywords that signal high-impact news worth sending to Haiku
 const HIGH_IMPACT_KEYWORDS = [
   'fda', 'sec ', 'doj', 'ftc', 'antitrust', 'investigation', 'subpoena',
   'merger', 'acqui', 'buyout', 'takeover', 'tender offer',
   'bankrupt', 'default', 'restat', 'fraud', 'recall',
-  'guidance', 'outlook', 'raises', 'lowers', 'cuts forecast',
-  'beat', 'miss', 'surpris', 'warn', 'profit warning',
-  'layoff', 'restructur', 'ceo ', 'cfo ', 'depart', 'resign',
   'halt', 'suspend', 'delist',
 ];
 
 function needsHaiku(headline, keywordResult) {
   const hl = headline.toLowerCase();
-  // If keywords matched a specific catalyst (not "other"), trust them
   if (keywordResult.catalyst.type !== 'other') return false;
-  // Check if headline contains high-impact language that keywords missed
   return HIGH_IMPACT_KEYWORDS.some(kw => hl.includes(kw));
 }
 
+
 /**
- * Classify a headline using hybrid approach:
- * 1. Check cache
- * 2. Run keyword classifier
- * 3. Only call Haiku if keywords returned "other" AND headline has high-impact language
+ * Classify a headline using keywords only (free, instant).
+ * Haiku is reserved for on-demand use when gatekeepers pass.
  */
-async function classifyWithHaiku(headline, ticker) {
-  // Cache check
+async function classifyHeadline(headline, ticker) {
   const cacheKey = headline.slice(0, 120);
   if (classificationCache.has(cacheKey)) {
     return classificationCache.get(cacheKey);
   }
 
-  // Always run keywords first (free)
   const kwResult = await classifyWithKeywords(headline, ticker);
 
-  // Only escalate to Haiku if keywords can't handle it
+  if (classificationCache.size >= MAX_CACHE) classificationCache.clear();
+  classificationCache.set(cacheKey, kwResult);
+  return kwResult;
+}
+
+/**
+ * On-demand Haiku classification for a single headline.
+ * Called only when PA/VOL gatekeepers pass and the headline is ambiguous.
+ */
+export async function classifyWithHaiku(headline, ticker) {
+  const cacheKey = `haiku:${headline.slice(0, 120)}`;
+  if (classificationCache.has(cacheKey)) {
+    return classificationCache.get(cacheKey);
+  }
+
+  const kwResult = await classifyWithKeywords(headline, ticker);
   if (!haikuClient || !needsHaiku(headline, kwResult)) {
-    if (classificationCache.size >= MAX_CACHE) classificationCache.clear();
-    classificationCache.set(cacheKey, kwResult);
     return kwResult;
   }
 
@@ -122,12 +131,10 @@ Headline: "${headline.replace(/"/g, '\\"')}"`,
       polarity,
       catalyst: { type: catalystType, sensitivity: relevance >= 0.7 ? 1.2 : 1.0, affectsCluster: false, decayHours: Math.abs(polarity) >= 2 ? 8 : 4 },
     };
-    if (classificationCache.size >= MAX_CACHE) classificationCache.clear();
     classificationCache.set(cacheKey, result);
     return result;
   } catch (err) {
-    logger.error(`[HAIKU] Classification failed for ${ticker}: ${err.message} — falling back to keywords`);
-    classificationCache.set(cacheKey, kwResult);
+    logger.error(`[HAIKU] Failed for ${ticker}: ${err.message} — using keywords`);
     return kwResult;
   }
 }
@@ -348,8 +355,8 @@ async function processNewsItem(item) {
 
   for (const ticker of relevant) {
     try {
-      // Classify with Claude Haiku (falls back to keywords if no API key)
-      const { polarity, catalyst } = await classifyWithHaiku(headline, ticker);
+      // Keywords only on stream — Haiku reserved for gatekeeper-passed signals
+      const { polarity, catalyst } = await classifyHeadline(headline, ticker);
 
       addNewsEvent(ticker, {
         headline,

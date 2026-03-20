@@ -2009,7 +2009,10 @@ async function startRestPoller() {
                        : (mins2>=780 && mins2<960) ? 3
                        : 2;
 
-        // News scoring — pull events from WebSocket stream state
+        // Gate check: PA and VOL must pass before spending resources on news
+        if (paScore < 15 || volScore < 12) continue;
+
+        // News scoring — only runs when gatekeepers pass
         const newsEvents = getNewsEvents(ticker);
         const newsResult = computeNewsScore({ direction, newsEvents, profile: profiles[ticker] });
         const newsScore  = newsResult.score;
@@ -2018,7 +2021,6 @@ async function startRestPoller() {
 
         let grade = toGrade(composite);
         if (!grade) continue;
-        if (paScore < 15 || volScore < 12) continue;
 
         const isExt = session !== 'REGULAR';
         if (isExt && ['A+','A','A-'].includes(grade)) grade = 'B+';

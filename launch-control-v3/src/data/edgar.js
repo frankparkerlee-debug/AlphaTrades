@@ -129,18 +129,48 @@ export async function getRecentEightKs(cik, ticker, days = 90) {
   return results;
 }
 
+// ── 8-K ANALYSIS RATE LIMITER ──────────────────────────────────────────────
+// Long-term plays — only need fresh analysis 2x per trading day (10am + 2pm ET).
+// Cache results by ticker+date to avoid redundant Haiku calls.
+
+const edgarAnalysisCache = new Map(); // "TICKER:YYYY-MM-DD:slot" -> result
+const EDGAR_SLOTS = [10, 14]; // hours ET when fresh analysis is allowed
+
+function getEdgarSlot() {
+  const et = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const hour = et.getHours();
+  const today = et.toISOString().slice(0, 10);
+  // Find which slot we're in (10am or 2pm)
+  let slot = null;
+  for (const s of EDGAR_SLOTS) {
+    if (hour >= s) slot = s;
+  }
+  return slot ? `${today}:${slot}` : null;
+}
+
+function canRunEdgarAnalysis(ticker) {
+  const slot = getEdgarSlot();
+  if (!slot) return false; // before 10am ET
+  const key = `${ticker}:${slot}`;
+  if (edgarAnalysisCache.has(key)) return false; // already ran this slot
+  return true;
+}
+
+function markEdgarAnalysisRun(ticker, result) {
+  const slot = getEdgarSlot();
+  if (slot) edgarAnalysisCache.set(`${ticker}:${slot}`, result);
+  // Clean old entries (keep only today)
+  const today = new Date().toISOString().slice(0, 10);
+  for (const k of edgarAnalysisCache.keys()) {
+    if (!k.includes(today)) edgarAnalysisCache.delete(k);
+  }
+}
+
 // ── 8-K RED FLAG ANALYZER ───────────────────────────────────────────────────
 
 /**
- * Analyze 8-K filing text for red flags using Claude Sonnet.
- *
- * @param {string} rawText  - first 2000 chars of the 8-K document
- * @param {string} ticker   - ticker symbol (for logging)
- * @returns {Object}        - { is_red_flag, red_flag_reason, severity, keywords_found }
- */
-/**
- * Analyze 8-K filing text for M&A activity using Claude Sonnet.
- * Returns offer price and deal details if merger/acquisition detected.
+ * Analyze 8-K filing text for M&A activity using Claude Haiku.
+ * Rate-limited to 2x per trading day per ticker (10am + 2pm ET).
  *
  * @param {string} rawText  - first 2000 chars of the 8-K document
  * @param {string} ticker   - ticker symbol (for logging)
@@ -157,6 +187,13 @@ export async function analyzeMAndA(rawText, ticker) {
   };
 
   if (!client) return fallback;
+
+  // Rate limit: 2x per trading day per ticker
+  if (!canRunEdgarAnalysis(ticker)) {
+    const cached = edgarAnalysisCache.get(`${ticker}:${getEdgarSlot()}`);
+    if (cached?.ma) return cached.ma;
+    return fallback;
+  }
 
   try {
     const response = await client.messages.create({
@@ -175,7 +212,7 @@ export async function analyzeMAndA(rawText, ticker) {
     if (!jsonMatch) return fallback;
 
     const parsed = JSON.parse(jsonMatch[0]);
-    return {
+    const result = {
       is_ma: !!parsed.is_ma,
       offer_price: parsed.offer_price != null ? parseFloat(parsed.offer_price) : null,
       acquirer: parsed.acquirer || null,
@@ -183,6 +220,8 @@ export async function analyzeMAndA(rawText, ticker) {
       deal_type: parsed.deal_type || null,
       summary: parsed.summary || null,
     };
+    markEdgarAnalysisRun(ticker, { ma: result });
+    return result;
   } catch (err) {
     console.warn(`[EDGAR] ${ticker} M&A analysis error:`, err.message);
     return fallback;
@@ -199,6 +238,13 @@ export async function analyzeEightKText(rawText, ticker) {
 
   if (!client) {
     console.warn(`[EDGAR] No ANTHROPIC_API_KEY — skipping 8-K analysis for ${ticker}`);
+    return fallback;
+  }
+
+  // Rate limit: 2x per trading day per ticker
+  if (!canRunEdgarAnalysis(ticker)) {
+    const cached = edgarAnalysisCache.get(`${ticker}:${getEdgarSlot()}`);
+    if (cached?.redFlag) return cached.redFlag;
     return fallback;
   }
 
@@ -223,12 +269,14 @@ export async function analyzeEightKText(rawText, ticker) {
     }
 
     const parsed = JSON.parse(jsonMatch[0]);
-    return {
+    const result = {
       is_red_flag: !!parsed.is_red_flag,
       red_flag_reason: parsed.red_flag_reason || null,
       severity: parsed.severity || null,
       keywords_found: Array.isArray(parsed.keywords_found) ? parsed.keywords_found : [],
     };
+    markEdgarAnalysisRun(ticker, { redFlag: result });
+    return result;
   } catch (err) {
     console.warn(`[EDGAR] ${ticker} 8-K analysis error:`, err.message);
     return fallback;
