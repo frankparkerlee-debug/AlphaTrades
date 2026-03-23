@@ -17,6 +17,7 @@ import { scanVolumeDropPut } from './src/strategies/volume-drop-put.js';
 import { scanConsecutiveDrop } from './src/strategies/consecutive-drop.js';
 import { scanSectorRotationBounce } from './src/strategies/sector-rotation-bounce.js';
 import { scanGapUpReversal } from './src/strategies/gap-up-reversal.js';
+import { scanBreakdownPut } from './src/strategies/breakdown-put.js';
 import { scoreConvictionSetup } from './src/strategies/conviction-scorer.js';
 import { scanOvernightCalendar } from './src/strategies/overnight-calendar.js';
 import { scanPreEarningsPut } from './src/strategies/pre-earnings-put.js';
@@ -2328,8 +2329,9 @@ async function startRestPoller() {
           const sectorSignals = scanSectorRotationBounce(stratSnapshots, prevCloses, spyPct, firstCandles, qqqPct);
           const gapUpSignals = scanGapUpReversal(stratSnapshots, prevCloses, firstCandles, levelData);
           const calendarSignals = scanOvernightCalendar(stratSnapshots, mkt.SPY, vix, macroEvent);
+          const breakdownSignals = scanBreakdownPut(stratSnapshots, prevCloses, spyPct, qqqPct, volumeBaselines, levelData);
           const allStratSignals = [...gapSignals, ...capSignals, ...putSignals, ...consecSignals,
-            ...(macroEvent ? [] : sectorSignals), ...gapUpSignals, ...calendarSignals];
+            ...(macroEvent ? [] : sectorSignals), ...gapUpSignals, ...calendarSignals, ...breakdownSignals];
 
           // Diagnostic: log scanner inputs + outputs every 5th cycle
           if (continuationCycle % 5 === 0) {
@@ -2370,6 +2372,7 @@ async function startRestPoller() {
                              : sig.strategy === 'CAPITULATION_BOUNCE' ? 72
                              : sig.strategy === 'SECTOR_ROTATION_BOUNCE' ? 88
                              : sig.strategy === 'GAP_UP_REVERSAL' ? 88
+                             : sig.strategy === 'BREAKDOWN_PUT' ? sig.confidence
                              : sig.strategy === 'CONSEC_BOUNCE' ? (sig.consecutive_days >= 3 ? 85 : 64)
                              : sig.strategy === 'OVERNIGHT_CALENDAR' ? 82
                              : sig.strategy === 'PRE_EARNINGS_PUT' ? sig.confidence
