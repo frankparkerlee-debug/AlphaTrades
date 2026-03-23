@@ -166,7 +166,7 @@ class DataFreshnessCheck:
     Stale data posting quotes at wrong prices is silent death.
     """
 
-    def __init__(self, max_age_seconds: float = 2.0):
+    def __init__(self, max_age_seconds: float = 10.0):
         self._max_age = max_age_seconds
         self._last_data_timestamps: dict[str, float] = {}
         self._lock = threading.Lock()

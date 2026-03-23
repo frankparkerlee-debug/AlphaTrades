@@ -834,6 +834,16 @@ app.post('/api/seed-amat', async (req, res) => {
   child.on('close', code => console.log(`[AMAT] reseed ${code === 0 ? 'complete' : 'failed code=' + code}`));
 });
 
+// Expand universe to ~200 tickers
+app.post('/api/seed-universe', async (req, res) => {
+  res.json({ ok: true, message: 'Universe expansion started' });
+  const { spawn } = await import('child_process');
+  const child = spawn('node', ['scripts/seed-sp500-expansion.js'], { cwd: process.cwd(), env: { ...process.env } });
+  child.stdout.on('data', d => console.log(d.toString().trim()));
+  child.stderr.on('data', d => console.error(d.toString().trim()));
+  child.on('close', code => console.log(`[UNIVERSE] expansion ${code === 0 ? 'complete' : 'failed code=' + code}`));
+});
+
 // Run strategy backtest
 let btRunning = false, btResult = null, btOutput = '';
 app.post('/api/backtest/run-strategies', async (req, res) => {
@@ -1329,10 +1339,11 @@ cron.schedule('0 17 * * 1-5', () => {
   }
 }, { timezone: 'America/New_York' });
 
-// Cleanup stale signals every 5 minutes — expire anything past expires_at with no human action
-cron.schedule('*/5 * * * *', async () => {
+// Cleanup stale signals every 2 minutes
+cron.schedule('*/2 * * * *', async () => {
   try {
-    const result = await db.query(`
+    // Expire signals past their expires_at
+    const r1 = await db.query(`
       UPDATE lc_v3.signals SET status = 'EXPIRED',
         human_notes = COALESCE(human_notes, '') || ' | AUTO: PAST_EXPIRY'
       WHERE status = 'ACTIVE'
@@ -1341,8 +1352,20 @@ cron.schedule('*/5 * * * *', async () => {
         AND expires_at < NOW()
       RETURNING ticker
     `);
-    if (result.rows.length > 0) {
-      console.log(`[CLEANUP] Expired ${result.rows.length} stale signals: ${result.rows.map(r => r.ticker).join(', ')}`);
+
+    // Hard TTL: expire any signal older than 30 minutes with no human action
+    const r2 = await db.query(`
+      UPDATE lc_v3.signals SET status = 'EXPIRED',
+        human_notes = COALESCE(human_notes, '') || ' | AUTO: 30MIN_TTL'
+      WHERE status = 'ACTIVE'
+        AND human_taken IS NULL
+        AND created_at < NOW() - INTERVAL '30 minutes'
+      RETURNING ticker
+    `);
+
+    const total = r1.rows.length + r2.rows.length;
+    if (total > 0) {
+      console.log(`[CLEANUP] Expired ${total} signals (${r1.rows.length} past expiry, ${r2.rows.length} past 30min TTL)`);
     }
   } catch (err) {
     console.error('[CLEANUP] Error:', err.message);
@@ -1613,12 +1636,18 @@ let latestPrices = {};
 
 app.get('/api/prices', (req, res) => {
   const tickers = (req.query.tickers || '').split(',').filter(Boolean);
-  if (tickers.length === 0) return res.json(latestPrices);
-  const filtered = {};
-  for (const t of tickers) {
-    if (latestPrices[t] != null) filtered[t] = latestPrices[t];
+  const allTickers = tickers.length > 0 ? tickers : Object.keys(latestPrices);
+  const merged = {};
+  for (const t of allTickers) {
+    // Prefer real-time WebSocket price (updated every bar) over REST snapshot cache
+    const ws = getTickerState(t);
+    if (ws && ws.close > 0 && ws.lastBarAt && (Date.now() - ws.lastBarAt.getTime()) < 120000) {
+      merged[t] = ws.close;
+    } else if (latestPrices[t] != null) {
+      merged[t] = latestPrices[t];
+    }
   }
-  res.json(filtered);
+  res.json(merged);
 });
 
 // In-memory conviction scan state
@@ -2088,15 +2117,18 @@ async function startRestPoller() {
           ORDER BY created_at DESC LIMIT 1
         `, [ticker, direction]);
 
-        // Fetch contract
+        // Fetch contract only for new signals — existing signals keep their locked contract
         let contract = null;
-        try {
-          contract = await selectOptionsContract(ticker, direction, grade, price, atr);
-        } catch (ce) {
-          console.error(`[contract] ${ticker}: ${ce.message}`);
+        const isUpdate = existing.rows.length > 0;
+        if (!isUpdate || !existing.rows[0]?.contract_symbol) {
+          try {
+            contract = await selectOptionsContract(ticker, direction, grade, price, atr);
+          } catch (ce) {
+            console.error(`[contract] ${ticker}: ${ce.message}`);
+          }
         }
 
-        if (existing.rows.length > 0) {
+        if (isUpdate) {
           const row = existing.rows[0];
           if (row.human_taken !== null) continue; // don't update taken/skipped
 
@@ -2819,8 +2851,8 @@ async function startRestPoller() {
   }
 
   setTimeout(poll, 5000);
-  setInterval(poll, 60000);
-  console.log('[LC v3] REST poller started — scoring every 60s');
+  setInterval(poll, 15000);
+  console.log('[LC v3] REST poller started — scoring every 15s');
 }
 
 // Strategy → minimum DTE for options contract selection
@@ -2883,7 +2915,7 @@ async function monitorActiveSignals(alpacaHdrs, dataUrl, profiles) {
         console.log(`[MONITOR] ${signal.ticker} ${signal.direction} → ${result.status}: ${result.note}`);
       }
 
-      // Refresh contract prices every cycle for active signals
+      // Refresh live contract quotes (bid/ask/mid/greeks) but preserve original entry prices
       try {
         const sigStrategy = ((signal.news_headline || '').match(/strategy=(\w+)/) || [])[1] || '';
         const minDTE = STRATEGY_MIN_DTE[sigStrategy] ?? 0;
@@ -2891,20 +2923,14 @@ async function monitorActiveSignals(alpacaHdrs, dataUrl, profiles) {
         if (contract) {
           await db.query(`
             UPDATE lc_v3.signals SET
-              contract_symbol = $1, contract_strike = $2, contract_expiry = $3,
-              contract_expiry_label = $4, contract_bid = $5, contract_ask = $6,
-              contract_mid = $7, contract_entry_lo = $8, contract_entry_hi = $9,
-              contract_delta = $10, contract_iv = $11,
-              contract_t1 = $12, contract_t2 = $13, contract_t3 = $14, contract_stop = $15,
-              contract_estimated = $16
-            WHERE signal_id = $17
+              contract_bid = $1, contract_ask = $2, contract_mid = $3,
+              contract_delta = $4, contract_iv = $5,
+              contract_t1 = $6, contract_t2 = $7, contract_t3 = $8, contract_stop = $9
+            WHERE signal_id = $10
           `, [
-            contract.symbol, contract.strike, contract.expiry,
-            contract.expiry_label, contract.bid, contract.ask,
-            contract.mid, contract.entry_lo, contract.entry_hi,
+            contract.bid, contract.ask, contract.mid,
             contract.delta, contract.iv,
             contract.t1, contract.t2, contract.t3, contract.stop,
-            contract.estimated || false,
             signal.signal_id,
           ]);
         }

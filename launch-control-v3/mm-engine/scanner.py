@@ -122,11 +122,18 @@ class MorningScanner:
                 expiration_date_gte=expiry_min.strftime("%Y-%m-%d"),
                 expiration_date_lte=expiry_max.strftime("%Y-%m-%d"),
             )
+            logger.info(
+                f"{symbol}: price=${underlying_price:.2f} "
+                f"strikes=${strike_min:.2f}-${strike_max:.2f} "
+                f"expiry={expiry_min}..{expiry_max}"
+            )
             chain = self._option_client.get_option_chain(request)
 
             if not chain:
-                logger.debug(f"{symbol}: empty chain returned")
+                logger.warning(f"{symbol}: empty chain returned (no contracts in range)")
                 return []
+
+            logger.info(f"{symbol}: {len(chain)} contracts in chain")
 
             for contract_sym, snapshot in chain.items():
                 strike = self._evaluate_strike(
@@ -137,7 +144,7 @@ class MorningScanner:
                     viable.append(strike)
 
         except Exception as e:
-            logger.error(f"{symbol} chain fetch error: {e}")
+            logger.error(f"{symbol} chain fetch error: {e}", exc_info=True)
 
         return viable
 
@@ -185,32 +192,42 @@ class MorningScanner:
             # Calculate OTM %
             otm_pct = (underlying_price - strike_val) / underlying_price
 
+            # Log raw contract data for diagnostics
+            volume_est = int(snapshot.daily_bar.volume if snapshot.daily_bar else 0)
+            oi = int(snapshot.open_interest if snapshot.open_interest else 0)
+            logger.info(
+                f"  {contract_sym}: strike=${strike_val:.2f} {dte}DTE "
+                f"bid=${bid:.2f} ask=${ask:.2f} spread=${spread:.3f} "
+                f"OTM={otm_pct:.2%} OI={oi} vol={volume_est}"
+            )
+
             # ── Filter 1: Spread width ────────────────────────────────────────
             if spread < MIN_SPREAD_WIDTH:
-                logger.debug(
-                    f"  FAIL spread: {contract_sym} ${spread:.3f} < "
-                    f"${MIN_SPREAD_WIDTH}"
-                )
+                logger.info(f"    REJECT spread: ${spread:.3f} < ${MIN_SPREAD_WIDTH}")
                 return None
 
             # ── Filter 2: Strike in OTM range ────────────────────────────────
             if not (OTM_PCT_MIN <= otm_pct <= OTM_PCT_MAX):
-                logger.debug(f"  FAIL OTM: {contract_sym} {otm_pct:.2%}")
+                logger.info(f"    REJECT OTM: {otm_pct:.2%} not in {OTM_PCT_MIN:.0%}-{OTM_PCT_MAX:.0%}")
                 return None
 
             # ── Filter 3: DTE range ───────────────────────────────────────────
             if not (TARGET_DTE_MIN <= dte <= TARGET_DTE_MAX):
-                logger.debug(f"  FAIL DTE: {contract_sym} {dte}DTE")
+                logger.info(f"    REJECT DTE: {dte} not in {TARGET_DTE_MIN}-{TARGET_DTE_MAX}")
                 return None
 
-            # ── Filter 4: Volume (use OI as proxy when volume not available) ──
-            # Alpaca snapshot includes volume where available
-            volume_est = int(snapshot.daily_bar.volume if snapshot.daily_bar else 0)
-            if volume_est < MIN_DAILY_VOLUME and volume_est > 0:
-                logger.debug(
-                    f"  FAIL volume: {contract_sym} {volume_est} < "
-                    f"{MIN_DAILY_VOLUME}"
-                )
+            # ── Filter 4: Liquidity check (volume + open interest) ──────────
+            # At 9 AM, daily volume is usually 0. Use open interest as the
+            # primary liquidity signal, with volume as a bonus.
+
+            # Require minimum open interest — this is the real liquidity signal
+            if oi < 50:
+                logger.info(f"    REJECT OI: {oi} < 50")
+                return None
+
+            # If we do have volume data and it's low, skip
+            if 0 < volume_est < MIN_DAILY_VOLUME and oi < 200:
+                logger.info(f"    REJECT volume: vol={volume_est} OI={oi}")
                 return None
 
             # ── Calculate optimal quote levels ────────────────────────────────
@@ -273,16 +290,17 @@ class MorningScanner:
                  ↑sym ↑YYMMDD ↑type ↑strike (× 1000)
         """
         try:
-            # Find the option type character (P or C)
-            for i, c in enumerate(contract_sym):
-                if c in ("P", "C"):
-                    type_idx = i
-                    break
-            else:
+            # OCC format: JPM260327P00285000
+            # Find the option type character (P or C) — must be followed by 8 digits
+            # and preceded by 6 digits (YYMMDD). Search from the right to avoid
+            # matching P/C in the ticker name (e.g. JPM, BAC).
+            import re
+            m = re.match(r'^([A-Z]{1,6})(\d{6})([PC])(\d{8})$', contract_sym)
+            if not m:
                 return None, None, 0
 
-            date_str   = contract_sym[type_idx - 6 : type_idx]
-            strike_str = contract_sym[type_idx + 1 :]
+            date_str   = m.group(2)
+            strike_str = m.group(4)
 
             expiry = datetime.strptime(date_str, "%y%m%d").date()
             strike = int(strike_str) / 1000.0

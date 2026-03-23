@@ -27,19 +27,25 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest, GetOrdersRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [DMS] %(levelname)s %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler("logs/dead_mans_switch.log"),
-    ]
-)
+_log_base = "/data" if os.path.isdir("/data") else "."
+os.makedirs(os.path.join(_log_base, "logs"), exist_ok=True)
+# Only configure logging if this is the main module — avoid overriding
+# the engine's logging config when imported for write_heartbeat()
 logger = logging.getLogger("dms")
+if __name__ == "__main__" or not logging.root.handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [DMS] %(levelname)s %(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(os.path.join(_log_base, "logs", "dead_mans_switch.log")),
+        ]
+    )
 
-# Paths
-HEARTBEAT_FILE = Path("data/heartbeat.json")
-POSITIONS_FILE = Path("data/open_positions.json")
+# Paths — use /data on Render (persistent disk), fallback to local
+_data_base = "/data" if os.path.isdir("/data") else "."
+HEARTBEAT_FILE = Path(os.path.join(_data_base, "data", "heartbeat.json"))
+POSITIONS_FILE = Path(os.path.join(_data_base, "data", "open_positions.json"))
 HEARTBEAT_INTERVAL = 30   # seconds before DMS fires
 CHECK_INTERVAL     = 5    # how often DMS checks the heartbeat
 

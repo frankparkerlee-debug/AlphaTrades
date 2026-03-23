@@ -578,20 +578,29 @@ class Engine:
             time.sleep(2)  # 2-second cycle
 
     def _run_morning_scan(self):
-        """Run the morning scanner and populate the watchlist."""
-        logger.info("Running morning scan...")
-        try:
-            watchlist = self._scanner.run(capture_pct=SPREAD_CAPTURE_PCT)
-            self._quotes.set_watchlist(watchlist)
+        """Run the morning scanner and populate the watchlist. Retries up to 3 times."""
+        for attempt in range(1, 4):
+            logger.info(f"Running morning scan (attempt {attempt}/3)...")
+            try:
+                watchlist = self._scanner.run(capture_pct=SPREAD_CAPTURE_PCT)
+                self._quotes.set_watchlist(watchlist)
 
-            if watchlist:
-                logger.info(f"Top strikes today:")
-                for strike in watchlist[:5]:
-                    logger.info(f"  {strike}")
-            else:
-                logger.warning("No viable strikes found today.")
-        except Exception as e:
-            logger.error(f"Morning scan failed: {e}", exc_info=True)
+                if watchlist:
+                    logger.info(f"Top strikes today:")
+                    for strike in watchlist[:5]:
+                        logger.info(f"  {strike}")
+                    return  # success
+                else:
+                    logger.warning(f"No viable strikes found (attempt {attempt}/3).")
+                    if attempt < 3:
+                        logger.info("Retrying scan in 5 minutes...")
+                        time.sleep(300)
+            except Exception as e:
+                logger.error(f"Morning scan failed (attempt {attempt}/3): {e}", exc_info=True)
+                if attempt < 3:
+                    time.sleep(300)
+
+        logger.error("All scan attempts exhausted. Engine will idle today.")
 
     def _heartbeat_loop(self):
         """Write heartbeat every 10 seconds for dead man's switch."""
@@ -636,6 +645,30 @@ if __name__ == "__main__":
         sys.exit(1)
     if not ALPACA_PAPER_API_KEY or not ALPACA_PAPER_API_SECRET:
         logger.critical("ALPACA_PAPER_API_KEY and ALPACA_PAPER_API_SECRET (paper, for trading) must be set in .env")
+        sys.exit(1)
+
+    # Verify API connections before starting
+    try:
+        from alpaca.trading.client import TradingClient as _TC
+        paper_client = _TC(
+            api_key=ALPACA_PAPER_API_KEY,
+            secret_key=ALPACA_PAPER_API_SECRET,
+            paper=True,
+        )
+        acct = paper_client.get_account()
+        logger.info(f"Paper account verified: {acct.id} | balance: ${float(acct.equity):,.2f}")
+    except Exception as e:
+        logger.critical(f"Cannot connect to Alpaca paper account: {e}")
+        sys.exit(1)
+
+    try:
+        from alpaca.data.historical.stock import StockHistoricalDataClient as _SC
+        from alpaca.data.requests import StockLatestQuoteRequest as _SQ
+        data_client = _SC(api_key=ALPACA_API_KEY, secret_key=ALPACA_API_SECRET)
+        q = data_client.get_stock_latest_quote(_SQ(symbol_or_symbols="SPY"))
+        logger.info(f"Data API verified: SPY quote received")
+    except Exception as e:
+        logger.critical(f"Cannot connect to Alpaca data API: {e}")
         sys.exit(1)
 
     engine = Engine(dry_run=args.dry_run)

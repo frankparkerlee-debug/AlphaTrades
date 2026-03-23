@@ -877,8 +877,8 @@ function render() {
   });
 
   if (!list.length) {
-    const msg = signals.length === 0 ? 'Scanning Nasdaq 100 — no signals yet' : 'No signals match current filter';
-    const sub = signals.length > 0 ? `${signals.length} total signals today` : 'System is live and monitoring 104 symbols';
+    const msg = signals.length === 0 ? 'Scanning universe — no signals yet' : 'No signals match current filter';
+    const sub = signals.length > 0 ? `${signals.length} total signals today` : 'System is live and monitoring';
     document.getElementById('signalGrid').innerHTML = `
       <div class="empty">
         <div class="empty-icon">◎</div>
@@ -960,10 +960,6 @@ function buildLockedTargets(s) {
   return `<div class="locked-targets">
     <div class="locked-targets-title">STOCK TARGETS <span class="locked-badge">LOCKED</span></div>
     <div class="locked-grid">${cells.join('')}</div>
-    <div class="current-price-row">
-      <span class="current-price-label">CURRENT</span>
-      <span><span class="current-price-value" id="cp-${s.signal_id}">--</span><span class="current-price-pnl" id="cpnl-${s.signal_id}"></span></span>
-    </div>
   </div>`;
 }
 
@@ -1230,6 +1226,10 @@ function buildCard(s) {
     ${buildStrategyDetails(s, strategy)}
     ${contract}
     ${strategy ? buildLockedTargets(s) : ''}
+    <div class="current-price-row">
+      <span class="current-price-label">CURRENT</span>
+      <span><span class="current-price-value" id="cp-${s.signal_id}">--</span><span class="current-price-pnl" id="cpnl-${s.signal_id}"></span></span>
+    </div>
     ${buildHoldInstruction(strategy, s.created_at)}
     ${(() => {
       const gradeSize = {'A+':0.20,'A':0.15,'A-':0.10,'B+':0.07,'B':0.05}[s.grade] || 0.05;
@@ -1791,8 +1791,8 @@ async function updateCurrentPrices() {
 }
 
 // ── INIT ──────────────────────────────────────────────────────────
-loadAll();
-setInterval(loadAll, 8000);
+loadAll().then(() => updateCurrentPrices());
+setInterval(() => loadAll().then(() => updateCurrentPrices()), 8000);
 setInterval(updateCurrentPrices, 5000);
 setInterval(updateClock, 1000);
 updateClock();
