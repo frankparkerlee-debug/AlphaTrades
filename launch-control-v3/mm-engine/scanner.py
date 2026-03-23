@@ -142,6 +142,11 @@ class MorningScanner:
 
                 logger.info(f"{symbol} {option_type.upper()}: {len(chain)} contracts in chain")
 
+                # Dump first contract raw for debugging
+                first_key = next(iter(chain))
+                first_snap = chain[first_key]
+                logger.info(f"  RAW SAMPLE {first_key}: {first_snap}")
+
                 for contract_sym, snapshot in chain.items():
                     strike = self._evaluate_strike(
                         symbol, contract_sym, snapshot,
