@@ -64,4 +64,4 @@ SCAN_START_MINUTE  = 0
 TRADING_START_HOUR  = 9
 TRADING_START_MINUTE = 45  # first trade not before 9:45 AM
 TRADING_END_HOUR    = 15
-TRADING_END_MINUTE  = 30   # no new positions after 3:30 PM
+TRADING_END_MINUTE  = 55   # stop 5 min before close for final TTL expiry
