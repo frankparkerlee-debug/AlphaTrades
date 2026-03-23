@@ -84,8 +84,8 @@ class MorningScanner:
             except Exception as e:
                 logger.error(f"  {symbol}: scan failed — {e}")
 
-        # Sort by spread width descending — widest spreads first
-        viable.sort(key=lambda s: s.spread, reverse=True)
+        # Sort by: puts first (put bias), then widest spreads
+        viable.sort(key=lambda s: (0 if s.option_type == 'put' else 1, -s.spread))
 
         logger.info(
             f"Scan complete. {len(viable)} viable strikes across "
@@ -94,7 +94,7 @@ class MorningScanner:
         return viable
 
     def _scan_symbol(self, symbol: str, capture_pct: float) -> list[ViableStrike]:
-        """Scan one symbol for viable put strikes."""
+        """Scan one symbol for viable put AND call strikes (put bias)."""
         viable = []
 
         # Get current underlying price
@@ -103,48 +103,55 @@ class MorningScanner:
             logger.warning(f"{symbol}: could not get underlying price")
             return []
 
-        # Calculate strike range (1–3% OTM)
-        strike_min = underlying_price * (1 - OTM_PCT_MAX)
-        strike_max = underlying_price * (1 - OTM_PCT_MIN)
-
         # Calculate expiry range
         today = date.today()
         expiry_min = today + timedelta(days=TARGET_DTE_MIN)
         expiry_max = today + timedelta(days=TARGET_DTE_MAX)
 
-        try:
-            # Fetch option chain
-            request = OptionChainRequest(
-                underlying_symbol=symbol,
-                type="put",
-                strike_price_gte=str(round(strike_min, 2)),
-                strike_price_lte=str(round(strike_max, 2)),
-                expiration_date_gte=expiry_min.strftime("%Y-%m-%d"),
-                expiration_date_lte=expiry_max.strftime("%Y-%m-%d"),
-            )
-            logger.info(
-                f"{symbol}: price=${underlying_price:.2f} "
-                f"strikes=${strike_min:.2f}-${strike_max:.2f} "
-                f"expiry={expiry_min}..{expiry_max}"
-            )
-            chain = self._option_client.get_option_chain(request)
+        # Scan both puts and calls
+        for option_type in ["put", "call"]:
+            # OTM strike range depends on direction:
+            #   Puts:  strikes BELOW price (1-3% below)
+            #   Calls: strikes ABOVE price (1-3% above)
+            if option_type == "put":
+                strike_min = underlying_price * (1 - OTM_PCT_MAX)
+                strike_max = underlying_price * (1 - OTM_PCT_MIN)
+            else:
+                strike_min = underlying_price * (1 + OTM_PCT_MIN)
+                strike_max = underlying_price * (1 + OTM_PCT_MAX)
 
-            if not chain:
-                logger.warning(f"{symbol}: empty chain returned (no contracts in range)")
-                return []
-
-            logger.info(f"{symbol}: {len(chain)} contracts in chain")
-
-            for contract_sym, snapshot in chain.items():
-                strike = self._evaluate_strike(
-                    symbol, contract_sym, snapshot,
-                    underlying_price, today, capture_pct
+            try:
+                request = OptionChainRequest(
+                    underlying_symbol=symbol,
+                    type=option_type,
+                    strike_price_gte=str(round(strike_min, 2)),
+                    strike_price_lte=str(round(strike_max, 2)),
+                    expiration_date_gte=expiry_min.strftime("%Y-%m-%d"),
+                    expiration_date_lte=expiry_max.strftime("%Y-%m-%d"),
                 )
-                if strike is not None:
-                    viable.append(strike)
+                logger.info(
+                    f"{symbol} {option_type.upper()}: price=${underlying_price:.2f} "
+                    f"strikes=${strike_min:.2f}-${strike_max:.2f} "
+                    f"expiry={expiry_min}..{expiry_max}"
+                )
+                chain = self._option_client.get_option_chain(request)
 
-        except Exception as e:
-            logger.error(f"{symbol} chain fetch error: {e}", exc_info=True)
+                if not chain:
+                    logger.info(f"{symbol} {option_type.upper()}: empty chain")
+                    continue
+
+                logger.info(f"{symbol} {option_type.upper()}: {len(chain)} contracts in chain")
+
+                for contract_sym, snapshot in chain.items():
+                    strike = self._evaluate_strike(
+                        symbol, contract_sym, snapshot,
+                        underlying_price, today, capture_pct
+                    )
+                    if strike is not None:
+                        viable.append(strike)
+
+            except Exception as e:
+                logger.error(f"{symbol} {option_type} chain error: {e}", exc_info=True)
 
         return viable
 
@@ -164,12 +171,14 @@ class MorningScanner:
         try:
             # Extract quote data
             if not snapshot.latest_quote:
+                logger.info(f"    {contract_sym}: no quote data")
                 return None
 
             bid = float(snapshot.latest_quote.bid_price or 0)
             ask = float(snapshot.latest_quote.ask_price or 0)
 
             if bid <= 0 or ask <= 0 or ask <= bid:
+                logger.info(f"    {contract_sym}: bad quote bid=${bid:.2f} ask=${ask:.2f}")
                 return None
 
             spread = ask - bid
@@ -185,12 +194,15 @@ class MorningScanner:
 
             # Parse from contract symbol (format: JPM251121P00285000)
             # Better: get from chain details
-            strike_val, expiry_dt, dte = self._parse_contract(contract_sym, today)
+            strike_val, expiry_dt, dte, parsed_type = self._parse_contract(contract_sym, today)
             if strike_val is None:
                 return None
 
-            # Calculate OTM %
-            otm_pct = (underlying_price - strike_val) / underlying_price
+            # Calculate OTM %: puts are OTM below price, calls are OTM above price
+            if parsed_type == 'put':
+                otm_pct = (underlying_price - strike_val) / underlying_price
+            else:
+                otm_pct = (strike_val - underlying_price) / underlying_price
 
             # Log raw contract data for diagnostics
             volume_est = int(snapshot.daily_bar.volume if snapshot.daily_bar else 0)
@@ -221,12 +233,12 @@ class MorningScanner:
             # primary liquidity signal, with volume as a bonus.
 
             # Require minimum open interest — this is the real liquidity signal
-            if oi < 20:
-                logger.info(f"    REJECT OI: {oi} < 20")
+            if oi < 50:
+                logger.info(f"    REJECT OI: {oi} < 50")
                 return None
 
             # If we do have volume data and it's low, skip
-            if 0 < volume_est < MIN_DAILY_VOLUME and oi < 100:
+            if 0 < volume_est < MIN_DAILY_VOLUME and oi < 200:
                 logger.info(f"    REJECT volume: vol={volume_est} OI={oi}")
                 return None
 
@@ -250,7 +262,7 @@ class MorningScanner:
                 strike=strike_val,
                 expiry=expiry_dt,
                 dte=dte,
-                option_type="put",
+                option_type=parsed_type,
                 underlying_price=underlying_price,
                 otm_pct=otm_pct,
                 bid=bid,
@@ -283,30 +295,27 @@ class MorningScanner:
 
     def _parse_contract(
         self, contract_sym: str, today: date
-    ) -> tuple[Optional[float], Optional[date], int]:
+    ) -> tuple[Optional[float], Optional[date], int, str]:
         """
-        Parse strike, expiry, and DTE from Alpaca contract symbol.
+        Parse strike, expiry, DTE, and option type from Alpaca contract symbol.
         Format: JPM251121P00285000
                  ↑sym ↑YYMMDD ↑type ↑strike (× 1000)
         """
         try:
-            # OCC format: JPM260327P00285000
-            # Find the option type character (P or C) — must be followed by 8 digits
-            # and preceded by 6 digits (YYMMDD). Search from the right to avoid
-            # matching P/C in the ticker name (e.g. JPM, BAC).
             import re
             m = re.match(r'^([A-Z]{1,6})(\d{6})([PC])(\d{8})$', contract_sym)
             if not m:
-                return None, None, 0
+                return None, None, 0, ''
 
-            date_str   = m.group(2)
-            strike_str = m.group(4)
+            date_str    = m.group(2)
+            option_type = 'put' if m.group(3) == 'P' else 'call'
+            strike_str  = m.group(4)
 
             expiry = datetime.strptime(date_str, "%y%m%d").date()
             strike = int(strike_str) / 1000.0
             dte    = (expiry - today).days
 
-            return strike, expiry, dte
+            return strike, expiry, dte, option_type
 
         except Exception:
-            return None, None, 0
+            return None, None, 0, ''

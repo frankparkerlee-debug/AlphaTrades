@@ -43,6 +43,7 @@ from config import (
     TRADING_END_HOUR, TRADING_END_MINUTE,
     HEARTBEAT_INTERVAL, MAX_CONCURRENT_POSITIONS,
     KILL_SWITCH_THRESHOLD, MIN_SPREAD_WIDTH,
+    SCAN_START_HOUR, SCAN_START_MINUTE,
 )
 from fill_logger import FillLogger
 from risk_controls import RiskManager
@@ -526,10 +527,15 @@ class Engine:
     def _main_loop(self):
         """
         Main trading loop. Runs continuously during market hours.
-        Cycle: quote → fill check → TTL check → heartbeat
+        Cycle: scan → quote → fill check → TTL check → heartbeat
+        Rescans every 10 minutes to catch new spread opportunities.
         """
+        import pytz
+        _last_scan_time = 0  # epoch seconds of last scan
+
+        RESCAN_INTERVAL = 600  # rescan every 10 minutes
+
         while self._running:
-            import pytz
             et_now    = datetime.now(pytz.timezone('America/New_York'))
             et_hour   = et_now.hour
             et_minute = et_now.minute
@@ -546,6 +552,13 @@ class Engine:
             if not in_window:
                 time.sleep(30)
                 continue
+
+            # Rescan continuously — spreads shift, new opportunities appear
+            now_epoch = time.time()
+            if now_epoch - _last_scan_time >= RESCAN_INTERVAL:
+                logger.info("Rescanning universe for viable strikes...")
+                self._run_morning_scan()
+                _last_scan_time = now_epoch
 
             # Kill switch check
             if self._risk.kill_switch.is_active():
@@ -578,29 +591,28 @@ class Engine:
             time.sleep(2)  # 2-second cycle
 
     def _run_morning_scan(self):
-        """Run the morning scanner and populate the watchlist. Retries up to 3 times."""
-        for attempt in range(1, 4):
-            logger.info(f"Running morning scan (attempt {attempt}/3)...")
-            try:
-                watchlist = self._scanner.run(capture_pct=SPREAD_CAPTURE_PCT)
-                self._quotes.set_watchlist(watchlist)
+        """Run the scanner and update the watchlist with new viable strikes."""
+        try:
+            new_strikes = self._scanner.run(capture_pct=SPREAD_CAPTURE_PCT)
 
-                if watchlist:
-                    logger.info(f"Top strikes today:")
-                    for strike in watchlist[:5]:
-                        logger.info(f"  {strike}")
-                    return  # success
-                else:
-                    logger.warning(f"No viable strikes found (attempt {attempt}/3).")
-                    if attempt < 3:
-                        logger.info("Retrying scan in 5 minutes...")
-                        time.sleep(300)
-            except Exception as e:
-                logger.error(f"Morning scan failed (attempt {attempt}/3): {e}", exc_info=True)
-                if attempt < 3:
-                    time.sleep(300)
+            if new_strikes:
+                # Merge: keep existing strikes we're already quoting, add new ones
+                existing_syms = {s.contract_symbol for s in self._quotes._watchlist}
+                added = [s for s in new_strikes if s.contract_symbol not in existing_syms]
 
-        logger.error("All scan attempts exhausted. Engine will idle today.")
+                # Replace watchlist with fresh scan (includes updated quotes)
+                self._quotes.set_watchlist(new_strikes)
+
+                logger.info(
+                    f"Scan complete: {len(new_strikes)} viable strikes "
+                    f"({len(added)} new, {len(new_strikes) - len(added)} refreshed)"
+                )
+                for strike in new_strikes[:5]:
+                    logger.info(f"  {strike}")
+            else:
+                logger.warning("Scan found 0 viable strikes this cycle.")
+        except Exception as e:
+            logger.error(f"Scan failed: {e}", exc_info=True)
 
     def _heartbeat_loop(self):
         """Write heartbeat every 10 seconds for dead man's switch."""

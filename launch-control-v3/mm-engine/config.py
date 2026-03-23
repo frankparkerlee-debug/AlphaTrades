@@ -18,25 +18,19 @@ ALPACA_PAPER_API_SECRET = os.getenv("ALPACA_PAPER_API_SECRET", "")
 ALPACA_PAPER_BASE_URL   = os.getenv("ALPACA_PAPER_BASE_URL", "https://paper-api.alpaca.markets")
 
 # ── Universe ──────────────────────────────────────────────────────────────────
-# 20 tickers: mid-cap / high-vol names with naturally wide option spreads (8c+)
-# Avoid mega-cap (NVDA, TSLA, AMD, META) — penny-wide spreads, no edge
-UNIVERSE = os.getenv("UNIVERSE",
-    "JPM,GS,BAC,MS,WFC,"       # banks — moderate spreads, deep OI
-    "SOFI,COIN,MARA,HOOD,"     # retail favorites — widest spreads, huge flow
-    "RIVN,LCID,SMCI,"          # volatile mid-caps — consistently wide
-    "SNAP,ROKU,DASH,"          # mid-cap tech — less efficient pricing
-    "OXY,HAL"                   # energy mid-caps — wider than XOM/CVX
-).split(",")
+# NYSE financials only — institutional hedging flow creates consistent
+# two-way markets with $0.13–$0.39 spreads on OTM puts
+UNIVERSE = os.getenv("UNIVERSE", "JPM,GS,BAC,MS,WFC").split(",")
 
 # ── Strategy parameters ───────────────────────────────────────────────────────
 CONTRACTS_PER_TRADE  = int(os.getenv("CONTRACTS_PER_TRADE", 10))
 SPREAD_CAPTURE_PCT   = float(os.getenv("SPREAD_CAPTURE_PCT", 0.40))   # 40% of raw spread
-TARGET_DTE_MIN       = int(os.getenv("TARGET_DTE_MIN", 5))
-TARGET_DTE_MAX       = int(os.getenv("TARGET_DTE_MAX", 21))
-OTM_PCT_MIN          = float(os.getenv("OTM_PCT_MIN", 0.01))          # 1% OTM minimum
-OTM_PCT_MAX          = float(os.getenv("OTM_PCT_MAX", 0.05))          # 5% OTM maximum
-MIN_SPREAD_WIDTH     = float(os.getenv("MIN_SPREAD_WIDTH", 0.08))     # $0.08 minimum viable
-MIN_DAILY_VOLUME     = int(os.getenv("MIN_DAILY_VOLUME", 50))         # contracts/day
+TARGET_DTE_MIN       = int(os.getenv("TARGET_DTE_MIN", 2))
+TARGET_DTE_MAX       = int(os.getenv("TARGET_DTE_MAX", 14))
+OTM_PCT_MIN          = float(os.getenv("OTM_PCT_MIN", -0.005))         # allow slightly ITM (0.5%)
+OTM_PCT_MAX          = float(os.getenv("OTM_PCT_MAX", 0.04))          # up to 4% OTM
+MIN_SPREAD_WIDTH     = float(os.getenv("MIN_SPREAD_WIDTH", 0.13))     # $0.13 minimum viable
+MIN_DAILY_VOLUME     = int(os.getenv("MIN_DAILY_VOLUME", 150))        # contracts/day
 
 # ── Risk controls (non-negotiable) ────────────────────────────────────────────
 KILL_SWITCH_THRESHOLD  = float(os.getenv("KILL_SWITCH_THRESHOLD", -800))
