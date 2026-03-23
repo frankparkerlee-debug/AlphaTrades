@@ -95,20 +95,19 @@ def flatten_all(client: TradingClient, positions: list):
 
 
 def is_market_hours() -> bool:
-    """Rough check for US market hours (ET). Handles EST only, not DST."""
-    now_utc = datetime.now(timezone.utc)
-    # ET is UTC-5 (EST) / UTC-4 (EDT) — use UTC-5 as conservative estimate
-    et_hour = (now_utc.hour - 5) % 24
-    et_weekday = now_utc.weekday()
-    if et_weekday >= 5:   # weekend
+    """Check for US market hours using proper ET timezone."""
+    import pytz
+    et = datetime.now(pytz.timezone('America/New_York'))
+    if et.weekday() >= 5:   # weekend
         return False
-    return 9 <= et_hour < 16
+    return 9 <= et.hour < 16
 
 
 def run():
-    api_key    = os.getenv("ALPACA_API_KEY", "")
-    api_secret = os.getenv("ALPACA_API_SECRET", "")
-    base_url   = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    # Paper keys — DMS needs trading access to flatten positions
+    api_key    = os.getenv("ALPACA_PAPER_API_KEY", "") or os.getenv("ALPACA_API_KEY", "")
+    api_secret = os.getenv("ALPACA_PAPER_API_SECRET", "") or os.getenv("ALPACA_API_SECRET", "")
+    base_url   = os.getenv("ALPACA_PAPER_BASE_URL", "https://paper-api.alpaca.markets")
 
     if not api_key or not api_secret:
         logger.critical("ALPACA_API_KEY and ALPACA_API_SECRET required")

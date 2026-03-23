@@ -52,15 +52,17 @@ from position_manager import PositionManager
 from dead_mans_switch import write_heartbeat
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
-os.makedirs("logs", exist_ok=True)
-os.makedirs("data", exist_ok=True)
+# On Render, /data is a persistent disk mount. Fallback to local dirs.
+LOG_BASE = "/data" if os.path.isdir("/data") else "."
+os.makedirs(os.path.join(LOG_BASE, "logs"), exist_ok=True)
+os.makedirs(os.path.join(LOG_BASE, "data"), exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)-12s] %(levelname)s %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
         logging.FileHandler(
-            f"logs/engine_{date.today().strftime('%Y%m%d')}.log"
+            os.path.join(LOG_BASE, "logs", f"engine_{date.today().strftime('%Y%m%d')}.log")
         ),
     ]
 )
@@ -527,9 +529,10 @@ class Engine:
         Cycle: quote → fill check → TTL check → heartbeat
         """
         while self._running:
-            now = datetime.now(timezone.utc)
-            et_hour   = now.hour - 5   # rough ET conversion (no DST handling)
-            et_minute = now.minute
+            import pytz
+            et_now    = datetime.now(pytz.timezone('America/New_York'))
+            et_hour   = et_now.hour
+            et_minute = et_now.minute
 
             # Check if in trading window
             in_window = (
