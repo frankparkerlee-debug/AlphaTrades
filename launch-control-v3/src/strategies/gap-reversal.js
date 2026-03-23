@@ -10,7 +10,7 @@ import { checkBounceStructure } from './support-check.js';
  */
 export function scanGapReversal(snapshots, prevCloses, firstCandles, levelData = {}) {
   const signals = [];
-  const { todayLows = {}, todayHighs = {}, dailyBars = {} } = levelData;
+  const { todayLows = {}, todayHighs = {}, dailyBars = {}, vwaps = {}, intradayBars = {} } = levelData;
 
   for (const ticker of Object.keys(snapshots)) {
     const snap = snapshots[ticker];
@@ -34,6 +34,8 @@ export function scanGapReversal(snapshots, prevCloses, firstCandles, levelData =
     // Trend structure analysis — flags, never blocks
     const structure = checkBounceStructure(currentPrice, dailyBars[ticker], {
       todayLow: todayLows[ticker], todayHigh: todayHighs[ticker], todayOpen,
+      vwap: vwaps[ticker] || 0,
+      intradayBars: intradayBars[ticker] || [],
     }, 'intraday');
 
     if (structure.flags.length > 0) {
@@ -56,6 +58,9 @@ export function scanGapReversal(snapshots, prevCloses, firstCandles, levelData =
       support_at: structure.nearestSupport,
       resistance_at: structure.nearestResistance,
       resistance_room: structure.resistanceRoom,
+      vwap_support: structure.vwapSupport,
+      stabilized: structure.stabilization.stabilized,
+      bars_held: structure.stabilization.barsHeld,
     });
   }
 

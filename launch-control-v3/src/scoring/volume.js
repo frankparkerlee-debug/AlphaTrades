@@ -4,6 +4,10 @@ import { floorTo15Min, minutesSinceOpen } from '../utils/time.js';
 /**
  * Volume pillar — max 30 pts
  * CRITICAL: uses per-window baseline, NOT daily average
+ *
+ * Flow absorption: uses real buy/sell order flow data to detect
+ * whether a move is being absorbed (buyers stepping into a drop)
+ * or distributed (sellers dumping into a rally).
  */
 export function computeVolumeScore(params) {
   const {
@@ -13,6 +17,7 @@ export function computeVolumeScore(params) {
     avgVolByWindow,       // JSON object from equity_profiles
     volToMoveCorrelation = 0.60,
     currentTime,          // Date object
+    flowData,             // { avgBuyRatio, totalBuy, totalSell, minutes } from getRecentFlow()
   } = params;
 
   const flags = [];
@@ -59,7 +64,51 @@ export function computeVolumeScore(params) {
   else if (minsSinceOpen < 330) timeAdj = 1.00;
   else                           timeAdj = 0.70;
 
-  const raw = base * dirMult * corrMult * timeAdj;
+  // ── Flow Absorption Bonus/Penalty ────────────────────────────────────
+  // Uses real buy/sell taker-side data from trade stream.
+  // Answers: "Is anyone actually buying this dip?" (or selling this rally?)
+  let absorptionAdj = 0;
+  let absorptionSignal = null;
+
+  if (flowData && flowData.avgBuyRatio !== null && flowData.minutes >= 3) {
+    const buyRatio = flowData.avgBuyRatio;
+
+    if (direction === 'CALL') {
+      // CALL: we want buyers stepping in (high buy ratio = absorption)
+      if (buyRatio >= 0.60) {
+        absorptionAdj = 5;   // strong absorption — buyers in control
+        absorptionSignal = 'STRONG_ABSORPTION';
+      } else if (buyRatio >= 0.55) {
+        absorptionAdj = 3;   // moderate absorption
+        absorptionSignal = 'ABSORPTION';
+      } else if (buyRatio <= 0.35) {
+        absorptionAdj = -4;  // pure selling — nobody buying this dip
+        absorptionSignal = 'NO_ABSORPTION';
+        flags.push('no_absorption');
+      } else if (buyRatio <= 0.40) {
+        absorptionAdj = -2;  // weak buying
+        absorptionSignal = 'WEAK_BUYING';
+      }
+    } else {
+      // PUT: we want sellers in control (low buy ratio = distribution)
+      if (buyRatio <= 0.35) {
+        absorptionAdj = 5;   // strong distribution — sellers in control
+        absorptionSignal = 'STRONG_DISTRIBUTION';
+      } else if (buyRatio <= 0.40) {
+        absorptionAdj = 3;   // moderate distribution
+        absorptionSignal = 'DISTRIBUTION';
+      } else if (buyRatio >= 0.65) {
+        absorptionAdj = -4;  // buyers still dominant — don't short into buying
+        absorptionSignal = 'BUYING_PRESSURE';
+        flags.push('buying_pressure');
+      } else if (buyRatio >= 0.60) {
+        absorptionAdj = -2;
+        absorptionSignal = 'MILD_BUYING';
+      }
+    }
+  }
+
+  const raw = base * dirMult * corrMult * timeAdj + absorptionAdj;
   const score = clamp(Math.round(raw), 0, 30);
 
   return {
@@ -67,6 +116,9 @@ export function computeVolumeScore(params) {
     relativeVol: parseFloat(relativeVol.toFixed(2)),
     windowKey,
     windowAvg,
+    absorptionSignal,
+    absorptionAdj,
+    flowBuyRatio: flowData?.avgBuyRatio ?? null,
     flags,
   };
 }

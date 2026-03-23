@@ -39,6 +39,115 @@ function persistBar(ticker, msg) {
     .catch(err => logger.error(`[BAR-PERSIST] ${ticker} write failed: ${err.message}`));
 }
 
+// ── TRADE FLOW AGGREGATION ──────────────────────────────
+// Subscribe to trades stream, aggregate into 1-minute buy/sell volume buckets.
+// Flush to lc_v3.bar_flow at each minute boundary.
+
+const flowBuckets = new Map(); // "TICKER:minuteTs" -> { buy: 0, sell: 0, trades: 0 }
+const recentFlow = new Map();  // "TICKER" -> last 10 minutes of { buy, sell, trades, buyRatio }
+let currentFlowMinute = null;
+
+function getMinuteTs(tsStr) {
+  const d = new Date(tsStr);
+  d.setSeconds(0, 0);
+  return d.toISOString();
+}
+
+function recordTrade(ticker, msg) {
+  const ts = msg.t;
+  if (!ts) return;
+  const minuteTs = getMinuteTs(ts);
+  const key = `${ticker}:${minuteTs}`;
+
+  if (!flowBuckets.has(key)) {
+    flowBuckets.set(key, { ticker, minuteTs, buy: 0, sell: 0, trades: 0 });
+  }
+  const bucket = flowBuckets.get(key);
+  bucket.trades++;
+  const side = msg.tks; // taker_side: 'B' or 'S' or undefined
+  if (side === 'B') bucket.buy += msg.s || 0;
+  else if (side === 'S') bucket.sell += msg.s || 0;
+  // else: no side — counted in trades but not buy/sell
+
+  // Check if minute rolled over
+  if (currentFlowMinute && minuteTs !== currentFlowMinute) {
+    flushFlowBuckets(currentFlowMinute);
+  }
+  currentFlowMinute = minuteTs;
+}
+
+async function flushFlowBuckets(minuteTs) {
+  // Collect all buckets for the completed minute
+  const rows = [];
+  for (const [key, bucket] of flowBuckets.entries()) {
+    if (bucket.minuteTs === minuteTs) {
+      rows.push(bucket);
+      flowBuckets.delete(key);
+    }
+  }
+  if (rows.length === 0) return;
+
+  // Build batch INSERT
+  const values = [];
+  const params = [];
+  let idx = 1;
+  for (const row of rows) {
+    const total = row.buy + row.sell;
+    const buyRatio = total > 0 ? (row.buy / total) : null;
+    const delta = row.buy - row.sell;
+    values.push(`($${idx},$${idx+1},$${idx+2},$${idx+3},$${idx+4},$${idx+5},$${idx+6})`);
+    params.push(row.ticker, row.minuteTs, row.buy, row.sell, row.trades, buyRatio, delta);
+    idx += 7;
+  }
+
+  const buySellPairs = rows.filter(r => r.buy > 0 && r.sell > 0).length;
+  logger.info(`[FLOW] batch ticker_count=${rows.length} buy_sell_pairs=${buySellPairs}`);
+
+  // Update in-memory recent flow (last 10 minutes per ticker)
+  for (const row of rows) {
+    const total = row.buy + row.sell;
+    const entry = { buy: row.buy, sell: row.sell, trades: row.trades, buyRatio: total > 0 ? row.buy / total : null, ts: row.minuteTs };
+    if (!recentFlow.has(row.ticker)) recentFlow.set(row.ticker, []);
+    const arr = recentFlow.get(row.ticker);
+    arr.push(entry);
+    if (arr.length > 10) arr.shift();
+  }
+
+  try {
+    await dbQuery(`
+      INSERT INTO lc_v3.bar_flow (ticker, ts, buy_volume, sell_volume, total_trades, buy_ratio, delta)
+      VALUES ${values.join(',')}
+      ON CONFLICT (ticker, ts) DO NOTHING
+    `, params);
+  } catch (err) {
+    logger.error(`[FLOW] batch insert failed: ${err.message}`);
+  }
+}
+
+/**
+ * Get recent flow data for a ticker (last N minutes, in-memory).
+ * @param {string} ticker
+ * @param {number} minutes - how many minutes of data (default 5)
+ * @returns {{ avgBuyRatio: number|null, totalBuy: number, totalSell: number, minutes: number }}
+ */
+export function getRecentFlow(ticker, minutes = 5) {
+  const arr = recentFlow.get(ticker);
+  if (!arr || arr.length === 0) return { avgBuyRatio: null, totalBuy: 0, totalSell: 0, minutes: 0 };
+  const slice = arr.slice(-minutes);
+  let totalBuy = 0, totalSell = 0, ratioSum = 0, ratioCount = 0;
+  for (const entry of slice) {
+    totalBuy += entry.buy;
+    totalSell += entry.sell;
+    if (entry.buyRatio !== null) { ratioSum += entry.buyRatio; ratioCount++; }
+  }
+  return {
+    avgBuyRatio: ratioCount > 0 ? +(ratioSum / ratioCount).toFixed(3) : null,
+    totalBuy,
+    totalSell,
+    minutes: slice.length,
+  };
+}
+
 // ── CLAUDE HAIKU NEWS CLASSIFIER ─────────────────────────
 const anthropicKey = process.env.ANTHROPIC_API_KEY;
 const haikuClient = anthropicKey ? new Anthropic({ apiKey: anthropicKey }) : null;
@@ -254,6 +363,12 @@ function handleStockMessage(msg) {
       }
       break;
 
+    case 't': // trade
+      if (trackedTickers.includes(msg.S)) {
+        recordTrade(msg.S, msg);
+      }
+      break;
+
     case 'error':
       logger.error('Stock stream error message:', msg);
       break;
@@ -268,9 +383,10 @@ function subscribeStockBars() {
   stockWs.send(JSON.stringify({
     action: 'subscribe',
     bars: allSymbols,
+    trades: trackedTickers, // trades for buy/sell flow aggregation
     quotes: trackedTickers, // quotes for up/down volume ratio
   }));
-  logger.info(`Subscribed to bars for ${allSymbols.length} symbols`);
+  logger.info(`Subscribed to bars+trades for ${allSymbols.length} symbols`);
 }
 
 // ── NEWS STREAM ────────────────────────────────────────

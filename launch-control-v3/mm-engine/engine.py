@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import (
-    LimitOrderRequest, CancelOrderRequest, GetOrdersRequest
+    LimitOrderRequest, GetOrdersRequest
 )
 from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus
 from alpaca.data.historical.stock import StockHistoricalDataClient

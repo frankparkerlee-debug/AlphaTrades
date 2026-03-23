@@ -11,7 +11,7 @@ import { checkBounceStructure } from './support-check.js';
  */
 export function scanCapitulationBounce(snapshots, prevCloses, volumeBaselines, levelData = {}) {
   const signals = [];
-  const { todayLows = {}, todayHighs = {}, dailyBars = {} } = levelData;
+  const { todayLows = {}, todayHighs = {}, dailyBars = {}, vwaps = {}, intradayBars = {} } = levelData;
 
   for (const ticker of Object.keys(snapshots)) {
     const snap = snapshots[ticker];
@@ -38,6 +38,8 @@ export function scanCapitulationBounce(snapshots, prevCloses, volumeBaselines, l
     // Trend structure analysis — flags, never blocks
     const structure = checkBounceStructure(currentPrice, dailyBars[ticker], {
       todayLow: todayLows[ticker], todayHigh: todayHighs[ticker], todayOpen,
+      vwap: vwaps[ticker] || 0,
+      intradayBars: intradayBars[ticker] || [],
     }, 'overnight');
 
     if (structure.flags.length > 0) {
@@ -59,6 +61,9 @@ export function scanCapitulationBounce(snapshots, prevCloses, volumeBaselines, l
       support_at: structure.nearestSupport,
       resistance_at: structure.nearestResistance,
       resistance_room: structure.resistanceRoom,
+      vwap_support: structure.vwapSupport,
+      stabilized: structure.stabilization.stabilized,
+      bars_held: structure.stabilization.barsHeld,
     });
   }
 

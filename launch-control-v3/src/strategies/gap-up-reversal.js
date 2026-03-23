@@ -1,3 +1,6 @@
+import { checkBounceStructure } from './support-check.js';
+import { detectFlushAndHold } from './support-check.js';
+
 /**
  * Gap Up Reversal Strategy (PUT)
  *
@@ -5,13 +8,11 @@
  * 5-minute candle close below the open 90% of the time (100% in
  * the 2.0-2.5% bucket). Average drop when winning: 2.07%.
  *
- * @param {Object} snapshots   - { ticker: { open, price, ... } }
- * @param {Object} prevCloses  - { ticker: number }
- * @param {Object} firstCandles - { ticker: { open, close } }
- * @returns {Array} array of signal objects
+ * Horizon: INTRADAY (exit by 13:00)
  */
-export function scanGapUpReversal(snapshots, prevCloses, firstCandles) {
+export function scanGapUpReversal(snapshots, prevCloses, firstCandles, levelData = {}) {
   const signals = [];
+  const { vwaps = {}, intradayBars = {} } = levelData;
 
   for (const ticker of Object.keys(snapshots)) {
     const snap = snapshots[ticker];
@@ -33,6 +34,19 @@ export function scanGapUpReversal(snapshots, prevCloses, firstCandles) {
     if (!isRed) continue;
 
     const gapAmount = todayOpen - prevClose;
+    const currentPrice = candle.close;
+
+    // VWAP context for PUT: price below VWAP is bearish confirmation
+    const vwap = vwaps[ticker] || 0;
+    const vwapBearish = vwap > 0 && currentPrice < vwap;
+
+    // Flush+hold for PUT direction (sellers holding highs down)
+    const bars = intradayBars[ticker] || [];
+    const stabilization = bars.length >= 5 ? detectFlushAndHold(bars, 'PUT') : { stabilized: false, barsHeld: 0 };
+
+    const trend_flags = [];
+    if (!stabilization.stabilized && bars.length >= 5) trend_flags.push('no_stabilization');
+    if (vwap > 0 && currentPrice > vwap) trend_flags.push('above_vwap'); // buying pressure warning
 
     signals.push({
       ticker,
@@ -45,9 +59,13 @@ export function scanGapUpReversal(snapshots, prevCloses, firstCandles) {
       t2_target: +prevClose.toFixed(2),
       confidence: 90.0,
       exit_by: '13:00',
+      trend_flags,
+      vwap_bearish: vwapBearish,
+      stabilized: stabilization.stabilized,
+      bars_held: stabilization.barsHeld,
     });
 
-    console.log(`[GAP_UP] ${ticker} gapped +${(gap * 100).toFixed(1)}% red first candle → PUT`);
+    console.log(`[GAP_UP] ${ticker} gapped +${(gap * 100).toFixed(1)}% red first candle → PUT${trend_flags.length > 0 ? ` flags: ${trend_flags.join(', ')}` : ''}`);
   }
 
   return signals;

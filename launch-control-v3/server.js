@@ -8,7 +8,7 @@ import cron from 'node-cron';
 import { readFileSync, existsSync } from 'fs';
 import { createServer } from 'http';
 import { selectOptionsContract, getOptionsVolume } from './src/options/contract-selector.js';
-import { getNewsEvents } from './src/data/state.js';
+import { getNewsEvents, getTickerState } from './src/data/state.js';
 import { computeNewsScore } from './src/scoring/news.js';
 import { runBacktest } from './scripts/backtest/run.js';
 import { scanGapReversal } from './src/strategies/gap-reversal.js';
@@ -20,6 +20,7 @@ import { scanGapUpReversal } from './src/strategies/gap-up-reversal.js';
 import { scoreConvictionSetup } from './src/strategies/conviction-scorer.js';
 import { scanOvernightCalendar } from './src/strategies/overnight-calendar.js';
 import { scanPreEarningsPut } from './src/strategies/pre-earnings-put.js';
+import { getRecentFlow } from './src/data/alpaca-streams.js';
 import { monitorOpenPositions } from './src/jobs/options-monitor.js';
 import { scoreContinuation } from './src/jobs/continuation-scorer.js';
 
@@ -513,6 +514,20 @@ app.get('/health', (req, res) => res.json({ ok: true, time: new Date().toISOStri
 
 // Debug endpoint — test contract selector on live Render
 // Snapshot scan — intraday movers
+app.get('/api/flow/:ticker', async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT ticker, ts, buy_volume, sell_volume, total_trades, buy_ratio, delta
+      FROM lc_v3.bar_flow
+      WHERE ticker = $1 AND ts >= NOW() - INTERVAL '60 minutes'
+      ORDER BY ts DESC
+    `, [req.params.ticker.toUpperCase()]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/snapshots', async (req, res) => {
   try {
     const alpacaHdrs = {
@@ -1995,7 +2010,23 @@ async function startRestPoller() {
         const fractionOfDay = Math.min(1, minsOpen / 390);
         const projectedVol  = fractionOfDay > 0 ? todayVol / fractionOfDay : todayVol;
         const relVol    = prevDayVol > 0 ? projectedVol / prevDayVol : 1;
-        const volScore  = Math.min(30, Math.round(relVol * 12));
+        let volScore  = Math.min(30, Math.round(relVol * 12));
+
+        // Flow absorption adjustment — real buy/sell order flow
+        const flow = getRecentFlow(ticker, 5);
+        if (flow.avgBuyRatio !== null && flow.minutes >= 3) {
+          if (direction === 'CALL') {
+            if (flow.avgBuyRatio >= 0.60) volScore = Math.min(30, volScore + 5);
+            else if (flow.avgBuyRatio >= 0.55) volScore = Math.min(30, volScore + 3);
+            else if (flow.avgBuyRatio <= 0.35) volScore = Math.max(0, volScore - 4);
+            else if (flow.avgBuyRatio <= 0.40) volScore = Math.max(0, volScore - 2);
+          } else {
+            if (flow.avgBuyRatio <= 0.35) volScore = Math.min(30, volScore + 5);
+            else if (flow.avgBuyRatio <= 0.40) volScore = Math.min(30, volScore + 3);
+            else if (flow.avgBuyRatio >= 0.65) volScore = Math.max(0, volScore - 4);
+            else if (flow.avgBuyRatio >= 0.60) volScore = Math.max(0, volScore - 2);
+          }
+        }
 
         const spyOk    = direction === 'CALL' ? spyPct > 0 : spyPct < 0;
         const qqqOk    = direction === 'CALL' ? qqqPct > 0 : qqqPct < 0;
@@ -2275,14 +2306,19 @@ async function startRestPoller() {
 
           // Build support/resistance level data for bounce-confirmation scanners
           const prevDayLows = {}, prevDayHighs = {}, todayLows = {}, todayHighs = {}, currentPrices = {};
+          const vwaps = {}, intradayBarsMap = {};
           for (const [ticker, snap] of Object.entries(allSnaps)) {
             if (snap.prevDailyBar?.l) prevDayLows[ticker] = snap.prevDailyBar.l;
             if (snap.prevDailyBar?.h) prevDayHighs[ticker] = snap.prevDailyBar.h;
             if (snap.dailyBar?.l) todayLows[ticker] = snap.dailyBar.l;
             if (snap.dailyBar?.h) todayHighs[ticker] = snap.dailyBar.h;
             if (snap.latestTrade?.p) currentPrices[ticker] = snap.latestTrade.p;
+            // Pull VWAP and intraday bars from state for bounce structure analysis
+            const ts = getTickerState(ticker);
+            if (ts?.vwap) vwaps[ticker] = ts.vwap;
+            if (ts?.bars?.length > 0) intradayBarsMap[ticker] = ts.bars;
           }
-          const levelData = { prevDayLows, prevDayHighs, todayLows, todayHighs, dailyBars };
+          const levelData = { prevDayLows, prevDayHighs, todayLows, todayHighs, dailyBars, vwaps, intradayBars: intradayBarsMap };
 
           // Run all strategy scanners
           const gapSignals = scanGapReversal(stratSnapshots, prevCloses, firstCandles, levelData);
@@ -2290,7 +2326,7 @@ async function startRestPoller() {
           const putSignals = scanVolumeDropPut(stratSnapshots, prevCloses, volumeBaselines);
           const consecSignals = scanConsecutiveDrop(Object.keys(allSnaps), dailyBars, { currentPrices, prevCloses, prevDayLows, prevDayHighs, todayLows, todayHighs });
           const sectorSignals = scanSectorRotationBounce(stratSnapshots, prevCloses, spyPct, firstCandles, qqqPct);
-          const gapUpSignals = scanGapUpReversal(stratSnapshots, prevCloses, firstCandles);
+          const gapUpSignals = scanGapUpReversal(stratSnapshots, prevCloses, firstCandles, levelData);
           const calendarSignals = scanOvernightCalendar(stratSnapshots, mkt.SPY, vix, macroEvent);
           const allStratSignals = [...gapSignals, ...capSignals, ...putSignals, ...consecSignals,
             ...(macroEvent ? [] : sectorSignals), ...gapUpSignals, ...calendarSignals];
@@ -2413,6 +2449,12 @@ async function startRestPoller() {
               sig.strike_range ? `strike=${sig.strike_range}` : null,
               sig.hard_exit ? `hardExit=${sig.hard_exit}` : null,
               sig.position_size_pct != null ? `size=${sig.position_size_pct}%` : null,
+              sig.trend ? `trend=${sig.trend}` : null,
+              sig.trend_flags?.length > 0 ? `flags=${sig.trend_flags.join(',')}` : null,
+              sig.vwap_support ? 'VWAP_SUPPORT' : null,
+              sig.vwap_bearish ? 'VWAP_BEARISH' : null,
+              sig.stabilized ? `STABILIZED(${sig.bars_held}bars)` : null,
+              sig.stabilized === false && sig.bars_held !== undefined ? 'NO_STABILIZATION' : null,
               sig.note || null,
             ].filter(Boolean).join(' · ');
 
@@ -2969,6 +3011,23 @@ async function backfillContracts() {
     await db.query(`ALTER TABLE lc_v3.paper_trades ADD COLUMN IF NOT EXISTS auto_traded BOOLEAN DEFAULT FALSE`);
     await db.query(`ALTER TABLE lc_v3.paper_trades ADD COLUMN IF NOT EXISTS position_size_pct NUMERIC`);
     console.log('[MIGRATE] strategy + auto_traded columns ensured on lc_v3.paper_trades');
+
+    // bar_flow table for trade flow aggregation
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS lc_v3.bar_flow (
+        ticker TEXT NOT NULL,
+        ts TIMESTAMPTZ NOT NULL,
+        buy_volume BIGINT NOT NULL DEFAULT 0,
+        sell_volume BIGINT NOT NULL DEFAULT 0,
+        total_trades INTEGER NOT NULL DEFAULT 0,
+        buy_ratio NUMERIC,
+        delta BIGINT NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (ticker, ts)
+      )
+    `);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_bar_flow_ts ON lc_v3.bar_flow(ts DESC)`);
+    console.log('[MIGRATE] lc_v3.bar_flow table ensured');
   } catch (err) {
     console.error('[MIGRATE] Greeks columns error:', err.message);
   }
