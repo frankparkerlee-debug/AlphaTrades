@@ -9,7 +9,7 @@ from datetime import datetime, date, timedelta, timezone
 from dataclasses import dataclass
 from typing import Optional
 from alpaca.data.historical.option import OptionHistoricalDataClient
-from alpaca.data.requests import OptionSnapshotRequest, OptionChainRequest
+from alpaca.data.requests import OptionSnapshotRequest, OptionChainRequest, OptionLatestQuoteRequest
 from alpaca.data.historical.stock import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestQuoteRequest
 from config import (
@@ -142,15 +142,23 @@ class MorningScanner:
 
                 logger.info(f"{symbol} {option_type.upper()}: {len(chain)} contracts in chain")
 
-                # Dump first contract raw for debugging
-                first_key = next(iter(chain))
-                first_snap = chain[first_key]
-                logger.info(f"  RAW SAMPLE {first_key}: {first_snap}")
+                # Chain returns greeks/IV but NOT quotes — fetch quotes separately
+                contract_syms = list(chain.keys())
+                quotes = {}
+                try:
+                    quote_req = OptionLatestQuoteRequest(symbol_or_symbols=contract_syms)
+                    quotes = self._option_client.get_option_latest_quote(quote_req)
+                    logger.info(f"{symbol} {option_type.upper()}: got quotes for {len(quotes)} contracts")
+                except Exception as qe:
+                    logger.error(f"{symbol} {option_type.upper()}: quote fetch failed: {qe}")
 
                 for contract_sym, snapshot in chain.items():
+                    # Attach quote data to snapshot for evaluation
+                    quote = quotes.get(contract_sym)
                     strike = self._evaluate_strike(
                         symbol, contract_sym, snapshot,
-                        underlying_price, today, capture_pct
+                        underlying_price, today, capture_pct,
+                        quote=quote,
                     )
                     if strike is not None:
                         viable.append(strike)
@@ -168,19 +176,21 @@ class MorningScanner:
         underlying_price: float,
         today: date,
         capture_pct: float,
+        quote=None,
     ) -> Optional[ViableStrike]:
         """
         Apply all four filters to a single contract.
         Returns ViableStrike if it passes, None if it fails.
         """
         try:
-            # Extract quote data
-            if not snapshot.latest_quote:
+            # Extract quote data — prefer separately fetched quote, fall back to snapshot
+            q = quote or snapshot.latest_quote
+            if not q:
                 logger.info(f"    {contract_sym}: no quote data")
                 return None
 
-            bid = float(snapshot.latest_quote.bid_price or 0)
-            ask = float(snapshot.latest_quote.ask_price or 0)
+            bid = float(q.bid_price or 0)
+            ask = float(q.ask_price or 0)
 
             if bid <= 0 or ask <= 0 or ask <= bid:
                 logger.info(f"    {contract_sym}: bad quote bid=${bid:.2f} ask=${ask:.2f}")
@@ -193,12 +203,7 @@ class MorningScanner:
             iv    = float(snapshot.implied_volatility or 0)
             delta = float(snapshot.greeks.delta if snapshot.greeks else 0)
 
-            # Extract contract details
-            details    = snapshot.latest_quote
-            strike     = float(snapshot.latest_trade.price if snapshot.latest_trade else 0)
-
             # Parse from contract symbol (format: JPM251121P00285000)
-            # Better: get from chain details
             strike_val, expiry_dt, dte, parsed_type = self._parse_contract(contract_sym, today)
             if strike_val is None:
                 return None
@@ -210,8 +215,9 @@ class MorningScanner:
                 otm_pct = (strike_val - underlying_price) / underlying_price
 
             # Log raw contract data for diagnostics
-            volume_est = int(snapshot.daily_bar.volume if snapshot.daily_bar else 0)
-            oi = int(snapshot.open_interest if snapshot.open_interest else 0)
+            # Note: chain endpoint doesn't return daily_bar or open_interest
+            volume_est = int(snapshot.daily_bar.volume) if hasattr(snapshot, 'daily_bar') and snapshot.daily_bar else 0
+            oi = int(snapshot.open_interest) if hasattr(snapshot, 'open_interest') and snapshot.open_interest else -1  # -1 = unavailable
             logger.info(
                 f"  {contract_sym}: strike=${strike_val:.2f} {dte}DTE "
                 f"bid=${bid:.2f} ask=${ask:.2f} spread=${spread:.3f} "
@@ -234,18 +240,18 @@ class MorningScanner:
                 return None
 
             # ── Filter 4: Liquidity check (volume + open interest) ──────────
-            # At 9 AM, daily volume is usually 0. Use open interest as the
-            # primary liquidity signal, with volume as a bonus.
-
-            # Require minimum open interest — this is the real liquidity signal
-            if oi < 50:
-                logger.info(f"    REJECT OI: {oi} < 50")
-                return None
-
-            # If we do have volume data and it's low, skip
-            if 0 < volume_est < MIN_DAILY_VOLUME and oi < 200:
-                logger.info(f"    REJECT volume: vol={volume_est} OI={oi}")
-                return None
+            # Chain endpoint may not return OI/volume — skip filter if unavailable.
+            # Spread width is the primary liquidity signal: wide spread + live
+            # bid/ask = active two-way market.
+            if oi >= 0:  # -1 means unavailable
+                if oi < 50:
+                    logger.info(f"    REJECT OI: {oi} < 50")
+                    return None
+                if 0 < volume_est < MIN_DAILY_VOLUME and oi < 200:
+                    logger.info(f"    REJECT volume: vol={volume_est} OI={oi}")
+                    return None
+            else:
+                logger.info(f"    {contract_sym}: OI/volume unavailable, using spread as liquidity proxy")
 
             # ── Calculate optimal quote levels ────────────────────────────────
             capture    = spread * capture_pct
