@@ -221,12 +221,12 @@ class MorningScanner:
             # primary liquidity signal, with volume as a bonus.
 
             # Require minimum open interest — this is the real liquidity signal
-            if oi < 50:
-                logger.info(f"    REJECT OI: {oi} < 50")
+            if oi < 20:
+                logger.info(f"    REJECT OI: {oi} < 20")
                 return None
 
             # If we do have volume data and it's low, skip
-            if 0 < volume_est < MIN_DAILY_VOLUME and oi < 200:
+            if 0 < volume_est < MIN_DAILY_VOLUME and oi < 100:
                 logger.info(f"    REJECT volume: vol={volume_est} OI={oi}")
                 return None
 

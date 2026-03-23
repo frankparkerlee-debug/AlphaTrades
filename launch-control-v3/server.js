@@ -18,6 +18,7 @@ import { scanConsecutiveDrop } from './src/strategies/consecutive-drop.js';
 import { scanSectorRotationBounce } from './src/strategies/sector-rotation-bounce.js';
 import { scanGapUpReversal } from './src/strategies/gap-up-reversal.js';
 import { scanBreakdownPut } from './src/strategies/breakdown-put.js';
+import { scanRelativeWeaknessPut } from './src/strategies/relative-weakness-put.js';
 import { scoreConvictionSetup } from './src/strategies/conviction-scorer.js';
 import { scanOvernightCalendar } from './src/strategies/overnight-calendar.js';
 import { scanPreEarningsPut } from './src/strategies/pre-earnings-put.js';
@@ -2362,8 +2363,9 @@ async function startRestPoller() {
           const gapUpSignals = scanGapUpReversal(stratSnapshots, prevCloses, firstCandles, levelData);
           const calendarSignals = scanOvernightCalendar(stratSnapshots, mkt.SPY, vix, macroEvent);
           const breakdownSignals = scanBreakdownPut(stratSnapshots, prevCloses, spyPct, qqqPct, volumeBaselines, levelData);
+          const relWeaknessSignals = scanRelativeWeaknessPut(stratSnapshots, prevCloses, spyPct, qqqPct, volumeBaselines, levelData);
           const allStratSignals = [...gapSignals, ...capSignals, ...putSignals, ...consecSignals,
-            ...(macroEvent ? [] : sectorSignals), ...gapUpSignals, ...calendarSignals, ...breakdownSignals];
+            ...(macroEvent ? [] : sectorSignals), ...gapUpSignals, ...calendarSignals, ...breakdownSignals, ...relWeaknessSignals];
 
           // Diagnostic: log scanner inputs + outputs every 5th cycle
           if (continuationCycle % 5 === 0) {
@@ -2381,6 +2383,25 @@ async function startRestPoller() {
 
           for (const sig of allStratSignals) {
             console.log(`[STRATEGY CANDIDATE] ${sig.ticker} ${sig.direction} ${sig.strategy} confidence=${sig.confidence} entry=$${sig.entry_price}`);
+
+            // ── Fakeout block: CALL bounces in downtrend with no stabilization ──
+            // A stock in confirmed downtrend that hasn't stabilized is likely a dead cat bounce.
+            // Block CALL signals UNLESS there's overwhelming volume (2x+) which suggests capitulation.
+            const isCallBounce = sig.direction === 'CALL' && [
+              'GAP_REVERSAL', 'CAPITULATION_BOUNCE', 'SECTOR_ROTATION_BOUNCE',
+              'GAP_UP_REVERSAL', 'CONSEC_BOUNCE'
+            ].includes(sig.strategy);
+
+            if (isCallBounce) {
+              const hasDowntrend = sig.trend === 'DOWNTREND' || sig.trend_flags?.includes('downtrend');
+              const noStab = sig.stabilized === false || sig.trend_flags?.includes('no_stabilization');
+              const overwhelmingVolume = sig.volume_ratio && sig.volume_ratio >= 2.0;
+
+              if (hasDowntrend && noStab && !overwhelmingVolume) {
+                console.log(`[FAKEOUT BLOCK] ${sig.ticker} ${sig.strategy} — downtrend + no stabilization (vol=${sig.volume_ratio || 'N/A'}x). Skipping CALL.`);
+                continue;
+              }
+            }
 
             // Dedup: skip if strategy signal already exists today for this ticker+direction+strategy
             const dupCheck = await db.query(`
@@ -2405,6 +2426,7 @@ async function startRestPoller() {
                              : sig.strategy === 'SECTOR_ROTATION_BOUNCE' ? 88
                              : sig.strategy === 'GAP_UP_REVERSAL' ? 88
                              : sig.strategy === 'BREAKDOWN_PUT' ? sig.confidence
+                             : sig.strategy === 'RELATIVE_WEAKNESS_PUT' ? sig.confidence
                              : sig.strategy === 'CONSEC_BOUNCE' ? (sig.consecutive_days >= 3 ? 85 : 64)
                              : sig.strategy === 'OVERNIGHT_CALENDAR' ? 82
                              : sig.strategy === 'PRE_EARNINGS_PUT' ? sig.confidence
@@ -2751,6 +2773,44 @@ async function startRestPoller() {
                 currentRegime: typeof currentRegime !== 'undefined' ? currentRegime : null,
               };
 
+              // Update current stock price and unrealized P&L before scoring
+              const currentStockPrice = recentBars.length > 0
+                ? recentBars[recentBars.length - 1].close : 0;
+              const entryStockPrice = parseFloat(trade.entry_stock_price) || 0;
+
+              if (currentStockPrice > 0 && entryStockPrice > 0) {
+                const dir = trade.direction === 'CALL' ? 1 : -1;
+                const pnlPct = ((currentStockPrice - entryStockPrice) / entryStockPrice) * 100 * dir;
+                const peakPnl = Math.max(parseFloat(trade.peak_pnl_pct) || 0, pnlPct);
+                const maxAdverse = Math.min(parseFloat(trade.max_adverse_pnl_pct) || 0, pnlPct);
+
+                // Check T1/T2/stop hits
+                const t1 = parseFloat(trade.entry_t1) || 0;
+                const t2 = parseFloat(trade.entry_t2) || 0;
+                const stop = parseFloat(trade.entry_stop) || 0;
+                const hitT1 = trade.hit_t1 || (t1 > 0 && ((dir === 1 && currentStockPrice >= t1) || (dir === -1 && currentStockPrice <= t1)));
+                const hitT2 = trade.hit_t2 || (t2 > 0 && ((dir === 1 && currentStockPrice >= t2) || (dir === -1 && currentStockPrice <= t2)));
+                const hitStop = trade.hit_stop || (stop > 0 && ((dir === 1 && currentStockPrice <= stop) || (dir === -1 && currentStockPrice >= stop)));
+
+                await db.query(`
+                  UPDATE lc_v3.paper_trades SET
+                    current_stock_price = $1, unrealized_pnl_pct = $2,
+                    peak_pnl_pct = $3, max_adverse_pnl_pct = $4,
+                    hit_t1 = $5, hit_t2 = $6, hit_stop = $7,
+                    last_updated = NOW()
+                  WHERE paper_id = $8
+                `, [currentStockPrice, pnlPct, peakPnl, maxAdverse,
+                    hitT1, hitT2, hitStop, trade.paper_id]);
+
+                // Patch the trade object so the scorer reads live values
+                trade.current_stock_price = currentStockPrice;
+                trade.unrealized_pnl_pct = pnlPct;
+                trade.peak_pnl_pct = peakPnl;
+                trade.hit_t1 = hitT1;
+                trade.hit_t2 = hitT2;
+                trade.hit_stop = hitStop;
+              }
+
               const greeks = {
                 delta: parseFloat(trade.current_delta) || 0,
                 iv: parseFloat(trade.current_iv) || 0,
@@ -2865,6 +2925,8 @@ const STRATEGY_MIN_DTE = {
   CONSEC_BOUNCE: 3,
   OVERNIGHT_CALENDAR: 1,
   PRE_EARNINGS_PUT: 7,
+  BREAKDOWN_PUT: 0,
+  RELATIVE_WEAKNESS_PUT: 0,
 };
 
 // ── POST-SIGNAL MONITORING ────────────────────────────────────────────────────

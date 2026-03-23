@@ -109,6 +109,39 @@ function checkCapitulationThesis(trade, recentBars) {
   return { intact, reasons };
 }
 
+function checkBreakdownPutThesis(trade, recentBars, marketContext) {
+  const reasons = [];
+  let intact = true;
+  const entryPrice = parseFloat(trade.entry_stock_price) || 0;
+  const stopPrice = parseFloat(trade.entry_stop) || 0;
+
+  if (recentBars.length === 0) return { intact: true, reasons: [] };
+
+  const lastPrice = recentBars[recentBars.length - 1].close;
+
+  // PUT thesis broken if price reclaims stop (above VWAP)
+  if (stopPrice > 0 && lastPrice > stopPrice) {
+    intact = false;
+    reasons.push('price_above_stop');
+  }
+
+  // Buyers stepping in: 3 consecutive green bars with increasing volume
+  if (recentBars.length >= 3) {
+    const last3 = recentBars.slice(-3);
+    const allGreen = last3.every(b => b.close > b.open);
+    const volIncreasing = last3[1].volume > last3[0].volume && last3[2].volume > last3[1].volume;
+    if (allGreen && volIncreasing) reasons.push('green_volume_reversal');
+  }
+
+  // SPY turned positive (for BREAKDOWN_PUT, market was originally red)
+  if (marketContext.spyChangeSinceEntry != null && marketContext.spyChangeSinceEntry > 0.003) {
+    reasons.push('spy_turned_positive');
+  }
+
+  if (reasons.length >= 2) intact = false;
+  return { intact, reasons };
+}
+
 function checkConsecBounceThesis(trade, recentBars) {
   const entryPrice = parseFloat(trade.entry_stock_price) || 0;
   if (recentBars.length === 0) return { intact: true, reasons: [] };
@@ -128,6 +161,8 @@ function checkThesis(strategy, trade, recentBars, marketContext) {
     case 'CAPITULATION_BOUNCE':      return checkCapitulationThesis(trade, recentBars);
     case 'CONSEC_BOUNCE':            return checkConsecBounceThesis(trade, recentBars);
     case 'VOL_DROP_PUT':             return checkCapitulationThesis(trade, recentBars);
+    case 'BREAKDOWN_PUT':            return checkBreakdownPutThesis(trade, recentBars, marketContext);
+    case 'RELATIVE_WEAKNESS_PUT':    return checkBreakdownPutThesis(trade, recentBars, marketContext);
     default:                         return { intact: true, reasons: [] };
   }
 }
@@ -246,7 +281,7 @@ export async function scoreContinuation(paperTrade, recentBars, marketContext, c
   const isConsecBounce = strategy === 'CONSEC_BOUNCE';
 
   // VWAP for intraday strategies
-  const INTRADAY = ['GAP_REVERSAL', 'GAP_UP_REVERSAL', 'SECTOR_ROTATION_BOUNCE', 'CAPITULATION_BOUNCE'];
+  const INTRADAY = ['GAP_REVERSAL', 'GAP_UP_REVERSAL', 'SECTOR_ROTATION_BOUNCE', 'CAPITULATION_BOUNCE', 'BREAKDOWN_PUT', 'RELATIVE_WEAKNESS_PUT'];
   const isIntraday = INTRADAY.includes(strategy);
   let vwapResult = { crossed: false, favorableStreak: 0 };
   if (isIntraday) {

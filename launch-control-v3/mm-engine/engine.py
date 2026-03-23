@@ -42,7 +42,7 @@ from config import (
     TRADING_START_HOUR, TRADING_START_MINUTE,
     TRADING_END_HOUR, TRADING_END_MINUTE,
     HEARTBEAT_INTERVAL, MAX_CONCURRENT_POSITIONS,
-    KILL_SWITCH_THRESHOLD,
+    KILL_SWITCH_THRESHOLD, MIN_SPREAD_WIDTH,
 )
 from fill_logger import FillLogger
 from risk_controls import RiskManager
@@ -157,7 +157,7 @@ class QuoteEngine:
             spread   = ask - bid
 
             # Check spread is still viable
-            if spread < 0.13:
+            if spread < MIN_SPREAD_WIDTH:
                 continue
 
             # Update tape quote
