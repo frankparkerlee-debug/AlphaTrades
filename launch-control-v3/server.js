@@ -2403,35 +2403,90 @@ async function startRestPoller() {
               }
             }
 
-            // ── Recent bars validation: do the last 3 bars confirm the direction? ──
-            // Skip for multiday/overnight strategies — those don't depend on intraday bar flow
+            // ── Full TA confirmation: intelligence gate + stabilization + momentum ──
+            // Run the same pipeline as momentum signals to confirm price action & volume
             const INTRADAY_STRATEGIES = [
               'GAP_REVERSAL', 'GAP_UP_REVERSAL', 'SECTOR_ROTATION_BOUNCE',
               'CAPITULATION_BOUNCE', 'BREAKDOWN_PUT', 'RELATIVE_WEAKNESS_PUT',
             ];
             if (INTRADAY_STRATEGIES.includes(sig.strategy)) {
-              const recentBars = intradayBarsMap[sig.ticker];
-              if (recentBars && recentBars.length >= 3) {
-                const last3 = recentBars.slice(-3);
-                if (sig.direction === 'CALL') {
-                  // CALL: need price moving up — at least 2 of last 3 bars green,
-                  // AND current price above the bar-3-ago open (net upward)
-                  const greenCount = last3.filter(b => b.c > b.o).length;
-                  const netUp = last3[2].c > last3[0].o;
-                  if (greenCount < 2 && !netUp) {
-                    console.log(`[BAR CHECK BLOCK] ${sig.ticker} ${sig.strategy} CALL — last 3 bars: ${greenCount}/3 green, net ${netUp ? 'UP' : 'DOWN'}. No confirmation.`);
-                    continue;
-                  }
-                } else if (sig.direction === 'PUT') {
-                  // PUT: need price moving down — at least 2 of last 3 bars red,
-                  // AND current price below the bar-3-ago open (net downward)
-                  const redCount = last3.filter(b => b.c < b.o).length;
-                  const netDown = last3[2].c < last3[0].o;
-                  if (redCount < 2 && !netDown) {
-                    console.log(`[BAR CHECK BLOCK] ${sig.ticker} ${sig.strategy} PUT — last 3 bars: ${redCount}/3 red, net ${netDown ? 'DOWN' : 'UP'}. No confirmation.`);
+              const bars = intradayBarsMap[sig.ticker];
+              const snap = allSnaps[sig.ticker];
+              const prevClose = snap?.prevDailyBar?.c || 0;
+              const openPrice = snap?.dailyBar?.o || sig.entry_price;
+              const atr = parseFloat(profiles[sig.ticker]?.atr_20d || 0.025);
+              const ts = getTickerState(sig.ticker);
+
+              if (bars && bars.length >= 5) {
+                // 1. Stabilization gate — for CALL bounces, price must have stabilized
+                //    (3+ bars without making new lows after the flush)
+                if (sig.direction === 'CALL' && sig.stabilized === false) {
+                  console.log(`[TA BLOCK] ${sig.ticker} ${sig.strategy} CALL — no stabilization (${sig.bars_held || 0} bars held). Waiting for bottom to form.`);
+                  continue;
+                }
+
+                // 2. VWAP confirmation — CALL must be at or reclaiming VWAP, PUT must be below
+                const vwap = vwaps[sig.ticker] || ts?.vwap || 0;
+                const price = sig.entry_price;
+                if (vwap > 0) {
+                  if (sig.direction === 'CALL' && price < vwap * 0.995) {
+                    // Allow if stabilized AND close to VWAP (within 0.5%)
+                    // Block if clearly below VWAP — buyers haven't taken control
+                    const vwapDist = ((price - vwap) / vwap * 100).toFixed(2);
+                    console.log(`[TA BLOCK] ${sig.ticker} ${sig.strategy} CALL — below VWAP ($${vwap.toFixed(2)}) by ${vwapDist}%. Waiting for reclaim.`);
                     continue;
                   }
                 }
+
+                // 3. Higher low formation — current bar low must be above the lowest low
+                //    of bars 2-5 ago (bottom has formed, not still falling)
+                if (sig.direction === 'CALL') {
+                  const recentLows = bars.slice(-5, -1).map(b => b.l);
+                  const swingLow = Math.min(...recentLows);
+                  const currentLow = bars[bars.length - 1].l;
+                  if (currentLow < swingLow) {
+                    console.log(`[TA BLOCK] ${sig.ticker} ${sig.strategy} CALL — still making new lows (${currentLow.toFixed(2)} < swing low ${swingLow.toFixed(2)}). No higher low yet.`);
+                    continue;
+                  }
+                }
+
+                // 4. Volume confirmation — reversal bars should show buyer participation
+                //    Average volume of last 3 bars must be >= average of prior 5
+                const last3vol = bars.slice(-3).reduce((s, b) => s + (b.v || 0), 0) / 3;
+                const prior5vol = bars.slice(-8, -3).length > 0
+                  ? bars.slice(-8, -3).reduce((s, b) => s + (b.v || 0), 0) / bars.slice(-8, -3).length
+                  : last3vol;
+                if (prior5vol > 0 && last3vol < prior5vol * 0.5) {
+                  console.log(`[TA BLOCK] ${sig.ticker} ${sig.strategy} — volume drying up (last3=${Math.round(last3vol)} < 50% of prior5=${Math.round(prior5vol)}). No conviction.`);
+                  continue;
+                }
+
+                // 5. Momentum freshness — reject LATE/EXHAUSTED entries
+                const momentum = analyzeMomentum(bars, openPrice, prevClose, atr, sig.direction);
+                if (momentum.freshness === 'EXHAUSTED' || momentum.freshness === 'LATE') {
+                  console.log(`[TA BLOCK] ${sig.ticker} ${sig.strategy} — move is ${momentum.freshness} (${momentum.barsInMove} bars in). Too late to enter.`);
+                  continue;
+                }
+
+                // 6. Intelligence gate — trend, levels, regime, VWAP overextension
+                const mockState = {
+                  close: price, vwap: vwap || price,
+                  sessionHigh: todayHighs[sig.ticker] || price,
+                  sessionLow: todayLows[sig.ticker] || price,
+                  prevDayHigh: prevDayHighs[sig.ticker] || prevClose * 1.01,
+                  prevDayLow: prevDayLows[sig.ticker] || prevClose * 0.99,
+                  sessionOpen: openPrice, bars,
+                };
+                const levels = analyzeLevels(mockState, atr);
+                const trend = analyzeTrend(bars, sig.direction);
+                const gate = gateSignal(sig.direction, trend, levels, regime, momentum.freshness);
+
+                if (!gate.allow) {
+                  console.log(`[TA GATE] ${sig.ticker} ${sig.strategy} ${sig.direction} — ${gate.reason}`);
+                  continue;
+                }
+
+                console.log(`[TA PASS] ${sig.ticker} ${sig.strategy} ${sig.direction} — freshness=${momentum.freshness} bars=${momentum.barsInMove} trend=${trend.signalType} gate=ALLOW`);
               }
             }
 
