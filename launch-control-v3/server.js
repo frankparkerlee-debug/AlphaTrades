@@ -1809,7 +1809,7 @@ async function startWorker() {
 }
 
 // ── REST POLLING SCORER (guaranteed fallback) ─────────────────────────────────
-const GRADE_SCALE  = [[83,'A+'],[73,'A'],[63,'A-'],[53,'B+'],[43,'B']];
+const GRADE_SCALE  = [[92,'A+'],[85,'A'],[78,'A-'],[70,'B+'],[60,'B']];
 const POSITION_SZ  = {'A+':0.20,'A':0.15,'A-':0.10,'B+':0.075,'B':0.05};
 const ACCOUNT_SIZE = parseFloat(process.env.ACCOUNT_SIZE || '7500');
 const ALPACA_FEED  = process.env.ALPACA_FEED || 'sip';
@@ -2421,16 +2421,7 @@ async function startRestPoller() {
             const optVol = await getOptionsVolume(sig.ticker);
             console.log(`[STRATEGY VOL-INFO] ${sig.ticker} ${sig.strategy} — options vol=${optVol} (gate disabled, allowing through)`);
 
-            let compositeRaw = sig.strategy === 'GAP_REVERSAL' ? 85
-                             : sig.strategy === 'CAPITULATION_BOUNCE' ? 72
-                             : sig.strategy === 'SECTOR_ROTATION_BOUNCE' ? 88
-                             : sig.strategy === 'GAP_UP_REVERSAL' ? 88
-                             : sig.strategy === 'BREAKDOWN_PUT' ? sig.confidence
-                             : sig.strategy === 'RELATIVE_WEAKNESS_PUT' ? sig.confidence
-                             : sig.strategy === 'CONSEC_BOUNCE' ? (sig.consecutive_days >= 3 ? 85 : 64)
-                             : sig.strategy === 'OVERNIGHT_CALENDAR' ? 82
-                             : sig.strategy === 'PRE_EARNINGS_PUT' ? sig.confidence
-                             : 57;
+            let compositeRaw = Math.round(sig.confidence || 50);
 
             // Macro event penalty: reduce confidence by 20 on high-impact days
             if (macroEvent) compositeRaw -= 20;
