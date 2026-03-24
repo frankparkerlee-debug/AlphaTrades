@@ -191,16 +191,16 @@ class PositionManager:
         # ── P&L calculation ───────────────────────────────────────────────────
         hold_seconds = (now - pos.open_time).total_seconds()
 
-        if close_price is not None and close_reason == "natural_fill":
-            # Determine gross based on which side opened
+        if close_price is not None:
+            # Real fill price — either natural_fill or ttl_flatten market order
             if pos.open_side == "bid_hit":
-                # We bought at our_bid (filled on bid side), sell at our_ask
+                # We bought at open_price, selling at close_price
                 gross = (close_price - pos.open_price) * pos.contracts * 100
             else:
-                # We sold at our_ask, buy back at our_bid
+                # We sold at open_price, buying back at close_price
                 gross = (pos.open_price - close_price) * pos.contracts * 100
 
-            # Modeled slippage: delta × underlying_move × contracts × 100
+            # Slippage: delta x underlying move x contracts x 100
             underlying_move = 0.0
             if underlying_price_close and pos.underlying_price_entry:
                 underlying_move = abs(
@@ -208,7 +208,6 @@ class PositionManager:
                 )
                 slippage = abs(pos.delta_at_entry) * underlying_move * pos.contracts * 100
             else:
-                # Estimate: assume 10-second typical move
                 slippage = abs(pos.delta_at_entry) * 0.15 * pos.contracts * 100
 
             fee_open  = FEE_PER_LEG_OPEN  * pos.contracts
@@ -216,24 +215,20 @@ class PositionManager:
             net_pnl   = gross - slippage - fee_open - fee_close
             win       = net_pnl > 0
 
-            # Adverse selection detection:
-            # If we opened on bid-hit (bought) and price immediately fell,
-            # that's a seller who knew something.
+            # Adverse selection detection
             adverse = False
             if underlying_price_close and pos.underlying_price_entry:
                 if pos.open_side == "bid_hit":
-                    # We're long — adverse if underlying fell
                     adverse = (
                         underlying_price_close < pos.underlying_price_entry * 0.997
                     )
                 else:
-                    # We're short — adverse if underlying rose
                     adverse = (
                         underlying_price_close > pos.underlying_price_entry * 1.003
                     )
 
         else:
-            # TTL fired or kill switch — treat as a scratch/small loss
+            # No fill price (kill switch, error) — model as loss
             gross     = 0.0
             slippage  = abs(pos.delta_at_entry) * 0.20 * pos.contracts * 100
             fee_open  = FEE_PER_LEG_OPEN  * pos.contracts
@@ -296,14 +291,15 @@ class PositionManager:
 
     def check_ttl_expirations(
         self,
-        cancel_callback: Callable[[str, Optional[str], Optional[str]], None],
+        cancel_callback: Callable[[str, Optional[str], Optional[str]], Optional[float]],
         get_underlying_price: Callable[[str], Optional[float]],
     ) -> list[str]:
         """
         Check all open positions for TTL expiration.
-        Fires cancel_callback(fill_id, bid_order_id, ask_order_id) for expired ones.
-        Returns list of fill_ids that were TTL-cancelled.
-        Call this on a tight loop (every 1–2 seconds).
+        Fires cancel_callback(fill_id, bid_order_id, ask_order_id) which cancels
+        the unfilled leg and submits a market order to flatten the filled leg.
+        Returns list of fill_ids that were TTL-closed.
+        Call this on a tight loop (every 1-2 seconds).
         """
         now     = datetime.now(timezone.utc)
         expired = []
@@ -324,13 +320,15 @@ class PositionManager:
                 f"TTL EXPIRED: {fill_id} | {pos.contract_symbol} | "
                 f"held {(now - pos.open_time).total_seconds():.0f}s"
             )
-            cancel_callback(fill_id, pos.bid_order_id, pos.ask_order_id)
+
+            # cancel_and_flatten returns the market fill price (or None)
+            flatten_price = cancel_callback(fill_id, pos.bid_order_id, pos.ask_order_id)
 
             underlying_price = get_underlying_price(pos.symbol)
             self.close_position(
                 fill_id=fill_id,
-                close_price=None,
-                close_reason="ttl_cancel",
+                close_price=flatten_price,
+                close_reason="ttl_flatten",
                 underlying_price_close=underlying_price,
             )
             expired.append(fill_id)

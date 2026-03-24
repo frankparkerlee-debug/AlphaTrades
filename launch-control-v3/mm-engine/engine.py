@@ -416,13 +416,26 @@ class QuoteEngine:
             except Exception as e:
                 logger.error(f"Fill processing error for {sym}: {e}")
 
-    def cancel_order(
+    def cancel_and_flatten(
         self,
         fill_id: str,
         bid_order_id: Optional[str],
         ask_order_id: Optional[str],
-    ):
-        """Cancel both legs of a quote (called by TTL expiry or kill switch)."""
+    ) -> Optional[float]:
+        """
+        Cancel the unfilled leg and market-sell/buy to flatten the filled leg.
+        Called by TTL expiry or kill switch. Returns the market fill price
+        or None if no flatten was needed.
+        """
+        # Find the pending entry to know which side filled
+        with self._pending_lock:
+            entry = None
+            for sym, p in self._pending.items():
+                if p.get("fill_id") == fill_id or p.get("bid_order_id") == bid_order_id:
+                    entry = (sym, dict(p))
+                    break
+
+        # Cancel both orders first (unfilled one matters, filled is a no-op)
         for order_id in [bid_order_id, ask_order_id]:
             if order_id:
                 try:
@@ -430,6 +443,55 @@ class QuoteEngine:
                     logger.debug(f"Cancelled order {order_id}")
                 except Exception as e:
                     logger.warning(f"Cancel failed for {order_id}: {e}")
+
+        # Flatten: submit a market order on the opposite side of the fill
+        flatten_price = None
+        if entry and not self._dry_run:
+            sym, p = entry
+            has_fill = "fill_id" in p
+
+            if has_fill:
+                # Determine which side we're holding
+                try:
+                    bid_status = self._trading.get_order_by_id(p["bid_order_id"]).status
+                except Exception:
+                    bid_status = None
+
+                if bid_status == OrderStatus.FILLED:
+                    # We bought — sell to flatten
+                    flatten_side = OrderSide.SELL
+                else:
+                    # We sold — buy to flatten
+                    flatten_side = OrderSide.BUY
+
+                try:
+                    from alpaca.trading.requests import MarketOrderRequest
+                    flatten_order = self._trading.submit_order(MarketOrderRequest(
+                        symbol=sym,
+                        qty=CONTRACTS_PER_TRADE,
+                        side=flatten_side,
+                        time_in_force=TimeInForce.DAY,
+                    ))
+                    logger.info(
+                        f"Flatten order submitted: {sym} {flatten_side.name} "
+                        f"(market) | fill_id={fill_id}"
+                    )
+                    # Poll briefly for fill price (market orders fill fast)
+                    import time as _time
+                    for _ in range(5):
+                        _time.sleep(0.5)
+                        try:
+                            status = self._trading.get_order_by_id(str(flatten_order.id))
+                            if status.status == OrderStatus.FILLED:
+                                flatten_price = float(status.filled_avg_price)
+                                logger.info(
+                                    f"Flatten filled: {sym} @ ${flatten_price:.2f}"
+                                )
+                                break
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.error(f"Flatten order failed for {sym}: {e}")
 
         # Remove from pending
         with self._pending_lock:
@@ -440,6 +502,8 @@ class QuoteEngine:
             ]
             for sym in to_remove:
                 self._pending.pop(sym, None)
+
+        return flatten_price
 
     def cancel_stale_quotes(self):
         """
@@ -656,9 +720,9 @@ class Engine:
                 # 3. Cancel stale unfilled quotes (frees buying power)
                 self._quotes.cancel_stale_quotes()
 
-                # 4. Check TTL expirations (for positions with one side filled)
+                # 4. Check TTL expirations — cancel unfilled leg + market flatten
                 self._positions.check_ttl_expirations(
-                    cancel_callback=self._quotes.cancel_order,
+                    cancel_callback=self._quotes.cancel_and_flatten,
                     get_underlying_price=self._quotes._get_underlying_price,
                 )
 
