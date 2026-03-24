@@ -229,6 +229,8 @@ body::after {
 .strat-sector  { background: rgba(34,211,238,0.1); color: #22d3ee; border-bottom: 3px solid #22d3ee; }
 .strat-calendar { background: rgba(168,85,247,0.1); color: #a855f7; border-bottom: 3px solid #a855f7; }
 .strat-erput    { background: rgba(239,68,68,0.12); color: #ef4444; border-bottom: 3px solid #ef4444; }
+.strat-breakdown { background: rgba(239,68,68,0.10); color: #f87171; border-bottom: 3px solid #f87171; }
+.strat-weakness  { background: rgba(251,146,60,0.10); color: #fb923c; border-bottom: 3px solid #fb923c; }
 .strat-momentum{ background: rgba(245,158,11,0.08); color: var(--amber); border-bottom: 3px solid var(--amber); }
 .paper-only-banner {
   background: rgba(139,92,246,0.12); border: 1px solid var(--purple); border-radius: 3px;
@@ -936,6 +938,8 @@ function buildStratBanner(strategy) {
     SECTOR_ROTATION_BOUNCE:  { cls: 'strat-sector', label: 'SECTOR BOUNCE', win: '90% WIN', hold: 'SAME DAY · EXIT 2PM' },
     OVERNIGHT_CALENDAR:      { cls: 'strat-calendar', label: 'OVERNIGHT CALENDAR', win: '82% WIN', hold: 'OVERNIGHT · EXIT 9:30AM' },
     PRE_EARNINGS_PUT:        { cls: 'strat-erput', label: 'PRE-EARNINGS PUT', win: 'CONVICTION', hold: 'MULTI-DAY · HARD EXIT' },
+    BREAKDOWN_PUT:           { cls: 'strat-breakdown', label: 'BREAKDOWN PUT', win: '', hold: 'PUT · INTRADAY' },
+    RELATIVE_WEAKNESS_PUT:   { cls: 'strat-weakness', label: 'REL WEAKNESS PUT', win: '', hold: 'PUT · INTRADAY' },
   };
   const info = map[strategy];
   if (!info) {

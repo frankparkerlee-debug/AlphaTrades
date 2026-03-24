@@ -136,6 +136,11 @@ class QuoteEngine:
         account_balance   = self._get_account_balance()
         unrealized_pnl    = self._positions.get_unrealized_pnl(self._quotes)
 
+        if not self._watchlist:
+            return
+
+        logger.info(f"Quote cycle: {len(self._watchlist)} strikes on watchlist")
+
         for strike in self._watchlist:
             sym = strike.contract_symbol
 
@@ -152,6 +157,7 @@ class QuoteEngine:
             # Refresh quote
             fresh_quote = self._refresh_quote(sym)
             if fresh_quote is None:
+                logger.debug(f"No fresh quote for {sym}")
                 continue
 
             bid, ask = fresh_quote
@@ -166,10 +172,14 @@ class QuoteEngine:
             self._risk.data_fresh.update(sym)
 
             # Tape confirmation gate
-            if not self._tape.is_confirmed(sym):
-                continue
-
             bid_prints, ask_prints = self._tape.counts(sym)
+            if not self._tape.is_confirmed(sym):
+                logger.info(
+                    f"Tape not confirmed: {sym} | "
+                    f"bid_prints={bid_prints} ask_prints={ask_prints} | "
+                    f"spread=${spread:.3f} bid=${bid:.2f} ask=${ask:.2f}"
+                )
+                continue
 
             # Pre-order risk check
             ok, reason = self._risk.check_pre_order(

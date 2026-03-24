@@ -2531,6 +2531,7 @@ async function startRestPoller() {
             const stratMKT = Math.round(compositeRaw * 0.15);
             const stratTIM = Math.round(compositeRaw * 0.15);
 
+            const grade = toGrade(compositeRaw) || 'B';
             const insertRes = await db.query(`
               INSERT INTO lc_v3.signals (
                 ticker, direction, grade, status, composite_raw, signal_tier,
@@ -2539,13 +2540,13 @@ async function startRestPoller() {
                 first_seen_at, last_confirmed_at, confirmation_count,
                 peak_composite, peak_grade, composite_history, momentum_trend,
                 expires_at, created_at
-              ) VALUES ($1,$2,'A',$3,$4,'primary',$5,$6,
+              ) VALUES ($1,$2,$12,$3,$4,'primary',$5,$6,
                 $7,$8,$9,$10,$11,
-                NOW(), NOW(), 1, $4, 'A', '[]'::jsonb, 'NEW',
+                NOW(), NOW(), 1, $4, $12, '[]'::jsonb, 'NEW',
                 NOW() + INTERVAL '${expiryInterval}', NOW())
               RETURNING signal_id
             `, [sig.ticker, sig.direction, signalStatus, compositeRaw, sig.entry_price, signalNote,
-                stratPA, stratVOL, stratNEWS, stratMKT, stratTIM]);
+                stratPA, stratVOL, stratNEWS, stratMKT, stratTIM, grade]);
 
             const newSignalId = insertRes.rows[0]?.signal_id;
             console.log(`[STRATEGY] ${sig.ticker} ${sig.direction} ${sig.strategy} ${sig.confidence}% ${signalStatus === 'PAPER_ONLY' ? '(PAPER)' : ''}`);
@@ -2554,7 +2555,7 @@ async function startRestPoller() {
             if (newSignalId) {
               try {
                 const minDTE = STRATEGY_MIN_DTE[sig.strategy] ?? 0;
-                const contract = await selectOptionsContract(sig.ticker, sig.direction, 'A', sig.entry_price, 0.025, { minDTE });
+                const contract = await selectOptionsContract(sig.ticker, sig.direction, grade, sig.entry_price, 0.025, { minDTE });
                 if (contract) {
                   await db.query(`
                     UPDATE lc_v3.signals SET
@@ -2712,6 +2713,7 @@ async function startRestPoller() {
 
             const expiryInterval = `${sig.exit_within_days || 22} days`;
 
+            const preGrade = toGrade(compositeRaw) || 'B';
             await db.query(`
               INSERT INTO lc_v3.signals (
                 ticker, direction, grade, status, composite_raw, signal_tier,
@@ -2719,11 +2721,11 @@ async function startRestPoller() {
                 first_seen_at, last_confirmed_at, confirmation_count,
                 peak_composite, peak_grade, composite_history, momentum_trend,
                 expires_at, created_at
-              ) VALUES ($1,$2,'A','ACTIVE',$3,'primary',$4,$5,
-                NOW(), NOW(), 1, $3, 'A', '[]'::jsonb, 'NEW',
+              ) VALUES ($1,$2,$6,'ACTIVE',$3,'primary',$4,$5,
+                NOW(), NOW(), 1, $3, $6, '[]'::jsonb, 'NEW',
                 NOW() + INTERVAL '${expiryInterval}', NOW())
               RETURNING signal_id
-            `, [sig.ticker, sig.direction, compositeRaw, sig.entry_price, signalNote]);
+            `, [sig.ticker, sig.direction, compositeRaw, sig.entry_price, signalNote, preGrade]);
 
             console.log(`[PRE-EARNINGS] ${sig.ticker} PUT conviction=${sig.conviction_score} ER=${sig.days_to_earnings}d IV=${sig.iv_rank}%`);
           }

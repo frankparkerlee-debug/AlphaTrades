@@ -178,9 +178,11 @@ class TapeMonitor:
                 ts    = trade.timestamp
 
                 self._states[sym].record_print(price, ts)
+                logger.info(f"Tape print: {sym} @ ${price:.2f}")
 
                 # Check if this print confirmed the market
                 if self._states[sym].is_confirmed():
+                    logger.info(f"Tape CONFIRMED: {sym}")
                     for cb in self._on_confirmation_callbacks:
                         try:
                             cb(sym)
@@ -189,15 +191,24 @@ class TapeMonitor:
             except Exception as e:
                 logger.debug(f"Trade processing error: {e}")
 
-        self._stream.subscribe_trades(on_trade, *list(self._watched))
+        # Store the handler so _subscribe can reuse it for late-added symbols
+        self._trade_handler = on_trade
+
+        watched = list(self._watched)
+        if watched:
+            self._stream.subscribe_trades(on_trade, *watched)
+        else:
+            # Subscribe to handler with no symbols — symbols added later via _subscribe
+            self._stream.subscribe_trades(on_trade)
         await self._stream._run_forever()
 
     def _subscribe(self, symbols: list[str]):
         """Subscribe to additional symbols on the running stream."""
-        if self._stream and self._loop:
+        if self._stream and self._loop and hasattr(self, '_trade_handler'):
+            logger.info(f"Tape: subscribing to {len(symbols)} new symbols")
             asyncio.run_coroutine_threadsafe(
                 self._stream.subscribe_trades(
-                    lambda t: None,   # handler already registered
+                    self._trade_handler,
                     *symbols
                 ),
                 self._loop
