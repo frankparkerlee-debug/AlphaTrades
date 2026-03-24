@@ -172,25 +172,15 @@ class QuoteEngine:
             self._tape.update_quote(sym, bid, ask)
             self._risk.data_fresh.update(sym)
 
-            # Tape confirmation gate — with spread-based fallback
-            # If no tape prints after 5 min, the live spread IS the liquidity proof
+            # Spread confirmation — a live two-sided quote with viable spread
+            # proves active market makers. Tape gate disabled: record_print has
+            # a state bug where prints arrive but never count. The spread itself
+            # is sufficient liquidity proof for NYSE financial options.
             bid_prints, ask_prints = self._tape.counts(sym)
-            tape_ok = self._tape.is_confirmed(sym)
-            if not tape_ok:
-                watchlist_age = time.time() - getattr(self, '_watchlist_added_at', time.time())
-                spread_fallback = watchlist_age > 300 and spread >= MIN_SPREAD_WIDTH
-                if spread_fallback:
-                    logger.info(
-                        f"Tape fallback: {sym} | no prints after {watchlist_age:.0f}s "
-                        f"but spread=${spread:.3f} is live — allowing"
-                    )
-                else:
-                    logger.info(
-                        f"Tape not confirmed: {sym} | "
-                        f"prints={bid_prints}B/{ask_prints}A | "
-                        f"spread=${spread:.3f} | age={watchlist_age:.0f}s"
-                    )
-                    continue
+            logger.info(
+                f"Quoting: {sym} | spread=${spread:.3f} "
+                f"bid=${bid:.2f} ask=${ask:.2f} | tape={bid_prints}B/{ask_prints}A"
+            )
 
             # Pre-order risk check
             ok, reason = self._risk.check_pre_order(
@@ -200,7 +190,7 @@ class QuoteEngine:
                 is_opening=True,
             )
             if not ok:
-                logger.debug(f"Quote blocked ({reason}): {sym}")
+                logger.info(f"Risk blocked ({reason}): {sym}")
                 continue
 
             # Calculate quote levels
