@@ -44,6 +44,7 @@ from config import (
     HEARTBEAT_INTERVAL, MAX_CONCURRENT_POSITIONS,
     KILL_SWITCH_THRESHOLD, MIN_SPREAD_WIDTH,
     SCAN_START_HOUR, SCAN_START_MINUTE,
+    TTL_SECONDS,
 )
 from fill_logger import FillLogger
 from risk_controls import RiskManager
@@ -172,11 +173,19 @@ class QuoteEngine:
             self._tape.update_quote(sym, bid, ask)
             self._risk.data_fresh.update(sym)
 
-            # Spread confirmation — a live two-sided quote with viable spread
-            # proves active market makers. Tape gate disabled: record_print has
-            # a state bug where prints arrive but never count. The spread itself
-            # is sufficient liquidity proof for NYSE financial options.
+            # Tape confirmation gate
+            tape_bypass = os.getenv("TAPE_BYPASS", "false").lower() == "true"
             bid_prints, ask_prints = self._tape.counts(sym)
+
+            if tape_bypass:
+                logger.warning(
+                    f"[TAPE BYPASS] Quoting without tape confirmation on {sym}"
+                )
+            else:
+                if not self._tape.is_confirmed(sym):
+                    logger.debug(f"Tape not confirmed: {sym} ({bid_prints}B/{ask_prints}A)")
+                    continue
+
             logger.info(
                 f"Quoting: {sym} | spread=${spread:.3f} "
                 f"bid=${bid:.2f} ask=${ask:.2f} | tape={bid_prints}B/{ask_prints}A"
@@ -201,9 +210,14 @@ class QuoteEngine:
                 continue
 
             # Calculate quote levels
-            capture    = spread * SPREAD_CAPTURE_PCT
-            our_bid    = round(max(bid + 0.01, mid - capture / 2), 2)
-            our_ask    = round(min(ask - 0.01, mid + capture / 2), 2)
+            quote_mode = os.getenv("QUOTE_MODE", "penny_inside")
+            if quote_mode == "penny_inside":
+                our_bid = round(bid + 0.01, 2)
+                our_ask = round(ask - 0.01, 2)
+            else:
+                capture = spread * SPREAD_CAPTURE_PCT
+                our_bid = round(max(bid + 0.01, mid - capture / 2), 2)
+                our_ask = round(min(ask - 0.01, mid + capture / 2), 2)
 
             if our_ask <= our_bid:
                 continue
@@ -427,6 +441,42 @@ class QuoteEngine:
             for sym in to_remove:
                 self._pending.pop(sym, None)
 
+    def cancel_stale_quotes(self):
+        """
+        Cancel pending quotes (neither side filled) older than TTL_SECONDS.
+        This frees buying power consumed by unfilled DAY limit orders.
+        """
+        if self._dry_run:
+            return
+
+        now = datetime.now(timezone.utc).timestamp()
+
+        with self._pending_lock:
+            stale = []
+            for sym, p in self._pending.items():
+                # Only cancel quotes with NO fills — positions with fills
+                # are handled by position_manager.check_ttl_expirations
+                if "fill_id" in p:
+                    continue
+                submitted = datetime.fromisoformat(p["submitted_at"]).timestamp()
+                age = now - submitted
+                if age >= TTL_SECONDS:
+                    stale.append((sym, p["bid_order_id"], p["ask_order_id"], age))
+
+        for sym, bid_id, ask_id, age in stale:
+            logger.info(
+                f"Cancelling stale quote: {sym} | age={age:.0f}s "
+                f"(TTL={TTL_SECONDS}s) | freeing buying power"
+            )
+            for order_id in [bid_id, ask_id]:
+                try:
+                    self._trading.cancel_order_by_id(order_id)
+                except Exception as e:
+                    logger.warning(f"Cancel stale order {order_id}: {e}")
+
+            with self._pending_lock:
+                self._pending.pop(sym, None)
+
     def _refresh_quote(self, contract_symbol: str) -> Optional[tuple[float, float]]:
         """Get the latest bid/ask for a contract."""
         try:
@@ -603,13 +653,16 @@ class Engine:
                 # 2. Process fill events
                 self._quotes.process_fill_events()
 
-                # 3. Check TTL expirations
+                # 3. Cancel stale unfilled quotes (frees buying power)
+                self._quotes.cancel_stale_quotes()
+
+                # 4. Check TTL expirations (for positions with one side filled)
                 self._positions.check_ttl_expirations(
                     cancel_callback=self._quotes.cancel_order,
                     get_underlying_price=self._quotes._get_underlying_price,
                 )
 
-                # 4. Update unrealized P&L for kill switch
+                # 5. Update unrealized P&L for kill switch
                 unrealized = self._positions.get_unrealized_pnl(
                     self._quotes._quotes
                 )
