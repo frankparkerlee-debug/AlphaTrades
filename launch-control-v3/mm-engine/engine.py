@@ -193,13 +193,25 @@ class QuoteEngine:
                 logger.info(f"Risk blocked ({reason}): {sym}")
                 continue
 
+            # Skip expensive contracts — we're capturing spread, not trading premium.
+            # Contracts over $5 mid tie up too much buying power for the spread captured.
+            mid = (bid + ask) / 2
+            if mid > 5.0:
+                logger.debug(f"Skip expensive: {sym} mid=${mid:.2f}")
+                continue
+
             # Calculate quote levels
             capture    = spread * SPREAD_CAPTURE_PCT
-            mid        = (bid + ask) / 2
             our_bid    = round(max(bid + 0.01, mid - capture / 2), 2)
             our_ask    = round(min(ask - 0.01, mid + capture / 2), 2)
 
             if our_ask <= our_bid:
+                continue
+
+            # Check buying power before submitting — each buy costs mid × 100 × qty
+            cost_basis = our_bid * 100 * CONTRACTS_PER_TRADE
+            if cost_basis > account_balance * 0.10:
+                logger.info(f"Skip: {sym} cost=${cost_basis:.0f} > 10% of balance")
                 continue
 
             # Submit quotes
@@ -507,6 +519,13 @@ class Engine:
     def start(self):
         """Start all components and the main loop."""
         self._running = True
+
+        # Cancel all open orders on startup — free up buying power from stale orders
+        try:
+            self._trading.cancel_orders()
+            logger.info("Cancelled all open orders on startup")
+        except Exception as e:
+            logger.warning(f"Could not cancel open orders: {e}")
 
         # Start tape monitor
         self._tape.start()

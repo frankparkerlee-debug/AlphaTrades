@@ -23,7 +23,7 @@ ALPACA_PAPER_BASE_URL   = os.getenv("ALPACA_PAPER_BASE_URL", "https://paper-api.
 UNIVERSE = os.getenv("UNIVERSE", "JPM,GS,BAC,MS,WFC").split(",")
 
 # ── Strategy parameters ───────────────────────────────────────────────────────
-CONTRACTS_PER_TRADE  = int(os.getenv("CONTRACTS_PER_TRADE", 10))
+CONTRACTS_PER_TRADE  = int(os.getenv("CONTRACTS_PER_TRADE", 1))
 SPREAD_CAPTURE_PCT   = float(os.getenv("SPREAD_CAPTURE_PCT", 0.40))   # 40% of raw spread
 TARGET_DTE_MIN       = int(os.getenv("TARGET_DTE_MIN", 2))
 TARGET_DTE_MAX       = int(os.getenv("TARGET_DTE_MAX", 14))
