@@ -173,18 +173,15 @@ class QuoteEngine:
             self._tape.update_quote(sym, bid, ask)
             self._risk.data_fresh.update(sym)
 
-            # Tape confirmation gate
-            tape_bypass = os.getenv("TAPE_BYPASS", "false").lower() == "true"
+            # Tape confirmation gate — bypassed by default (tape has a known
+            # state bug where prints arrive but counts stay 0). The spread itself
+            # proves two-sided liquidity. Set TAPE_GATE=true to re-enable.
+            tape_gate = os.getenv("TAPE_GATE", "false").lower() == "true"
             bid_prints, ask_prints = self._tape.counts(sym)
 
-            if tape_bypass:
-                logger.warning(
-                    f"[TAPE BYPASS] Quoting without tape confirmation on {sym}"
-                )
-            else:
-                if not self._tape.is_confirmed(sym):
-                    logger.debug(f"Tape not confirmed: {sym} ({bid_prints}B/{ask_prints}A)")
-                    continue
+            if tape_gate and not self._tape.is_confirmed(sym):
+                logger.info(f"Tape not confirmed: {sym} ({bid_prints}B/{ask_prints}A)")
+                continue
 
             logger.info(
                 f"Quoting: {sym} | spread=${spread:.3f} "
@@ -586,9 +583,14 @@ class Engine:
     def __init__(self, dry_run: bool = False):
         self._dry_run = dry_run
 
+        _quote_mode = os.getenv("QUOTE_MODE", "penny_inside")
+        _tape_gate = os.getenv("TAPE_GATE", "false").lower() == "true"
+
         logger.info(f"{'='*60}")
         logger.info(f"  Launch Control MM — Paper Engine")
         logger.info(f"  Mode: {'DRY RUN' if dry_run else 'PAPER TRADING'}")
+        logger.info(f"  Quote mode: {_quote_mode}")
+        logger.info(f"  Tape gate: {'ON' if _tape_gate else 'OFF (bypassed)'}")
         logger.info(f"  Universe: {UNIVERSE}")
         logger.info(f"  Max positions: {MAX_CONCURRENT_POSITIONS}")
         logger.info(f"  Kill switch: ${KILL_SWITCH_THRESHOLD}")
