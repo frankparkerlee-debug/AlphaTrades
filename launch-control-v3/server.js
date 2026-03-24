@@ -2403,6 +2403,38 @@ async function startRestPoller() {
               }
             }
 
+            // ── Recent bars validation: do the last 3 bars confirm the direction? ──
+            // Skip for multiday/overnight strategies — those don't depend on intraday bar flow
+            const INTRADAY_STRATEGIES = [
+              'GAP_REVERSAL', 'GAP_UP_REVERSAL', 'SECTOR_ROTATION_BOUNCE',
+              'CAPITULATION_BOUNCE', 'BREAKDOWN_PUT', 'RELATIVE_WEAKNESS_PUT',
+            ];
+            if (INTRADAY_STRATEGIES.includes(sig.strategy)) {
+              const recentBars = intradayBarsMap[sig.ticker];
+              if (recentBars && recentBars.length >= 3) {
+                const last3 = recentBars.slice(-3);
+                if (sig.direction === 'CALL') {
+                  // CALL: need price moving up — at least 2 of last 3 bars green,
+                  // AND current price above the bar-3-ago open (net upward)
+                  const greenCount = last3.filter(b => b.c > b.o).length;
+                  const netUp = last3[2].c > last3[0].o;
+                  if (greenCount < 2 && !netUp) {
+                    console.log(`[BAR CHECK BLOCK] ${sig.ticker} ${sig.strategy} CALL — last 3 bars: ${greenCount}/3 green, net ${netUp ? 'UP' : 'DOWN'}. No confirmation.`);
+                    continue;
+                  }
+                } else if (sig.direction === 'PUT') {
+                  // PUT: need price moving down — at least 2 of last 3 bars red,
+                  // AND current price below the bar-3-ago open (net downward)
+                  const redCount = last3.filter(b => b.c < b.o).length;
+                  const netDown = last3[2].c < last3[0].o;
+                  if (redCount < 2 && !netDown) {
+                    console.log(`[BAR CHECK BLOCK] ${sig.ticker} ${sig.strategy} PUT — last 3 bars: ${redCount}/3 red, net ${netDown ? 'DOWN' : 'UP'}. No confirmation.`);
+                    continue;
+                  }
+                }
+              }
+            }
+
             // Dedup: skip if strategy signal already exists today for this ticker+direction+strategy
             const dupCheck = await db.query(`
               SELECT 1 FROM lc_v3.signals
