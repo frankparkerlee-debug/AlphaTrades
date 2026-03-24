@@ -68,18 +68,21 @@ class TapeState:
 
     def is_confirmed(self, min_prints: int = TAPE_MIN_PRINTS) -> bool:
         """
-        Returns True if two-way flow is confirmed.
-        Requires >= min_prints on BOTH bid AND ask side in the lookback window.
+        Returns True if there's recent trading activity.
+        Requires >= min_prints total (either side) in the lookback window.
+        The spread width is the primary two-way flow signal — a live $0.13+
+        bid/ask already proves active market makers on both sides.
         """
         with self._lock:
             self._prune()
             bid_count = len(self._bid_prints)
             ask_count = len(self._ask_prints)
-            confirmed = bid_count >= min_prints and ask_count >= min_prints
+            total = bid_count + ask_count
+            confirmed = total >= min_prints
             if confirmed:
-                logger.debug(
-                    f"Tape confirmed: {bid_count} bid prints, "
-                    f"{ask_count} ask prints"
+                logger.info(
+                    f"Tape confirmed: {bid_count}B/{ask_count}A "
+                    f"({total} total prints in window)"
                 )
             return confirmed
 

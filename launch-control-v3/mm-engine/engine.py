@@ -116,6 +116,7 @@ class QuoteEngine:
     def set_watchlist(self, watchlist: list[ViableStrike]):
         """Set the active watchlist from the morning scanner."""
         self._watchlist = watchlist
+        self._watchlist_added_at = time.time()
         logger.info(f"Watchlist set: {len(watchlist)} viable strikes")
 
         # Tell tape monitor to watch all contracts
@@ -171,15 +172,25 @@ class QuoteEngine:
             self._tape.update_quote(sym, bid, ask)
             self._risk.data_fresh.update(sym)
 
-            # Tape confirmation gate
+            # Tape confirmation gate — with spread-based fallback
+            # If no tape prints after 5 min, the live spread IS the liquidity proof
             bid_prints, ask_prints = self._tape.counts(sym)
-            if not self._tape.is_confirmed(sym):
-                logger.info(
-                    f"Tape not confirmed: {sym} | "
-                    f"bid_prints={bid_prints} ask_prints={ask_prints} | "
-                    f"spread=${spread:.3f} bid=${bid:.2f} ask=${ask:.2f}"
-                )
-                continue
+            tape_ok = self._tape.is_confirmed(sym)
+            if not tape_ok:
+                watchlist_age = time.time() - getattr(self, '_watchlist_added_at', time.time())
+                spread_fallback = watchlist_age > 300 and spread >= MIN_SPREAD_WIDTH
+                if spread_fallback:
+                    logger.info(
+                        f"Tape fallback: {sym} | no prints after {watchlist_age:.0f}s "
+                        f"but spread=${spread:.3f} is live — allowing"
+                    )
+                else:
+                    logger.info(
+                        f"Tape not confirmed: {sym} | "
+                        f"prints={bid_prints}B/{ask_prints}A | "
+                        f"spread=${spread:.3f} | age={watchlist_age:.0f}s"
+                    )
+                    continue
 
             # Pre-order risk check
             ok, reason = self._risk.check_pre_order(

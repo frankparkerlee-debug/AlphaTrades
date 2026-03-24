@@ -38,8 +38,8 @@ PDT_FLOOR              = float(os.getenv("PDT_FLOOR", 25000))
 PDT_ALERT_BUFFER       = float(os.getenv("PDT_ALERT_BUFFER", 26500))
 MAX_OPS_PER_SECOND     = int(os.getenv("MAX_OPS_PER_SECOND", 5))
 TTL_SECONDS            = int(os.getenv("TTL_SECONDS", 60))
-TAPE_LOOKBACK_SECONDS  = int(os.getenv("TAPE_LOOKBACK_SECONDS", 60))
-TAPE_MIN_PRINTS        = int(os.getenv("TAPE_MIN_PRINTS", 3))
+TAPE_LOOKBACK_SECONDS  = int(os.getenv("TAPE_LOOKBACK_SECONDS", 300))   # 5 min window
+TAPE_MIN_PRINTS        = int(os.getenv("TAPE_MIN_PRINTS", 1))          # any activity
 MAX_CONCURRENT_POSITIONS = int(os.getenv("MAX_CONCURRENT_POSITIONS", 8))
 
 # Dead man's switch heartbeat interval (seconds)
