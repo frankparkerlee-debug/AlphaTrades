@@ -869,10 +869,12 @@ function toggleHist(btn) {
 // ── RENDER SIGNALS ────────────────────────────────────────────────
 function render() {
   const list = signals.filter(s => {
+    // Hide unvalidated momentum signals — strategy signals only
+    const sStrat = parseStrategy(s);
+    if (!sStrat) return false;
     if (!showHist && s.status !== 'ACTIVE') return false;
     if (gradeF !== 'all' && s.grade !== gradeF) return false;
     if (stratF !== 'all') {
-      const sStrat = parseStrategy(s) || 'MOMENTUM';
       if (sStrat !== stratF) return false;
     }
     return true;
