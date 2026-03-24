@@ -51,9 +51,10 @@ export function scanRelativeWeaknessPut(
     const intradayChange = (currentPrice - todayOpen) / todayOpen;
     if (intradayChange > -0.008) continue;
 
-    // Relative weakness: stock must underperform SPY by at least 1%
+    // Relative weakness: stock must underperform SPY by at least 1.5%
+    // At 1% threshold, too many stocks qualify on slightly red market days
     const relativeWeakness = spyChange - intradayChange;
-    if (relativeWeakness < 0.01) continue;
+    if (relativeWeakness < 0.015) continue;
 
     // Must be below VWAP
     if (!vwap || vwap <= 0 || currentPrice >= vwap) continue;
@@ -144,5 +145,7 @@ export function scanRelativeWeaknessPut(
     console.log(`[REL_WEAKNESS] ${ticker} ${(intradayChange * 100).toFixed(1)}% while SPY ${(spyChange * 100).toFixed(1)}% — relWeak=${(relativeWeakness * 100).toFixed(1)}% below VWAP ${(vwapDistance * 100).toFixed(1)}% → PUT`);
   }
 
-  return signals;
+  // Cap at top 5 — if 30 stocks are weak on a green day, only the weakest matter
+  signals.sort((a, b) => b.confidence - a.confidence || (a.gap_pct || 0) - (b.gap_pct || 0));
+  return signals.slice(0, 5);
 }

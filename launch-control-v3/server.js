@@ -2381,7 +2381,26 @@ async function startRestPoller() {
             }
           }
 
+          // Contradiction filter: if same ticker has both CALL and PUT signals,
+          // keep only the higher-confidence one. Both firing = market is choppy, not directional.
+          const tickerDirections = {};
           for (const sig of allStratSignals) {
+            const key = sig.ticker;
+            if (!tickerDirections[key]) tickerDirections[key] = [];
+            tickerDirections[key].push(sig);
+          }
+          const contradictions = new Set();
+          for (const [ticker, sigs] of Object.entries(tickerDirections)) {
+            const dirs = new Set(sigs.map(s => s.direction));
+            if (dirs.has('CALL') && dirs.has('PUT')) {
+              contradictions.add(ticker);
+              console.log(`[CONTRADICTION] ${ticker} has both CALL and PUT signals — blocking both (choppy, not directional)`);
+            }
+          }
+
+          for (const sig of allStratSignals) {
+            if (contradictions.has(sig.ticker)) continue;
+
             console.log(`[STRATEGY CANDIDATE] ${sig.ticker} ${sig.direction} ${sig.strategy} confidence=${sig.confidence} entry=$${sig.entry_price}`);
 
             // ── Fakeout block: CALL bounces in downtrend with no stabilization ──

@@ -47,6 +47,11 @@ export function scanBreakdownPut(snapshots, prevCloses, spyChange, qqqChange, vo
     const intradayChange = (currentPrice - todayOpen) / todayOpen;
     if (intradayChange > -0.005) continue; // at least -0.5% from open
 
+    // Must be weaker than the market — if stock is down the same as SPY,
+    // that's just beta, not a breakdown. Require 0.5%+ underperformance.
+    const relativeWeakness = spyChange - intradayChange;
+    if (relativeWeakness < 0.005) continue;
+
     // Must be below VWAP (institutional selling pressure)
     if (!vwap || vwap <= 0) continue;
     if (currentPrice >= vwap) continue;
@@ -134,5 +139,7 @@ export function scanBreakdownPut(snapshots, prevCloses, spyChange, qqqChange, vo
     console.log(`[BREAKDOWN] ${ticker} ${(intradayChange * 100).toFixed(1)}% below VWAP ${(vwapDistance * 100).toFixed(1)}% vol=${volumeRatio?.toFixed(1)}x trend=${structure.trend} → PUT`);
   }
 
-  return signals;
+  // Cap at top 5 strongest signals — broad selloffs shouldn't flood the dashboard
+  signals.sort((a, b) => b.confidence - a.confidence || (a.gap_pct || 0) - (b.gap_pct || 0));
+  return signals.slice(0, 5);
 }
