@@ -280,8 +280,9 @@ class SpreadScalper:
             if dip_pct > -DIP_THRESHOLD:
                 continue
 
-            # Buy at mid price — fills when ask drops to our price
-            buy_price = round(mid, 2)
+            # Market buy — fills at ask. On paper, limit buys at mid NEVER fill
+            # because ask is always half-spread above mid. Market orders guarantee entry.
+            buy_price = round(ask, 2)  # estimate; actual fill will be at ask
             if buy_price <= 0:
                 continue
 
@@ -326,29 +327,28 @@ class SpreadScalper:
             if cost > account_balance * MAX_COST_PCT:
                 continue
 
-            # Submit buy
+            # Submit market buy — instant fill during confirmed dip
             logger.info(
-                f"ENTRY: {sym} | mid=${buy_price:.2f} dip={dip_pct:.3%} "
-                f"spread=${spread:.2f} | buying {CONTRACTS_PER_TRADE}x @ ${buy_price:.2f}"
+                f"ENTRY: {sym} | ask=${buy_price:.2f} dip={dip_pct:.3%} "
+                f"spread=${spread:.2f} | MARKET BUY {CONTRACTS_PER_TRADE}x"
             )
 
             if self._dry_run:
-                logger.info(f"[DRY RUN] Would buy: {sym} @ ${buy_price:.2f}")
+                logger.info(f"[DRY RUN] Would buy: {sym} @ ~${buy_price:.2f}")
                 continue
 
             try:
-                order = self._trading.submit_order(LimitOrderRequest(
+                order = self._trading.submit_order(MarketOrderRequest(
                     symbol=sym,
                     qty=CONTRACTS_PER_TRADE,
                     side=OrderSide.BUY,
                     time_in_force=TimeInForce.DAY,
-                    limit_price=buy_price,
                 ))
                 state.state = "buy_pending"
                 state.buy_order_id = str(order.id)
                 state.buy_submitted_at = time.time()
                 submitted += 1
-                logger.info(f"Buy submitted: {sym} @ ${buy_price:.2f} | order={order.id}")
+                logger.info(f"Market buy submitted: {sym} | order={order.id}")
                 time.sleep(0.3)  # throttle between submissions
             except Exception as e:
                 logger.error(f"Buy failed: {sym}: {e}")
@@ -424,6 +424,9 @@ class SpreadScalper:
 
         state.fill_id = fill_id
         state.buy_fill_price = fill_price
+        # Sell target: buy was at ask, sell fills when bid reaches target.
+        # Need bid to rise above our buy price. Target = buy + profit_target.
+        # The mean reversion bounce should carry the bid up past our entry.
         state.sell_target = round(fill_price + PROFIT_TARGET, 2)
         state.stop_price = round(fill_price - STOP_LOSS, 2)
 

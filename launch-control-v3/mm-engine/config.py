@@ -33,10 +33,10 @@ MIN_SPREAD_WIDTH     = float(os.getenv("MIN_SPREAD_WIDTH", 0.10))     # $0.10 mi
 MIN_DAILY_VOLUME     = int(os.getenv("MIN_DAILY_VOLUME", 150))
 
 # ── Scalper parameters ──────────────────────────────────────────────────────
-PROFIT_TARGET        = float(os.getenv("PROFIT_TARGET", 0.05))        # $0.05/contract = $5 per, $10 at 2 qty
-STOP_LOSS            = float(os.getenv("STOP_LOSS", 0.10))            # $0.10/contract max loss
-BUY_TTL_SECONDS      = int(os.getenv("BUY_TTL_SECONDS", 30))         # cancel unfilled buys after 30s
-SELL_TTL_SECONDS     = int(os.getenv("SELL_TTL_SECONDS", 120))        # flatten if sell doesn't fill in 2min
+PROFIT_TARGET        = float(os.getenv("PROFIT_TARGET", 0.10))        # $0.10/contract — must overcome spread + profit
+STOP_LOSS            = float(os.getenv("STOP_LOSS", 0.15))            # $0.15/contract max loss
+BUY_TTL_SECONDS      = int(os.getenv("BUY_TTL_SECONDS", 10))         # market orders fill fast, 10s is generous
+SELL_TTL_SECONDS     = int(os.getenv("SELL_TTL_SECONDS", 180))        # 3 min for mean reversion bounce
 DIP_THRESHOLD        = float(os.getenv("DIP_THRESHOLD", 0.002))       # 0.2% below rolling avg triggers entry
 PRICE_HISTORY_SECONDS = int(os.getenv("PRICE_HISTORY_SECONDS", 300))  # 5-min rolling window
 CYCLE_SECONDS        = int(os.getenv("CYCLE_SECONDS", 5))             # seconds between main loop cycles
