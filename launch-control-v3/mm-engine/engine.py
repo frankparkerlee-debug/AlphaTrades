@@ -100,16 +100,13 @@ class MomentumTracker:
             )
             data = self._stocks.get_stock_bars(req)
 
-            bars = data.get("SPY", [])
-            if not bars:
-                return False
+            # BarSet uses bracket access, not .get()
+            try:
+                bars = data["SPY"]
+            except (KeyError, TypeError, AttributeError):
+                bars = []
 
-            # bars is list of Bar objects, sorted by time
-            if hasattr(bars, '__iter__'):
-                bar_list = list(bars)
-            else:
-                bar_list = [bars]
-
+            bar_list = list(bars) if bars else []
             if not bar_list:
                 return False
 
