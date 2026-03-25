@@ -1,12 +1,13 @@
 """
-Launch Control MM — 0DTE Scanner
-Finds ATM options expiring TODAY on SPY for gamma scalping.
+Launch Control MM — 1DTE Scanner
+Finds ATM options expiring TOMORROW on SPY for gamma scalping.
+Uses 1DTE because Alpaca rejects opening positions on 0DTE contracts.
 Runs every 2 minutes to track shifting ATM strikes.
 """
 
 import re
 import logging
-from datetime import date
+from datetime import date, timedelta
 from dataclasses import dataclass
 from typing import Optional
 from alpaca.data.historical.option import OptionHistoricalDataClient
@@ -44,7 +45,7 @@ class ViableStrike:
 
     def __str__(self):
         return (
-            f"{self.symbol} ${self.strike:.0f}{self.option_type[0].upper()} 0DTE | "
+            f"{self.symbol} ${self.strike:.0f}{self.option_type[0].upper()} {self.dte}DTE | "
             f"bid=${self.bid:.2f} ask=${self.ask:.2f} spread=${self.spread:.2f} "
             f"delta={self.delta:.2f}"
         )
@@ -52,8 +53,9 @@ class ViableStrike:
 
 class ZeroDTEScanner:
     """
-    Finds ATM 0DTE calls and puts for gamma scalping.
-    Returns ViableStrike objects sorted by proximity to ATM (delta ~0.50).
+    Finds ATM 1DTE calls and puts for gamma scalping.
+    Uses 1DTE because Alpaca rejects opening positions on 0DTE contracts.
+    Returns ViableStrike objects sorted by proximity to ATM (closest strike first).
     """
 
     def __init__(self):
@@ -64,39 +66,55 @@ class ZeroDTEScanner:
             api_key=ALPACA_API_KEY, secret_key=ALPACA_API_SECRET,
         )
 
+    @staticmethod
+    def _next_expiry() -> date:
+        """Next trading day expiry (1DTE). Skips weekends."""
+        today = date.today()
+        day = today.weekday()  # Mon=0 ... Fri=4
+        if day == 4:      # Friday → Monday
+            return today + timedelta(days=3)
+        elif day == 5:    # Saturday → Monday
+            return today + timedelta(days=2)
+        elif day == 6:    # Sunday → Monday
+            return today + timedelta(days=1)
+        else:             # Mon-Thu → next day
+            return today + timedelta(days=1)
+
     def run(self, **kwargs) -> list[ViableStrike]:
-        """Scan universe for 0DTE ATM options."""
-        logger.info(f"0DTE scan starting. Universe: {UNIVERSE}")
+        """Scan universe for 1DTE ATM options."""
+        logger.info(f"1DTE scan starting. Universe: {UNIVERSE}")
         viable = []
 
         for symbol in UNIVERSE:
             try:
                 strikes = self._scan_symbol(symbol)
                 viable.extend(strikes)
-                logger.info(f"  {symbol}: {len(strikes)} 0DTE strikes found")
+                logger.info(f"  {symbol}: {len(strikes)} 1DTE strikes found")
             except Exception as e:
                 logger.error(f"  {symbol}: scan failed — {e}", exc_info=True)
 
-        # Sort by delta proximity to 0.50 (most ATM first)
-        viable.sort(key=lambda s: abs(abs(s.delta) - 0.50))
-        logger.info(f"0DTE scan complete: {len(viable)} viable strikes")
+        # Sort by strike proximity to underlying price (most ATM first)
+        # Delta is unreliable (often 0.00), so use price distance
+        viable.sort(key=lambda s: abs(s.strike - s.underlying_price))
+        logger.info(f"1DTE scan complete: {len(viable)} viable strikes")
         return viable
 
     def _scan_symbol(self, symbol: str) -> list[ViableStrike]:
-        """Find 0DTE ATM calls and puts for one symbol."""
+        """Find 1DTE ATM calls and puts for one symbol."""
         price = self._get_price(symbol)
         if not price:
             logger.warning(f"{symbol}: could not get price")
             return []
 
         atm = round(price)
-        today = date.today()
-        today_str = today.strftime("%Y-%m-%d")
+        expiry = self._next_expiry()
+        expiry_str = expiry.strftime("%Y-%m-%d")
+        dte = (expiry - date.today()).days
 
         logger.info(
             f"{symbol}: price=${price:.2f} ATM=${atm} "
             f"range=${atm - ATM_RANGE:.0f}-${atm + ATM_RANGE:.0f} "
-            f"expiry={today_str}"
+            f"expiry={expiry_str} (DTE={dte})"
         )
 
         viable = []
@@ -107,12 +125,12 @@ class ZeroDTEScanner:
                     type=opt_type,
                     strike_price_gte=str(round(atm - ATM_RANGE, 2)),
                     strike_price_lte=str(round(atm + ATM_RANGE, 2)),
-                    expiration_date_gte=today_str,
-                    expiration_date_lte=today_str,
+                    expiration_date_gte=expiry_str,
+                    expiration_date_lte=expiry_str,
                 ))
 
                 if not chain:
-                    logger.info(f"  {symbol} {opt_type}: no 0DTE chain")
+                    logger.info(f"  {symbol} {opt_type}: no 1DTE chain")
                     continue
 
                 logger.info(f"  {symbol} {opt_type}: {len(chain)} contracts in chain")
@@ -157,8 +175,8 @@ class ZeroDTEScanner:
                         symbol=symbol,
                         contract_symbol=sym,
                         strike=strike_val,
-                        expiry=today,
-                        dte=0,
+                        expiry=expiry,
+                        dte=dte,
                         option_type=opt_type,
                         underlying_price=price,
                         otm_pct=otm_pct,

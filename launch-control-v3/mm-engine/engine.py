@@ -1,7 +1,8 @@
 """
-Launch Control MM v3 — 0DTE Gamma Scalper
+Launch Control MM v3 — 1DTE Gamma Scalper
 
-Scalps ATM SPY options expiring today using short-term momentum signals.
+Scalps ATM SPY options expiring tomorrow using short-term momentum signals.
+Uses 1DTE because Alpaca rejects opening positions on 0DTE contracts.
 
 Strategy:
   1. Monitor SPY 1-minute bars for momentum (2 consecutive up/down bars)
@@ -10,8 +11,8 @@ Strategy:
   4. Sell at profit target ($0.20) or flatten on stop/TTL
 
 Why this works on Alpaca paper:
-  - 0DTE ATM options have $0.01-$0.10 spreads (minimal entry cost)
-  - Extreme gamma: $0.50 SPY move = $0.10-$0.50 option move
+  - 1DTE ATM options have $0.01-$0.10 spreads (minimal entry cost)
+  - High gamma: $0.50 SPY move = $0.10-$0.30 option move
   - Market orders guarantee fills
   - Momentum gives directional edge for 30-90 second holds
 
@@ -174,7 +175,7 @@ class MomentumTracker:
 
 class GammaScalper:
     """
-    0DTE gamma scalping engine.
+    1DTE gamma scalping engine.
 
     State machine:
       IDLE → BUY_PENDING → HOLDING → IDLE
@@ -228,7 +229,7 @@ class GammaScalper:
         calls = [s for s in strikes if s.option_type == "call"]
         puts = [s for s in strikes if s.option_type == "put"]
 
-        # Best = closest delta to 0.50
+        # Best = closest strike to underlying price (already sorted by scanner)
         self._call_strike = calls[0] if calls else None
         self._put_strike = puts[0] if puts else None
 
@@ -380,7 +381,7 @@ class GammaScalper:
             strike=strike.strike,
             expiry=str(strike.expiry),
             option_type=strike.option_type,
-            dte_at_entry=0,
+            dte_at_entry=strike.dte,
             underlying_price_entry=underlying_px,
             bid_at_entry=strike.bid,
             ask_at_entry=strike.ask,
@@ -630,7 +631,7 @@ class Engine:
         self._dry_run = dry_run
 
         logger.info(f"{'=' * 60}")
-        logger.info(f"  Launch Control MM v3 — 0DTE Gamma Scalper")
+        logger.info(f"  Launch Control MM v3 — 1DTE Gamma Scalper")
         logger.info(f"  Mode: {'DRY RUN' if dry_run else 'PAPER TRADING'}")
         logger.info(f"  Universe: {UNIVERSE}")
         logger.info(f"  Contracts: {CONTRACTS_PER_TRADE}")
@@ -761,13 +762,13 @@ class Engine:
             time.sleep(CYCLE_SECONDS)
 
     def _run_scan(self):
-        """Scan for 0DTE ATM strikes."""
+        """Scan for 1DTE ATM strikes."""
         try:
             strikes = self._scanner.run()
             if strikes:
                 self._scalper.set_watchlist(strikes)
             else:
-                logger.warning("Scan: no 0DTE strikes found")
+                logger.warning("Scan: no 1DTE strikes found")
         except Exception as e:
             logger.error(f"Scan failed: {e}", exc_info=True)
 
@@ -801,7 +802,7 @@ class Engine:
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Launch Control MM v3 — 0DTE Gamma Scalper")
+    parser = argparse.ArgumentParser(description="Launch Control MM v3 — 1DTE Gamma Scalper")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
