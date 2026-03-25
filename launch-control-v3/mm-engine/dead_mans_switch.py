@@ -76,13 +76,23 @@ def read_heartbeat() -> dict | None:
 
 def flatten_all_positions(client: TradingClient, positions_data: list[dict]):
     """
-    Emergency flatten: close all open option positions at aggressive limit prices.
-    Uses limit orders at bid - $0.05 rather than pure market orders
-    to avoid crisis-period market order slippage.
+    Emergency flatten: cancel all open orders first, then close all positions.
+    Must cancel before flattening — Alpaca rejects sells on contracts with
+    pending buy orders (wash trade detection).
     """
     logger.critical("DEAD MAN'S SWITCH FIRING — FLATTENING ALL POSITIONS")
 
-    # Get all open option positions from Alpaca
+    # Step 1: Cancel ALL open orders first — clears pending buys/sells
+    # that would trigger wash trade rejection on the flatten
+    try:
+        client.cancel_orders()
+        logger.critical("Cancelled all open orders before flatten.")
+        # Brief pause for cancels to settle at Alpaca
+        time.sleep(1)
+    except Exception as e:
+        logger.critical(f"Could not cancel open orders: {e}")
+
+    # Step 2: Get all open option positions from Alpaca
     try:
         positions = client.get_all_positions()
         option_positions = [p for p in positions if p.asset_class == "us_option"]
@@ -91,15 +101,13 @@ def flatten_all_positions(client: TradingClient, positions_data: list[dict]):
             logger.info("No open option positions found. Nothing to flatten.")
             return
 
-        logger.critical(f"Found {len(option_positions)} option positions to flatten.")
+        logger.critical(f"DEAD MAN'S SWITCH FIRING — flattening {len(option_positions)} positions")
 
         for pos in option_positions:
             try:
                 qty  = abs(int(pos.qty))
                 side = OrderSide.SELL if float(pos.qty) > 0 else OrderSide.BUY
 
-                # Get current bid to set aggressive limit
-                # Use market order as absolute fallback
                 order = MarketOrderRequest(
                     symbol=pos.symbol,
                     qty=qty,
