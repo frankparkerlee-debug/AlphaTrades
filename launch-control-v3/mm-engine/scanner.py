@@ -1,21 +1,20 @@
 """
-Launch Control MM — Morning Scanner
-Runs at 9:00 AM ET. Scans universe for viable strikes.
-A strike must pass ALL four filters to be added to the active watchlist.
+Launch Control MM — 0DTE Scanner
+Finds ATM options expiring TODAY on SPY for gamma scalping.
+Runs every 2 minutes to track shifting ATM strikes.
 """
 
+import re
 import logging
-from datetime import datetime, date, timedelta, timezone
+from datetime import date
 from dataclasses import dataclass
 from typing import Optional
 from alpaca.data.historical.option import OptionHistoricalDataClient
-from alpaca.data.requests import OptionSnapshotRequest, OptionChainRequest, OptionLatestQuoteRequest
+from alpaca.data.requests import OptionChainRequest, OptionLatestQuoteRequest
 from alpaca.data.historical.stock import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestQuoteRequest
 from config import (
-    ALPACA_API_KEY, ALPACA_API_SECRET, UNIVERSE,
-    TARGET_DTE_MIN, TARGET_DTE_MAX, OTM_PCT_MIN, OTM_PCT_MAX,
-    MIN_SPREAD_WIDTH, MIN_DAILY_VOLUME, CONTRACTS_PER_TRADE
+    ALPACA_API_KEY, ALPACA_API_SECRET, UNIVERSE, ATM_RANGE,
 )
 
 logger = logging.getLogger("scanner")
@@ -23,13 +22,13 @@ logger = logging.getLogger("scanner")
 
 @dataclass
 class ViableStrike:
-    """A strike that has passed all morning filters."""
+    """A 0DTE strike ready for gamma scalping."""
     symbol:          str
     contract_symbol: str
     strike:          float
     expiry:          date
     dte:             int
-    option_type:     str   # always "put" — puts are structurally wider
+    option_type:     str       # "call" or "put"
     underlying_price: float
     otm_pct:         float
     bid:             float
@@ -39,261 +38,145 @@ class ViableStrike:
     iv:              float
     delta:           float
     volume_est:      int
-    # Optimal quote levels (calculated from spread)
-    our_bid:         float
+    our_bid:         float     # not used for scalping, kept for compat
     our_ask:         float
     capture_target:  float
 
     def __str__(self):
         return (
-            f"{self.symbol} ${self.strike:.2f}P {self.expiry} "
-            f"({self.dte}DTE) | spread=${self.spread:.3f} | "
-            f"quote {self.our_bid:.3f}/{self.our_ask:.3f}"
+            f"{self.symbol} ${self.strike:.0f}{self.option_type[0].upper()} 0DTE | "
+            f"bid=${self.bid:.2f} ask=${self.ask:.2f} spread=${self.spread:.2f} "
+            f"delta={self.delta:.2f}"
         )
 
 
-class MorningScanner:
+class ZeroDTEScanner:
     """
-    Scans the universe each morning and returns a list of viable strikes
-    ready to quote.
+    Finds ATM 0DTE calls and puts for gamma scalping.
+    Returns ViableStrike objects sorted by proximity to ATM (delta ~0.50).
     """
 
     def __init__(self):
         self._option_client = OptionHistoricalDataClient(
-            api_key=ALPACA_API_KEY,
-            secret_key=ALPACA_API_SECRET,
+            api_key=ALPACA_API_KEY, secret_key=ALPACA_API_SECRET,
         )
         self._stock_client = StockHistoricalDataClient(
-            api_key=ALPACA_API_KEY,
-            secret_key=ALPACA_API_SECRET,
+            api_key=ALPACA_API_KEY, secret_key=ALPACA_API_SECRET,
         )
 
-    def run(self, capture_pct: float = 0.40) -> list[ViableStrike]:
-        """
-        Run the full morning scan.
-        Returns list of ViableStrike objects sorted by spread width (widest first).
-        """
-        logger.info(f"Morning scan starting. Universe: {UNIVERSE}")
+    def run(self, **kwargs) -> list[ViableStrike]:
+        """Scan universe for 0DTE ATM options."""
+        logger.info(f"0DTE scan starting. Universe: {UNIVERSE}")
         viable = []
 
         for symbol in UNIVERSE:
             try:
-                strikes = self._scan_symbol(symbol, capture_pct)
+                strikes = self._scan_symbol(symbol)
                 viable.extend(strikes)
-                logger.info(f"  {symbol}: {len(strikes)} viable strikes")
+                logger.info(f"  {symbol}: {len(strikes)} 0DTE strikes found")
             except Exception as e:
-                logger.error(f"  {symbol}: scan failed — {e}")
+                logger.error(f"  {symbol}: scan failed — {e}", exc_info=True)
 
-        # Sort by: puts first (put bias), then widest spreads
-        viable.sort(key=lambda s: (0 if s.option_type == 'put' else 1, -s.spread))
-
-        logger.info(
-            f"Scan complete. {len(viable)} viable strikes across "
-            f"{len(UNIVERSE)} symbols."
-        )
+        # Sort by delta proximity to 0.50 (most ATM first)
+        viable.sort(key=lambda s: abs(abs(s.delta) - 0.50))
+        logger.info(f"0DTE scan complete: {len(viable)} viable strikes")
         return viable
 
-    def _scan_symbol(self, symbol: str, capture_pct: float) -> list[ViableStrike]:
-        """Scan one symbol for viable put AND call strikes (put bias)."""
-        viable = []
-
-        # Get current underlying price
-        underlying_price = self._get_underlying_price(symbol)
-        if underlying_price is None:
-            logger.warning(f"{symbol}: could not get underlying price")
+    def _scan_symbol(self, symbol: str) -> list[ViableStrike]:
+        """Find 0DTE ATM calls and puts for one symbol."""
+        price = self._get_price(symbol)
+        if not price:
+            logger.warning(f"{symbol}: could not get price")
             return []
 
-        # Calculate expiry range
+        atm = round(price)
         today = date.today()
-        expiry_min = today + timedelta(days=TARGET_DTE_MIN)
-        expiry_max = today + timedelta(days=TARGET_DTE_MAX)
+        today_str = today.strftime("%Y-%m-%d")
 
-        # Scan both puts and calls
-        for option_type in ["put", "call"]:
-            # OTM strike range depends on direction:
-            #   Puts:  strikes BELOW price (1-3% below)
-            #   Calls: strikes ABOVE price (1-3% above)
-            if option_type == "put":
-                strike_min = underlying_price * (1 - OTM_PCT_MAX)
-                strike_max = underlying_price * (1 - OTM_PCT_MIN)
-            else:
-                strike_min = underlying_price * (1 + OTM_PCT_MIN)
-                strike_max = underlying_price * (1 + OTM_PCT_MAX)
+        logger.info(
+            f"{symbol}: price=${price:.2f} ATM=${atm} "
+            f"range=${atm - ATM_RANGE:.0f}-${atm + ATM_RANGE:.0f} "
+            f"expiry={today_str}"
+        )
 
+        viable = []
+        for opt_type in ["call", "put"]:
             try:
-                request = OptionChainRequest(
+                chain = self._option_client.get_option_chain(OptionChainRequest(
                     underlying_symbol=symbol,
-                    type=option_type,
-                    strike_price_gte=str(round(strike_min, 2)),
-                    strike_price_lte=str(round(strike_max, 2)),
-                    expiration_date_gte=expiry_min.strftime("%Y-%m-%d"),
-                    expiration_date_lte=expiry_max.strftime("%Y-%m-%d"),
-                )
-                logger.info(
-                    f"{symbol} {option_type.upper()}: price=${underlying_price:.2f} "
-                    f"strikes=${strike_min:.2f}-${strike_max:.2f} "
-                    f"expiry={expiry_min}..{expiry_max}"
-                )
-                chain = self._option_client.get_option_chain(request)
+                    type=opt_type,
+                    strike_price_gte=str(round(atm - ATM_RANGE, 2)),
+                    strike_price_lte=str(round(atm + ATM_RANGE, 2)),
+                    expiration_date_gte=today_str,
+                    expiration_date_lte=today_str,
+                ))
 
                 if not chain:
-                    logger.info(f"{symbol} {option_type.upper()}: empty chain")
+                    logger.info(f"  {symbol} {opt_type}: no 0DTE chain")
                     continue
 
-                logger.info(f"{symbol} {option_type.upper()}: {len(chain)} contracts in chain")
+                logger.info(f"  {symbol} {opt_type}: {len(chain)} contracts in chain")
 
-                # Chain returns greeks/IV but NOT quotes — fetch quotes separately
-                contract_syms = list(chain.keys())
+                # Batch fetch fresh quotes
                 quotes = {}
                 try:
-                    quote_req = OptionLatestQuoteRequest(symbol_or_symbols=contract_syms)
-                    quotes = self._option_client.get_option_latest_quote(quote_req)
-                    logger.info(f"{symbol} {option_type.upper()}: got quotes for {len(quotes)} contracts")
-                except Exception as qe:
-                    logger.error(f"{symbol} {option_type.upper()}: quote fetch failed: {qe}")
+                    req = OptionLatestQuoteRequest(symbol_or_symbols=list(chain.keys()))
+                    quotes = self._option_client.get_option_latest_quote(req)
+                except Exception as e:
+                    logger.error(f"  Quote fetch failed: {e}")
+                    continue
 
-                for contract_sym, snapshot in chain.items():
-                    # Attach quote data to snapshot for evaluation
-                    quote = quotes.get(contract_sym)
-                    strike = self._evaluate_strike(
-                        symbol, contract_sym, snapshot,
-                        underlying_price, today, capture_pct,
-                        quote=quote,
+                for sym, snapshot in chain.items():
+                    q = quotes.get(sym)
+                    if not q:
+                        continue
+
+                    bid = float(q.bid_price or 0)
+                    ask = float(q.ask_price or 0)
+                    if bid <= 0 or ask <= bid:
+                        continue
+
+                    spread = ask - bid
+                    mid = (bid + ask) / 2
+                    iv = float(snapshot.implied_volatility or 0)
+                    delta = float(snapshot.greeks.delta if snapshot.greeks else 0)
+
+                    strike_val = self._parse_strike(sym)
+                    if not strike_val:
+                        continue
+
+                    otm_pct = abs(strike_val - price) / price
+
+                    logger.info(
+                        f"    {sym}: strike=${strike_val:.0f} "
+                        f"bid=${bid:.2f} ask=${ask:.2f} spread=${spread:.2f} "
+                        f"delta={delta:.2f} iv={iv:.2f}"
                     )
-                    if strike is not None:
-                        viable.append(strike)
+
+                    viable.append(ViableStrike(
+                        symbol=symbol,
+                        contract_symbol=sym,
+                        strike=strike_val,
+                        expiry=today,
+                        dte=0,
+                        option_type=opt_type,
+                        underlying_price=price,
+                        otm_pct=otm_pct,
+                        bid=bid, ask=ask,
+                        spread=spread, mid=mid,
+                        iv=iv, delta=delta,
+                        volume_est=0,
+                        our_bid=bid, our_ask=ask,
+                        capture_target=0,
+                    ))
 
             except Exception as e:
-                logger.error(f"{symbol} {option_type} chain error: {e}", exc_info=True)
+                logger.error(f"  {symbol} {opt_type} error: {e}", exc_info=True)
 
         return viable
 
-    def _evaluate_strike(
-        self,
-        symbol: str,
-        contract_sym: str,
-        snapshot,
-        underlying_price: float,
-        today: date,
-        capture_pct: float,
-        quote=None,
-    ) -> Optional[ViableStrike]:
-        """
-        Apply all four filters to a single contract.
-        Returns ViableStrike if it passes, None if it fails.
-        """
-        try:
-            # Extract quote data — prefer separately fetched quote, fall back to snapshot
-            q = quote or snapshot.latest_quote
-            if not q:
-                logger.info(f"    {contract_sym}: no quote data")
-                return None
-
-            bid = float(q.bid_price or 0)
-            ask = float(q.ask_price or 0)
-
-            if bid <= 0 or ask <= 0 or ask <= bid:
-                logger.info(f"    {contract_sym}: bad quote bid=${bid:.2f} ask=${ask:.2f}")
-                return None
-
-            spread = ask - bid
-            mid    = (bid + ask) / 2
-
-            # Extract greeks
-            iv    = float(snapshot.implied_volatility or 0)
-            delta = float(snapshot.greeks.delta if snapshot.greeks else 0)
-
-            # Parse from contract symbol (format: JPM251121P00285000)
-            strike_val, expiry_dt, dte, parsed_type = self._parse_contract(contract_sym, today)
-            if strike_val is None:
-                return None
-
-            # Calculate OTM %: puts are OTM below price, calls are OTM above price
-            if parsed_type == 'put':
-                otm_pct = (underlying_price - strike_val) / underlying_price
-            else:
-                otm_pct = (strike_val - underlying_price) / underlying_price
-
-            # Log raw contract data for diagnostics
-            # Note: chain endpoint doesn't return daily_bar or open_interest
-            volume_est = int(snapshot.daily_bar.volume) if hasattr(snapshot, 'daily_bar') and snapshot.daily_bar else 0
-            oi = int(snapshot.open_interest) if hasattr(snapshot, 'open_interest') and snapshot.open_interest else -1  # -1 = unavailable
-            logger.info(
-                f"  {contract_sym}: strike=${strike_val:.2f} {dte}DTE "
-                f"bid=${bid:.2f} ask=${ask:.2f} spread=${spread:.3f} "
-                f"OTM={otm_pct:.2%} OI={oi} vol={volume_est}"
-            )
-
-            # ── Filter 1: Spread width ────────────────────────────────────────
-            if spread < MIN_SPREAD_WIDTH:
-                logger.info(f"    REJECT spread: ${spread:.3f} < ${MIN_SPREAD_WIDTH}")
-                return None
-
-            # ── Filter 2: Strike in OTM range ────────────────────────────────
-            if not (OTM_PCT_MIN <= otm_pct <= OTM_PCT_MAX):
-                logger.info(f"    REJECT OTM: {otm_pct:.2%} not in {OTM_PCT_MIN:.0%}-{OTM_PCT_MAX:.0%}")
-                return None
-
-            # ── Filter 3: DTE range ───────────────────────────────────────────
-            if not (TARGET_DTE_MIN <= dte <= TARGET_DTE_MAX):
-                logger.info(f"    REJECT DTE: {dte} not in {TARGET_DTE_MIN}-{TARGET_DTE_MAX}")
-                return None
-
-            # ── Filter 4: Liquidity check (volume + open interest) ──────────
-            # Chain endpoint may not return OI/volume — skip filter if unavailable.
-            # Spread width is the primary liquidity signal: wide spread + live
-            # bid/ask = active two-way market.
-            if oi >= 0:  # -1 means unavailable
-                if oi < 50:
-                    logger.info(f"    REJECT OI: {oi} < 50")
-                    return None
-                if 0 < volume_est < MIN_DAILY_VOLUME and oi < 200:
-                    logger.info(f"    REJECT volume: vol={volume_est} OI={oi}")
-                    return None
-            else:
-                logger.info(f"    {contract_sym}: OI/volume unavailable, using spread as liquidity proxy")
-
-            # ── Calculate optimal quote levels ────────────────────────────────
-            capture    = spread * capture_pct
-            our_bid    = mid - capture / 2
-            our_ask    = mid + capture / 2
-
-            # Validate quote is inside market
-            our_bid = max(our_bid, bid + 0.01)
-            our_ask = min(our_ask, ask - 0.01)
-
-            if our_ask <= our_bid:
-                return None
-
-            capture_target = our_ask - our_bid
-
-            return ViableStrike(
-                symbol=symbol,
-                contract_symbol=contract_sym,
-                strike=strike_val,
-                expiry=expiry_dt,
-                dte=dte,
-                option_type=parsed_type,
-                underlying_price=underlying_price,
-                otm_pct=otm_pct,
-                bid=bid,
-                ask=ask,
-                spread=spread,
-                mid=mid,
-                iv=iv,
-                delta=delta,
-                volume_est=volume_est,
-                our_bid=round(our_bid, 2),
-                our_ask=round(our_ask, 2),
-                capture_target=round(capture_target, 3),
-            )
-
-        except Exception as e:
-            logger.debug(f"  Error evaluating {contract_sym}: {e}")
-            return None
-
-    def _get_underlying_price(self, symbol: str) -> Optional[float]:
-        """Get current best bid/ask mid for the underlying."""
+    def _get_price(self, symbol: str) -> Optional[float]:
+        """Get current mid price for underlying."""
         try:
             req = StockLatestQuoteRequest(symbol_or_symbols=symbol)
             quote = self._stock_client.get_stock_latest_quote(req)
@@ -301,32 +184,16 @@ class MorningScanner:
                 q = quote[symbol]
                 return (float(q.bid_price) + float(q.ask_price)) / 2
         except Exception as e:
-            logger.error(f"Could not get price for {symbol}: {e}")
+            logger.error(f"Price fetch {symbol}: {e}")
         return None
 
-    def _parse_contract(
-        self, contract_sym: str, today: date
-    ) -> tuple[Optional[float], Optional[date], int, str]:
-        """
-        Parse strike, expiry, DTE, and option type from Alpaca contract symbol.
-        Format: JPM251121P00285000
-                 ↑sym ↑YYMMDD ↑type ↑strike (× 1000)
-        """
-        try:
-            import re
-            m = re.match(r'^([A-Z]{1,6})(\d{6})([PC])(\d{8})$', contract_sym)
-            if not m:
-                return None, None, 0, ''
+    def _parse_strike(self, contract_sym: str) -> Optional[float]:
+        """Parse strike from OCC symbol: SPY250325C00567000 → 567.0"""
+        m = re.match(r'^[A-Z]{1,6}\d{6}[PC](\d{8})$', contract_sym)
+        if m:
+            return int(m.group(1)) / 1000.0
+        return None
 
-            date_str    = m.group(2)
-            option_type = 'put' if m.group(3) == 'P' else 'call'
-            strike_str  = m.group(4)
 
-            expiry = datetime.strptime(date_str, "%y%m%d").date()
-            strike = int(strike_str) / 1000.0
-            dte    = (expiry - today).days
-
-            return strike, expiry, dte, option_type
-
-        except Exception:
-            return None, None, 0, ''
+# Alias for backward compat with engine imports
+MorningScanner = ZeroDTEScanner
