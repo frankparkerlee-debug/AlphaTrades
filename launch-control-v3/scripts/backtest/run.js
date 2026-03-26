@@ -9,6 +9,7 @@ import { fetchAllDataFromDB } from './data-fetcher-db.js';
 import { classifyAllNews } from './news-scorer.js';
 import { replayAllDays } from './bar-replay.js';
 import { simulateAll } from './pnl-simulator.js';
+import { runMonteCarlo } from './monte-carlo.js';
 import { query } from '../../src/data/db.js';
 
 /**
@@ -81,7 +82,14 @@ export async function runBacktest(startDate, endDate, accountSize = 7500, ticker
   const results = simulateAll(signals, data.rawMinuteBars);
 
   // 6. Build results object
-  return buildResults(results, config);
+  const backtestOutput = buildResults(results, config);
+
+  // 7. Monte Carlo simulation
+  console.log('[BACKTEST] Running Monte Carlo simulation (10K iterations)...');
+  backtestOutput.monteCarlo = runMonteCarlo(backtestOutput);
+  console.log(`[BACKTEST] Monte Carlo complete. P(profit)=${backtestOutput.monteCarlo.base?.probability?.profit}%`);
+
+  return backtestOutput;
 }
 
 function buildEmptyResults(config) {

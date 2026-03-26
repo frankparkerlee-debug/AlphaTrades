@@ -760,6 +760,32 @@ app.get('/backtest', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'backtest.html'));
 });
 
+// Serve Monte Carlo dashboard
+app.get('/monte-carlo', (req, res) => {
+  res.sendFile(join(__dirname, 'public', 'monte-carlo.html'));
+});
+
+// Get Monte Carlo results (from latest backtest that includes MC data)
+app.get('/api/backtest/monte-carlo', async (req, res) => {
+  try {
+    const result = await db.query(
+      "SELECT results->'monteCarlo' as mc, results->'config' as config, results->'summary' as summary, run_date, created_at FROM lc_v3.backtest_results ORDER BY created_at DESC LIMIT 1"
+    );
+    if (result.rows.length === 0 || !result.rows[0].mc) {
+      return res.json({ results: null, lastRun: null, message: 'No Monte Carlo results yet. Run a backtest first.' });
+    }
+    res.json({
+      monteCarlo: result.rows[0].mc,
+      config:     result.rows[0].config,
+      summary:    result.rows[0].summary,
+      lastRun:    result.rows[0].created_at?.toISOString(),
+      runDate:    result.rows[0].run_date,
+    });
+  } catch (err) {
+    res.json({ results: null, error: err.message });
+  }
+});
+
 // Get latest backtest results
 app.get('/api/backtest', async (req, res) => {
   try {
