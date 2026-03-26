@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Launch Control v3 — Strategy Validation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg0:#060a0f;--bg1:#0b1118;--bg2:#111a24;--bg3:#182030;
+  --border:#1e2d3d;--border2:#243547;
+  --amber:#f59e0b;--amber2:#fbbf24;--green:#10b981;--green2:#34d399;
+  --red:#ef4444;--blue:#3b82f6;--purple:#8b5cf6;--cyan:#06b6d4;
+  --text1:#e2e8f0;--text2:#a8b8c8;--text3:#6b7f94;--text4:#3d5068;
+  --mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg0);color:var(--text1);font-family:var(--sans);font-size:13px}
+body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.025) 2px,rgba(0,0,0,.025) 4px)}
+::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:var(--bg0)}::-webkit-scrollbar-thumb{background:var(--border2)}
+
+#header{position:sticky;top:0;z-index:100;display:flex;align-items:center;justify-content:space-between;padding:0 16px;height:44px;background:var(--bg1);border-bottom:1px solid var(--border)}
+.logo{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:13px;font-weight:700;letter-spacing:3px;color:var(--amber)}
+.logo-dot{width:7px;height:7px;border-radius:50%;background:var(--purple)}
+.nav-links{display:flex;gap:12px}
+.nav-link{font-family:var(--mono);font-size:10px;color:var(--text3);text-decoration:none;letter-spacing:1px}
+.nav-link:hover{color:var(--amber)}
+
+/* Tabs */
+.tabs{display:flex;gap:0;border-bottom:1px solid var(--border);background:var(--bg1);padding:0 16px;overflow-x:auto}
+.tab{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:1.5px;color:var(--text3);padding:10px 16px;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap}
+.tab:hover{color:var(--text1)}
+.tab.active{color:var(--amber);border-bottom-color:var(--amber)}
+
+.container{max-width:1200px;margin:0 auto;padding:16px}
+.tab-content{display:none}.tab-content.active{display:block}
+
+/* Common */
+.stat-row{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.stat{background:var(--bg2);border:1px solid var(--border);border-radius:5px;padding:10px 16px;min-width:100px;flex:1}
+.stat-label{font-size:8px;font-weight:700;letter-spacing:1.5px;color:var(--text3);text-transform:uppercase;margin-bottom:4px}
+.stat-value{font-family:var(--mono);font-size:18px;font-weight:700;color:var(--amber)}
+.stat-sub{font-family:var(--mono);font-size:9px;color:var(--text3);margin-top:2px}
+.section{background:var(--bg1);border:1px solid var(--border);border-radius:6px;padding:16px;margin-bottom:16px}
+.section-title{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:2px;color:var(--text3);margin-bottom:12px}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+.grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:16px}
+@media(max-width:700px){.grid-2,.grid-3{grid-template-columns:1fr}}
+.data-table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11px}
+.data-table th{text-align:left;padding:6px 8px;font-size:8px;font-weight:700;letter-spacing:1px;color:var(--text3);border-bottom:1px solid var(--border);text-transform:uppercase}
+.data-table td{padding:5px 8px;border-bottom:1px solid var(--bg3);color:var(--text2)}
+.data-table tr:hover td{background:var(--bg2)}
+.pos{color:var(--green)}.neg{color:var(--red)}
+.gauge-bar{height:24px;background:var(--bg3);border-radius:4px;overflow:hidden;position:relative;margin:4px 0}
+.gauge-fill{height:100%;border-radius:4px 0 0 4px}
+.gauge-label{position:absolute;right:8px;top:50%;transform:translateY(-50%);font-family:var(--mono);font-size:11px;font-weight:700;color:var(--text1)}
+.chart-svg{width:100%}
+.badge{display:inline-block;padding:2px 8px;border-radius:3px;font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.5px}
+.badge-green{background:rgba(16,185,129,.15);color:var(--green);border:1px solid rgba(16,185,129,.3)}
+.badge-red{background:rgba(239,68,68,.15);color:var(--red);border:1px solid rgba(239,68,68,.3)}
+.badge-amber{background:rgba(245,158,11,.15);color:var(--amber);border:1px solid rgba(245,158,11,.3)}
+.badge-purple{background:rgba(139,92,246,.15);color:var(--purple);border:1px solid rgba(139,92,246,.3)}
+.verdict{font-family:var(--mono);font-size:14px;font-weight:700;padding:12px 16px;border-radius:5px;margin-bottom:16px}
+.verdict-robust{background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.3);color:var(--green)}
+.verdict-moderate{background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);color:var(--amber)}
+.verdict-fragile{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:var(--red)}
+.empty{text-align:center;padding:60px 20px;color:var(--text3)}
+.empty-text{font-family:var(--mono);font-size:12px;letter-spacing:1px;margin-bottom:8px}
+</style>
+</head>
+<body>
+
+<div id="header">
+  <div class="logo"><div class="logo-dot"></div>LAUNCH CONTROL — VALIDATION</div>
+  <div class="nav-links">
+    <a href="/backtest" class="nav-link">BACKTEST</a>
+    <a href="/" class="nav-link">DASHBOARD</a>
+  </div>
+</div>
+
+<div class="tabs" id="tabs">
+  <div class="tab active" data-tab="overview">OVERVIEW</div>
+  <div class="tab" data-tab="monte-carlo">MONTE CARLO</div>
+  <div class="tab" data-tab="walk-forward">WALK-FORWARD</div>
+  <div class="tab" data-tab="regime">REGIME STRESS</div>
+  <div class="tab" data-tab="sensitivity">SENSITIVITY</div>
+  <div class="tab" data-tab="paper">PAPER P&L</div>
+</div>
+
+<div class="container">
+  <div class="tab-content active" id="tc-overview"><div class="empty"><div class="empty-text">LOADING...</div></div></div>
+  <div class="tab-content" id="tc-monte-carlo"></div>
+  <div class="tab-content" id="tc-walk-forward"></div>
+  <div class="tab-content" id="tc-regime"></div>
+  <div class="tab-content" id="tc-sensitivity"></div>
+  <div class="tab-content" id="tc-paper"></div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const fmt=n=>n>=0?`+$${Math.abs(n).toLocaleString()}`:`-$${Math.abs(n).toLocaleString()}`;
+
+// Tab switching
+document.querySelectorAll('.tab').forEach(t=>{
+  t.onclick=()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    $('tc-'+t.dataset.tab).classList.add('active');
+  };
+});
+
+// Handle URL hash
+if(location.hash){
+  const tab=location.hash.slice(1);
+  const el=document.querySelector(`[data-tab="${tab}"]`);
+  if(el)el.click();
+}
+
+async function load(){
+  const [vRes,pRes]=await Promise.all([
+    fetch('/api/backtest/validation').then(r=>r.json()).catch(()=>null),
+    fetch('/api/paper/summary').then(r=>r.json()).catch(()=>null),
+  ]);
+  if(!vRes||!vRes.summary){
+    $('tc-overview').innerHTML='<div class="empty"><div class="empty-text">NO VALIDATION DATA</div><div style="margin-top:8px;font-size:11px;color:var(--text3)">Run a backtest first from <a href="/backtest" style="color:var(--amber)">/backtest</a></div></div>';
+    return;
+  }
+  renderOverview(vRes);
+  renderMonteCarlo(vRes);
+  renderWalkForward(vRes);
+  renderRegime(vRes);
+  renderSensitivity(vRes);
+  renderPaper(pRes);
+}
+
+// ── OVERVIEW TAB ────────────────────────────────────────────────────────────
+function renderOverview(d){
+  const s=d.summary;const mc=d.monteCarlo;const wf=d.walkForward;const rs=d.regimeStress;const sens=d.sensitivity;
+  let h='';
+
+  // Verdicts row
+  h+=`<div class="stat-row">`;
+  if(wf?.summary?.verdict)h+=verdictCard('WALK-FORWARD',wf.summary.verdict,wf.summary.verdictDetail);
+  if(rs?.verdict)h+=verdictCard('REGIME STRESS',rs.verdict,rs.verdictDetail);
+  if(sens?.robustness?.verdict)h+=verdictCard('PARAM SENSITIVITY',sens.robustness.verdict,sens.robustness.verdictDetail);
+  h+=`</div>`;
+
+  // Key stats
+  h+=`<div class="stat-row">
+    <div class="stat"><div class="stat-label">SIGNALS</div><div class="stat-value">${s.totalSignals}</div><div class="stat-sub">${s.signalsPerDay}/day</div></div>
+    <div class="stat"><div class="stat-label">WIN RATE</div><div class="stat-value">${s.winRate}%</div></div>
+    <div class="stat"><div class="stat-label">TOTAL P&L</div><div class="stat-value ${s.totalPnlDollars>=0?'pos':'neg'}" style="color:${s.totalPnlDollars>=0?'var(--green)':'var(--red)'}">${fmt(s.totalPnlDollars)}</div></div>
+    <div class="stat"><div class="stat-label">PROFIT FACTOR</div><div class="stat-value">${s.profitFactor}</div></div>
+    <div class="stat"><div class="stat-label">MAX DRAWDOWN</div><div class="stat-value neg" style="font-size:16px">${fmt(s.maxDrawdownDollars)}</div></div>
+  </div>`;
+
+  if(mc?.base){
+    h+=`<div class="stat-row">
+      <div class="stat"><div class="stat-label">P(PROFIT) MC</div><div class="stat-value ${mc.base.probability.profit>=50?'pos':'neg'}" style="color:${mc.base.probability.profit>=50?'var(--green)':'var(--red)'}">${mc.base.probability.profit}%</div></div>
+      <div class="stat"><div class="stat-label">MC MEDIAN P&L</div><div class="stat-value ${mc.base.pnl.median>=0?'pos':'neg'}" style="color:${mc.base.pnl.median>=0?'var(--green)':'var(--red)'}">${fmt(mc.base.pnl.median)}</div></div>
+      <div class="stat"><div class="stat-label">SHARPE</div><div class="stat-value" style="color:var(--cyan)">${mc.tradeStats?.sharpe||'--'}</div></div>
+      <div class="stat"><div class="stat-label">KELLY</div><div class="stat-value" style="color:var(--cyan)">${mc.tradeStats?.kellyPct||'--'}%</div></div>
+      <div class="stat"><div class="stat-label">OOS CONSISTENCY</div><div class="stat-value">${wf?.summary?.consistency||'--'}%</div></div>
+    </div>`;
+  }
+
+  // Equity curve
+  if(d.equityCurve?.length>0){
+    h+=`<div class="section"><div class="section-title">EQUITY CURVE</div>${renderEquityCurve(d.equityCurve)}</div>`;
+  }
+
+  h+=`<div style="font-family:var(--mono);font-size:9px;color:var(--text4);margin-top:8px">Last run: ${d.lastRun?new Date(d.lastRun).toLocaleString():'unknown'} | ${d.config?.tradingDays||'?'} trading days | $${(d.config?.accountSize||0).toLocaleString()} account</div>`;
+  $('tc-overview').innerHTML=h;
+}
+
+function verdictCard(title,verdict,detail){
+  const cls=verdict==='ROBUST'||verdict==='ALL-WEATHER'?'verdict-robust':verdict==='MODERATE'||verdict==='CONDITIONAL'?'verdict-moderate':'verdict-fragile';
+  return`<div class="stat" style="flex:1"><div class="stat-label">${title}</div><div class="verdict ${cls}" style="margin-top:4px;font-size:12px;padding:8px">${verdict}<div style="font-size:9px;font-weight:400;margin-top:4px;color:var(--text2)">${detail}</div></div></div>`;
+}
+
+// ── MONTE CARLO TAB ─────────────────────────────────────────────────────────
+function renderMonteCarlo(d){
+  const mc=d.monteCarlo;if(!mc?.base){$('tc-monte-carlo').innerHTML=noData();return}
+  const b=mc.base;const st=mc.stress;const ts=mc.tradeStats;const cfg=mc.config;
+  let h=`<div style="font-family:var(--mono);font-size:9px;color:var(--text3);letter-spacing:1px;margin-bottom:12px">${cfg.iterations.toLocaleString()} SIMULATIONS | ${cfg.simDays} DAYS | ${cfg.signalCount} TRADES</div>`;
+
+  h+=`<div class="stat-row">
+    <div class="stat"><div class="stat-label">P(PROFIT)</div><div class="stat-value ${b.probability.profit>=50?'pos':'neg'}" style="color:${b.probability.profit>=50?'var(--green)':'var(--red)'}">${b.probability.profit}%</div></div>
+    <div class="stat"><div class="stat-label">MEDIAN P&L</div><div class="stat-value ${b.pnl.median>=0?'pos':'neg'}" style="color:${b.pnl.median>=0?'var(--green)':'var(--red)'}">${fmt(b.pnl.median)}</div></div>
+    <div class="stat"><div class="stat-label">5TH %ILE</div><div class="stat-value neg" style="color:var(--red)">${fmt(b.pnl.percentiles[5])}</div></div>
+    <div class="stat"><div class="stat-label">95TH %ILE</div><div class="stat-value pos" style="color:var(--green)">${fmt(b.pnl.percentiles[95])}</div></div>
+    <div class="stat"><div class="stat-label">P(RUIN)</div><div class="stat-value ${b.probability.ruin<5?'':'neg'}" style="color:${b.probability.ruin<5?'var(--green)':'var(--red)'}">${b.probability.ruin}%</div></div>
+  </div>`;
+
+  // Fan chart
+  if(b.paths?.length>0)h+=`<div class="section"><div class="section-title">SIMULATION PATHS</div>${renderFanChart(b.paths,cfg.simDays)}</div>`;
+
+  // Histogram
+  if(b.histogram)h+=`<div class="section"><div class="section-title">P&L DISTRIBUTION</div>${renderHistogram(b.histogram)}</div>`;
+
+  // Risk metrics + percentiles
+  h+=`<div class="grid-2">`;
+  h+=`<div class="section"><div class="section-title">RISK METRICS</div><table class="data-table">
+    <tr><td>Sharpe</td><td style="text-align:right" class="${ts.sharpe>0?'pos':'neg'}">${ts.sharpe}</td></tr>
+    <tr><td>Sortino</td><td style="text-align:right" class="${ts.sortino>0?'pos':'neg'}">${ts.sortino}</td></tr>
+    <tr><td>Profit Factor</td><td style="text-align:right">${ts.profitFactor}</td></tr>
+    <tr><td>Expectancy</td><td style="text-align:right" class="${ts.expectancy>=0?'pos':'neg'}">${fmt(ts.expectancy)}</td></tr>
+    <tr><td>Kelly %</td><td style="text-align:right">${ts.kellyPct}%</td></tr>
+    <tr><td>Win Rate</td><td style="text-align:right">${ts.winRate}%</td></tr>
+    <tr><td>Avg Win</td><td style="text-align:right" class="pos">${fmt(ts.avgWin)}</td></tr>
+    <tr><td>Avg Loss</td><td style="text-align:right" class="neg">${fmt(ts.avgLoss)}</td></tr>
+    <tr><td>Mean Max DD</td><td style="text-align:right" class="neg">${fmt(b.drawdown.mean)}</td></tr>
+  </table></div>`;
+
+  h+=`<div class="section"><div class="section-title">P&L PERCENTILES</div><table class="data-table">
+    <tr><th>%ile</th><th style="text-align:right">P&L</th><th style="text-align:right">% Acct</th></tr>
+    ${Object.entries(b.pnl.percentiles).map(([p,v])=>`<tr><td>${p}th</td><td style="text-align:right" class="${v>=0?'pos':'neg'}">${fmt(v)}</td><td style="text-align:right" class="${v>=0?'pos':'neg'}">${(v/cfg.accountSize*100).toFixed(1)}%</td></tr>`).join('')}
+  </table></div>`;
+  h+=`</div>`;
+
+  // Stress tests
+  if(st){
+    h+=`<div class="section"><div class="section-title">STRESS TESTS</div><div class="grid-3">`;
+    if(st.winRateDrop10)h+=stressCard('WIN RATE -10%',st.winRateDrop10);
+    if(st.winRateDrop20)h+=stressCard('WIN RATE -20%',st.winRateDrop20);
+    if(st.widerSpreads)h+=stressCard('WIDER SPREADS',st.widerSpreads);
+    h+=`</div></div>`;
+  }
+
+  $('tc-monte-carlo').innerHTML=h;
+}
+
+function stressCard(title,d){
+  return`<div class="section" style="margin:0"><div class="section-title" style="color:var(--red)">${title}</div><table class="data-table">
+    <tr><td>Median</td><td style="text-align:right" class="${d.pnl.median>=0?'pos':'neg'}">${fmt(d.pnl.median)}</td></tr>
+    <tr><td>P(Profit)</td><td style="text-align:right">${d.probability.profit}%</td></tr>
+    <tr><td>P(Ruin)</td><td style="text-align:right" class="${d.probability.ruin>5?'neg':''}">${d.probability.ruin}%</td></tr>
+  </table></div>`;
+}
+
+// ── WALK-FORWARD TAB ────────────────────────────────────────────────────────
+function renderWalkForward(d){
+  const wf=d.walkForward;if(!wf||wf.error){$('tc-walk-forward').innerHTML=noData(wf?.error);return}
+  const s=wf.summary;
+  let h='';
+
+  const cls=s.verdict==='ROBUST'?'verdict-robust':s.verdict==='MODERATE'?'verdict-moderate':'verdict-fragile';
+  h+=`<div class="verdict ${cls}">${s.verdict}: ${s.verdictDetail}</div>`;
+
+  h+=`<div class="stat-row">
+    <div class="stat"><div class="stat-label">TRAIN WIN RATE</div><div class="stat-value">${s.avgTrainWinRate}%</div><div class="stat-sub">in-sample avg</div></div>
+    <div class="stat"><div class="stat-label">TEST WIN RATE</div><div class="stat-value ${s.avgTestWinRate>=s.avgTrainWinRate*.85?'pos':'neg'}" style="color:${s.avgTestWinRate>=s.avgTrainWinRate*.85?'var(--green)':'var(--red)'}">${s.avgTestWinRate}%</div><div class="stat-sub">out-of-sample avg</div></div>
+    <div class="stat"><div class="stat-label">WR DEGRADATION</div><div class="stat-value ${s.winRateDegradation>=.85?'':'neg'}" style="color:${s.winRateDegradation>=.85?'var(--green)':s.winRateDegradation>=.7?'var(--amber)':'var(--red)'}">${s.winRateDegradation}x</div><div class="stat-sub">1.0 = no loss</div></div>
+    <div class="stat"><div class="stat-label">CONSISTENCY</div><div class="stat-value">${s.consistency}%</div><div class="stat-sub">${s.profitableWindows}/${s.totalWindows} profitable</div></div>
+    <div class="stat"><div class="stat-label">TRAIN AVG P&L</div><div class="stat-value ${s.avgTrainPnl>=0?'pos':'neg'}" style="color:${s.avgTrainPnl>=0?'var(--green)':'var(--red)'}; font-size:14px">${fmt(s.avgTrainPnl)}</div></div>
+    <div class="stat"><div class="stat-label">TEST AVG P&L</div><div class="stat-value ${s.avgTestPnl>=0?'pos':'neg'}" style="color:${s.avgTestPnl>=0?'var(--green)':'var(--red)'}; font-size:14px">${fmt(s.avgTestPnl)}</div></div>
+  </div>`;
+
+  // Windows table
+  h+=`<div class="section"><div class="section-title">WALK-FORWARD WINDOWS</div><table class="data-table">
+    <tr><th>#</th><th>Train Period</th><th>Test Period</th><th style="text-align:right">Train WR</th><th style="text-align:right">Test WR</th><th style="text-align:right">Train P&L</th><th style="text-align:right">Test P&L</th><th style="text-align:right">Test PF</th></tr>
+    ${wf.windows.map(w=>`<tr>
+      <td>${w.window}</td><td style="font-size:9px">${w.trainPeriod}</td><td style="font-size:9px">${w.testPeriod}</td>
+      <td style="text-align:right">${w.train.winRate}%</td>
+      <td style="text-align:right" class="${w.test.winRate>=w.train.winRate*.8?'pos':'neg'}">${w.test.winRate}%</td>
+      <td style="text-align:right" class="${w.train.totalPnl>=0?'pos':'neg'}">${fmt(w.train.totalPnl)}</td>
+      <td style="text-align:right" class="${w.test.totalPnl>=0?'pos':'neg'}">${fmt(w.test.totalPnl)}</td>
+      <td style="text-align:right">${w.test.profitFactor}</td>
+    </tr>`).join('')}
+  </table></div>`;
+
+  // OOS equity curve
+  if(wf.oosCurve?.length>0){
+    h+=`<div class="section"><div class="section-title">OUT-OF-SAMPLE CUMULATIVE P&L</div>${renderOOSCurve(wf.oosCurve)}</div>`;
+  }
+
+  // Grade stability
+  if(wf.byGrade&&Object.keys(wf.byGrade).length>0){
+    h+=`<div class="section"><div class="section-title">GRADE STABILITY (FIRST HALF vs SECOND HALF)</div><table class="data-table">
+      <tr><th>Grade</th><th style="text-align:right">1st Half WR</th><th style="text-align:right">2nd Half WR</th><th style="text-align:right">1st Avg P&L</th><th style="text-align:right">2nd Avg P&L</th><th>Stable?</th></tr>
+      ${Object.entries(wf.byGrade).map(([g,v])=>`<tr>
+        <td style="font-weight:700">${g}</td>
+        <td style="text-align:right">${v.firstHalf.winRate}%</td>
+        <td style="text-align:right" class="${v.secondHalf.winRate>=v.firstHalf.winRate*.8?'pos':'neg'}">${v.secondHalf.winRate}%</td>
+        <td style="text-align:right" class="${v.firstHalf.avgPnl>=0?'pos':'neg'}">${fmt(v.firstHalf.avgPnl)}</td>
+        <td style="text-align:right" class="${v.secondHalf.avgPnl>=0?'pos':'neg'}">${fmt(v.secondHalf.avgPnl)}</td>
+        <td>${v.stable?'<span class="badge badge-green">YES</span>':'<span class="badge badge-red">NO</span>'}</td>
+      </tr>`).join('')}
+    </table></div>`;
+  }
+
+  $('tc-walk-forward').innerHTML=h;
+}
+
+// ── REGIME STRESS TAB ───────────────────────────────────────────────────────
+function renderRegime(d){
+  const rs=d.regimeStress;if(!rs||rs.error){$('tc-regime').innerHTML=noData(rs?.error);return}
+  let h='';
+
+  const cls=rs.verdict==='ALL-WEATHER'?'verdict-robust':rs.verdict==='CONDITIONAL'?'verdict-moderate':'verdict-fragile';
+  h+=`<div class="verdict ${cls}">${rs.verdict}: ${rs.verdictDetail}</div>`;
+
+  // Regime tables
+  const sections=[
+    {key:'direction',title:'BY DIRECTION'},
+    {key:'grade',title:'BY GRADE'},
+    {key:'strategy',title:'BY STRATEGY'},
+    {key:'timeOfDay',title:'BY TIME OF DAY'},
+    {key:'exitType',title:'BY EXIT TYPE'},
+    {key:'marketRegime',title:'BY MARKET REGIME'},
+    {key:'compositeVsOutcome',title:'COMPOSITE SCORE VS OUTCOME'},
+  ];
+
+  h+=`<div class="grid-2">`;
+  for(const sec of sections){
+    const data=rs.regimes?.[sec.key];
+    if(!data||data.length===0)continue;
+    h+=`<div class="section"><div class="section-title">${sec.title}</div><table class="data-table">
+      <tr><th>Segment</th><th style="text-align:right">N</th><th style="text-align:right">Win%</th><th style="text-align:right">Avg P&L</th><th style="text-align:right">Total</th><th style="text-align:right">PF</th></tr>
+      ${data.map(r=>`<tr>
+        <td>${r.label||r.compositeRange||''}</td>
+        <td style="text-align:right">${r.signals}</td>
+        <td style="text-align:right">${r.winRate}%</td>
+        <td style="text-align:right" class="${r.avgPnl>=0?'pos':'neg'}">${fmt(r.avgPnl)}</td>
+        <td style="text-align:right" class="${r.totalPnl>=0?'pos':'neg'}">${fmt(r.totalPnl)}</td>
+        <td style="text-align:right">${r.profitFactor}</td>
+      </tr>`).join('')}
+    </table></div>`;
+  }
+  h+=`</div>`;
+
+  // Clustering
+  if(rs.regimes?.clustering){
+    const c=rs.regimes.clustering;
+    h+=`<div class="section"><div class="section-title">LOSS CLUSTERING & STREAKS</div>
+      <div class="stat-row">
+        <div class="stat"><div class="stat-label">MAX LOSING STREAK</div><div class="stat-value ${rs.regimes?.streaks?.maxLosingDays>=4?'neg':''}" style="color:${rs.regimes?.streaks?.maxLosingDays>=4?'var(--red)':'var(--amber)'}">${rs.regimes?.streaks?.maxLosingDays||0}d</div></div>
+        <div class="stat"><div class="stat-label">HEAVY LOSS DAYS</div><div class="stat-value">${c.heavyLossDays}</div><div class="stat-sub">${c.heavyLossDaysPct}% of days</div></div>
+        <div class="stat"><div class="stat-label">AVG DAILY P&L</div><div class="stat-value ${c.avgDailyPnl>=0?'pos':'neg'}" style="color:${c.avgDailyPnl>=0?'var(--green)':'var(--red)'}; font-size:14px">${fmt(c.avgDailyPnl)}</div></div>
+        <div class="stat"><div class="stat-label">DAILY STDDEV</div><div class="stat-value" style="font-size:14px;color:var(--text2)">${fmt(c.dailyPnlStdDev)}</div></div>
+      </div>
+    </div>`;
+  }
+
+  $('tc-regime').innerHTML=h;
+}
+
+// ── SENSITIVITY TAB ─────────────────────────────────────────────────────────
+function renderSensitivity(d){
+  const s=d.sensitivity;if(!s||s.error){$('tc-sensitivity').innerHTML=noData(s?.error);return}
+  let h='';
+
+  const r=s.robustness;
+  const cls=r.verdict==='ROBUST'?'verdict-robust':r.verdict==='MODERATE'?'verdict-moderate':'verdict-fragile';
+  h+=`<div class="verdict ${cls}">${r.verdict}: ${r.verdictDetail}</div>`;
+
+  h+=`<div class="stat-row">
+    <div class="stat"><div class="stat-label">ROBUSTNESS</div><div class="stat-value">${r.robustnessPct}%</div><div class="stat-sub">${r.profitableVariations}/${r.totalVariations} profitable</div></div>
+    <div class="stat"><div class="stat-label">BASELINE P&L</div><div class="stat-value ${s.baseline.totalPnl>=0?'pos':'neg'}" style="color:${s.baseline.totalPnl>=0?'var(--green)':'var(--red)'}">${fmt(s.baseline.totalPnl)}</div></div>
+    <div class="stat"><div class="stat-label">BASELINE WR</div><div class="stat-value">${s.baseline.winRate}%</div></div>
+    <div class="stat"><div class="stat-label">BASELINE PF</div><div class="stat-value">${s.baseline.profitFactor}</div></div>
+  </div>`;
+
+  // Threshold sensitivity
+  if(s.thresholdSensitivity){
+    h+=`<div class="section"><div class="section-title">GRADE THRESHOLD SENSITIVITY</div>
+    <div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-bottom:8px">Shifting all grade thresholds (A+ >= 83, A >= 73, etc.) by N points</div>
+    <table class="data-table">
+      <tr><th>Shift</th><th style="text-align:right">Signals</th><th style="text-align:right">Win Rate</th><th style="text-align:right">Total P&L</th><th style="text-align:right">PF</th></tr>
+      ${s.thresholdSensitivity.map(t=>`<tr ${t.shift==='0'?'style="background:var(--bg2)"':''}>
+        <td>${t.shift==='0'?'BASELINE':t.shift}</td>
+        <td style="text-align:right">${t.signals}</td>
+        <td style="text-align:right">${t.winRate}%</td>
+        <td style="text-align:right" class="${t.totalPnl>=0?'pos':'neg'}">${fmt(t.totalPnl)}</td>
+        <td style="text-align:right">${t.profitFactor}</td>
+      </tr>`).join('')}
+    </table></div>`;
+  }
+
+  h+=`<div class="grid-2">`;
+
+  // Grade filter
+  if(s.gradeFilterSensitivity){
+    h+=`<div class="section"><div class="section-title">MINIMUM GRADE FILTER</div><table class="data-table">
+      <tr><th>Filter</th><th style="text-align:right">N</th><th style="text-align:right">WR</th><th style="text-align:right">P&L</th><th style="text-align:right">PF</th></tr>
+      ${s.gradeFilterSensitivity.map(g=>`<tr>
+        <td>${g.label}</td><td style="text-align:right">${g.signals}</td>
+        <td style="text-align:right">${g.winRate}%</td>
+        <td style="text-align:right" class="${g.totalPnl>=0?'pos':'neg'}">${fmt(g.totalPnl)}</td>
+        <td style="text-align:right">${g.profitFactor}</td>
+      </tr>`).join('')}
+    </table></div>`;
+  }
+
+  // Win rate sensitivity
+  if(s.winFlipSensitivity){
+    h+=`<div class="section"><div class="section-title">WIN RATE DEGRADATION</div>
+    <div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-bottom:8px">If X% of wins flip to losses</div>
+    <table class="data-table">
+      <tr><th>Flip %</th><th style="text-align:right">WR</th><th style="text-align:right">P&L</th><th style="text-align:right">PF</th></tr>
+      ${s.winFlipSensitivity.map(w=>`<tr>
+        <td>${w.flipRate}</td>
+        <td style="text-align:right">${w.winRate}%</td>
+        <td style="text-align:right" class="${w.totalPnl>=0?'pos':'neg'}">${fmt(w.totalPnl)}</td>
+        <td style="text-align:right">${w.profitFactor}</td>
+      </tr>`).join('')}
+    </table></div>`;
+  }
+  h+=`</div>`;
+
+  // Pillar impact
+  if(s.pillarImpact&&Object.keys(s.pillarImpact).length>0){
+    h+=`<div class="section"><div class="section-title">PILLAR SCORE IMPACT (WHICH PILLARS MATTER?)</div><table class="data-table">
+      <tr><th>Pillar</th><th style="text-align:right">High WR</th><th style="text-align:right">Low WR</th><th style="text-align:right">Delta</th><th style="text-align:right">High P&L</th><th style="text-align:right">Low P&L</th></tr>
+      ${Object.entries(s.pillarImpact).map(([p,v])=>`<tr>
+        <td style="text-transform:uppercase">${p}</td>
+        <td style="text-align:right">${v.high.winRate}%</td>
+        <td style="text-align:right">${v.low.winRate}%</td>
+        <td style="text-align:right" class="${v.delta>0?'pos':'neg'}">${v.delta>0?'+':''}${v.delta.toFixed(1)}%</td>
+        <td style="text-align:right" class="${v.high.totalPnl>=0?'pos':'neg'}">${fmt(v.high.totalPnl)}</td>
+        <td style="text-align:right" class="${v.low.totalPnl>=0?'pos':'neg'}">${fmt(v.low.totalPnl)}</td>
+      </tr>`).join('')}
+    </table></div>`;
+  }
+
+  // Composite buckets
+  if(s.compositeBuckets?.length>0){
+    h+=`<div class="section"><div class="section-title">COMPOSITE SCORE VS OUTCOME</div><table class="data-table">
+      <tr><th>Range</th><th style="text-align:right">N</th><th style="text-align:right">Win%</th><th style="text-align:right">Avg P&L</th><th style="text-align:right">PF</th></tr>
+      ${s.compositeBuckets.map(b=>`<tr>
+        <td>${b.range}</td><td style="text-align:right">${b.signals}</td>
+        <td style="text-align:right">${b.winRate}%</td>
+        <td style="text-align:right" class="${b.avgPnl>=0?'pos':'neg'}">${fmt(b.avgPnl)}</td>
+        <td style="text-align:right">${b.profitFactor}</td>
+      </tr>`).join('')}
+    </table></div>`;
+  }
+
+  $('tc-sensitivity').innerHTML=h;
+}
+
+// ── PAPER P&L TAB ───────────────────────────────────────────────────────────
+function renderPaper(d){
+  if(!d||d.error){$('tc-paper').innerHTML=noData(d?.error||'No paper trading data');return}
+  const s=d.summary;
+  let h='';
+
+  if(!s||parseInt(s.total)===0){
+    $('tc-paper').innerHTML='<div class="empty"><div class="empty-text">NO PAPER TRADES YET</div><div style="font-size:11px;color:var(--text3)">Paper trades auto-open when signals fire during market hours.</div></div>';
+    return;
+  }
+
+  h+=`<div class="stat-row">
+    <div class="stat"><div class="stat-label">TOTAL TRADES</div><div class="stat-value">${s.total}</div><div class="stat-sub">${s.auto_count} auto / ${s.manual_count} manual</div></div>
+    <div class="stat"><div class="stat-label">OPEN</div><div class="stat-value" style="color:var(--cyan)">${s.open_count}</div></div>
+    <div class="stat"><div class="stat-label">WIN RATE</div><div class="stat-value">${s.win_rate||0}%</div><div class="stat-sub">${s.wins}W / ${s.losses}L</div></div>
+    <div class="stat"><div class="stat-label">AVG P&L</div><div class="stat-value ${parseFloat(s.avg_pnl||0)>=0?'pos':'neg'}" style="color:${parseFloat(s.avg_pnl||0)>=0?'var(--green)':'var(--red)'}">${parseFloat(s.avg_pnl||0).toFixed(1)}%</div></div>
+    <div class="stat"><div class="stat-label">TOTAL P&L</div><div class="stat-value ${parseFloat(s.total_pnl_dollars||0)>=0?'pos':'neg'}" style="color:${parseFloat(s.total_pnl_dollars||0)>=0?'var(--green)':'var(--red)'}">${fmt(Math.round(parseFloat(s.total_pnl_dollars||0)))}</div></div>
+    <div class="stat"><div class="stat-label">BEST / WORST</div><div class="stat-value" style="font-size:12px"><span class="pos">${parseFloat(s.best_trade||0).toFixed(1)}%</span> / <span class="neg">${parseFloat(s.worst_trade||0).toFixed(1)}%</span></div></div>
+  </div>`;
+
+  // By strategy
+  if(d.byStrategy?.length>0){
+    h+=`<div class="grid-2">`;
+    h+=`<div class="section"><div class="section-title">BY STRATEGY</div><table class="data-table">
+      <tr><th>Strategy</th><th style="text-align:right">N</th><th style="text-align:right">WR</th><th style="text-align:right">Avg</th><th style="text-align:right">Total</th></tr>
+      ${d.byStrategy.map(r=>`<tr>
+        <td style="font-size:9px">${r.strategy||'—'}</td>
+        <td style="text-align:right">${r.trades}</td>
+        <td style="text-align:right">${r.win_rate||0}%</td>
+        <td style="text-align:right" class="${parseFloat(r.avg_pnl||0)>=0?'pos':'neg'}">${parseFloat(r.avg_pnl||0).toFixed(1)}%</td>
+        <td style="text-align:right" class="${parseFloat(r.total_pnl||0)>=0?'pos':'neg'}">${fmt(Math.round(parseFloat(r.total_pnl||0)))}</td>
+      </tr>`).join('')}
+    </table></div>`;
+
+    // By grade
+    if(d.byGrade?.length>0){
+      h+=`<div class="section"><div class="section-title">BY GRADE</div><table class="data-table">
+        <tr><th>Grade</th><th style="text-align:right">N</th><th style="text-align:right">WR</th><th style="text-align:right">Avg</th><th style="text-align:right">Total</th></tr>
+        ${d.byGrade.map(r=>`<tr>
+          <td style="font-weight:700">${r.grade||'—'}</td>
+          <td style="text-align:right">${r.trades}</td>
+          <td style="text-align:right">${r.win_rate||0}%</td>
+          <td style="text-align:right" class="${parseFloat(r.avg_pnl||0)>=0?'pos':'neg'}">${parseFloat(r.avg_pnl||0).toFixed(1)}%</td>
+          <td style="text-align:right" class="${parseFloat(r.total_pnl||0)>=0?'pos':'neg'}">${fmt(Math.round(parseFloat(r.total_pnl||0)))}</td>
+        </tr>`).join('')}
+      </table></div>`;
+    }
+    h+=`</div>`;
+  }
+
+  // Recent trades
+  if(d.recentTrades?.length>0){
+    h+=`<div class="section" style="max-height:400px;overflow-y:auto"><div class="section-title">RECENT CLOSED TRADES</div><table class="data-table">
+      <tr><th>Time</th><th>Ticker</th><th>Dir</th><th>Grade</th><th>Strategy</th><th style="text-align:right">P&L</th><th style="text-align:right">Hold</th><th>Exit</th><th>Type</th></tr>
+      ${d.recentTrades.map(t=>`<tr>
+        <td style="font-size:9px">${t.exit_time?new Date(t.exit_time).toLocaleDateString():''}</td>
+        <td>${t.ticker}</td>
+        <td>${t.direction}</td>
+        <td style="font-weight:700">${t.grade||''}</td>
+        <td style="font-size:9px">${(t.strategy||'').replace(/_/g,' ')}</td>
+        <td style="text-align:right" class="${parseFloat(t.final_pnl_pct||0)>=0?'pos':'neg'}">${t.final_pnl_pct!=null?parseFloat(t.final_pnl_pct).toFixed(1)+'%':'—'}</td>
+        <td style="text-align:right">${t.hold_minutes?Math.round(t.hold_minutes)+'m':'—'}</td>
+        <td style="font-size:9px">${t.exit_reason||''}</td>
+        <td>${t.auto_traded?'<span class="badge badge-purple">AUTO</span>':'<span class="badge badge-amber">MANUAL</span>'}</td>
+      </tr>`).join('')}
+    </table></div>`;
+  }
+
+  $('tc-paper').innerHTML=h;
+}
+
+// ── SVG RENDERERS ───────────────────────────────────────────────────────────
+function renderEquityCurve(curve){
+  const W=1100,H=200,pad={t:15,r:30,b:25,l:55};
+  const pw=W-pad.l-pad.r,ph=H-pad.t-pad.b;
+  const vals=curve.map(c=>c.cumPnl);
+  let yMin=Math.min(0,...vals),yMax=Math.max(0,...vals);
+  const yR=Math.max(1,yMax-yMin);
+  const x=i=>pad.l+i/(curve.length-1)*pw;
+  const y=v=>pad.t+(yMax-v)/yR*ph;
+  let svg=`<svg class="chart-svg" viewBox="0 0 ${W} ${H}">`;
+  svg+=`<line x1="${pad.l}" y1="${y(0)}" x2="${W-pad.r}" y2="${y(0)}" stroke="var(--border2)" stroke-width="1" stroke-dasharray="4,3"/>`;
+  const pts=curve.map((c,i)=>`${x(i)},${y(c.cumPnl)}`).join(' ');
+  const last=vals[vals.length-1];
+  svg+=`<polyline points="${pts}" fill="none" stroke="${last>=0?'var(--green)':'var(--red)'}" stroke-width="2"/>`;
+  svg+=`</svg>`;return svg;
+}
+
+function renderFanChart(paths,days){
+  const W=1100,H=250,pad={t:15,r:30,b:25,l:55};
+  const pw=W-pad.l-pad.r,ph=H-pad.t-pad.b;
+  let yMin=0,yMax=0;
+  for(const p of paths)for(const v of p){yMin=Math.min(yMin,v);yMax=Math.max(yMax,v)}
+  const yR=Math.max(1,yMax-yMin);
+  const x=i=>pad.l+i/days*pw;
+  const y=v=>pad.t+(yMax-v)/yR*ph;
+  let svg=`<svg class="chart-svg" viewBox="0 0 ${W} ${H}">`;
+  svg+=`<line x1="${pad.l}" y1="${y(0)}" x2="${W-pad.r}" y2="${y(0)}" stroke="var(--border2)" stroke-width="1" stroke-dasharray="4,3"/>`;
+  for(const p of paths){
+    const pts=p.map((v,i)=>`${x(i)},${y(v)}`).join(' ');
+    const c=p[p.length-1]>=0?'var(--green)':'var(--red)';
+    svg+=`<polyline points="${pts}" fill="none" stroke="${c}" stroke-width=".8" opacity=".15"/>`;
+  }
+  const med=computeMedianPath(paths);
+  if(med){const pts=med.map((v,i)=>`${x(i)},${y(v)}`).join(' ');svg+=`<polyline points="${pts}" fill="none" stroke="var(--amber)" stroke-width="2" opacity=".9"/>`}
+  svg+=`</svg>`;return svg;
+}
+
+function computeMedianPath(paths){
+  const len=Math.max(...paths.map(p=>p.length));
+  const m=[];
+  for(let i=0;i<len;i++){const v=paths.map(p=>p[i]||0).sort((a,b)=>a-b);m.push(v[Math.floor(v.length/2)])}
+  return m;
+}
+
+function renderHistogram(bins){
+  const W=1100,H=180,pad={t:10,r:20,b:25,l:40};
+  const pw=W-pad.l-pad.r,ph=H-pad.t-pad.b;
+  const maxP=Math.max(...bins.map(b=>b.pct));
+  const bw=pw/bins.length-1;
+  let svg=`<svg class="chart-svg" viewBox="0 0 ${W} ${H}">`;
+  for(let i=0;i<bins.length;i++){
+    const b=bins[i],bh=b.pct/maxP*ph,bx=pad.l+i*(pw/bins.length),by=pad.t+ph-bh;
+    svg+=`<rect x="${bx}" y="${by}" width="${bw}" height="${bh}" fill="${b.lo>=0?'var(--green)':'var(--red)'}" opacity=".5" rx="1"/>`;
+    if(i%5===0)svg+=`<text x="${bx+bw/2}" y="${H-6}" fill="var(--text4)" font-family="var(--mono)" font-size="8" text-anchor="middle">${fmt(b.lo)}</text>`;
+  }
+  const zi=bins.findIndex(b=>b.lo>=0);
+  if(zi>=0){const zx=pad.l+zi*(pw/bins.length);svg+=`<line x1="${zx}" y1="${pad.t}" x2="${zx}" y2="${pad.t+ph}" stroke="var(--amber)" stroke-width="1.5" stroke-dasharray="3,2"/>`}
+  svg+=`</svg>`;return svg;
+}
+
+function renderOOSCurve(curve){
+  const W=1100,H=160,pad={t:15,r:30,b:25,l:55};
+  const pw=W-pad.l-pad.r,ph=H-pad.t-pad.b;
+  const vals=curve.map(c=>c.cumPnl);
+  let yMin=Math.min(0,...vals),yMax=Math.max(0,...vals);
+  const yR=Math.max(1,yMax-yMin);
+  const x=i=>pad.l+i/(curve.length-1)*pw;
+  const y=v=>pad.t+(yMax-v)/yR*ph;
+  let svg=`<svg class="chart-svg" viewBox="0 0 ${W} ${H}">`;
+  svg+=`<line x1="${pad.l}" y1="${y(0)}" x2="${W-pad.r}" y2="${y(0)}" stroke="var(--border2)" stroke-width="1" stroke-dasharray="4,3"/>`;
+  for(let i=0;i<curve.length;i++){
+    const c=curve[i];
+    svg+=`<rect x="${x(i)-8}" y="${c.pnl>=0?y(c.cumPnl):y(0)}" width="16" height="${Math.abs(y(c.cumPnl)-y(c.cumPnl-c.pnl))}" fill="${c.pnl>=0?'var(--green)':'var(--red)'}" opacity=".5" rx="2"/>`;
+  }
+  const pts=curve.map((c,i)=>`${x(i)},${y(c.cumPnl)}`).join(' ');
+  svg+=`<polyline points="${pts}" fill="none" stroke="var(--amber)" stroke-width="2"/>`;
+  for(let i=0;i<curve.length;i++){svg+=`<circle cx="${x(i)}" cy="${y(curve[i].cumPnl)}" r="3" fill="var(--amber)"/>`}
+  svg+=`</svg>`;return svg;
+}
+
+function noData(msg){return`<div class="empty"><div class="empty-text">${msg||'NO DATA'}</div><div style="font-size:11px;color:var(--text3);margin-top:8px">Run a backtest from <a href="/backtest" style="color:var(--amber)">/backtest</a> to generate validation data.</div></div>`}
+
+load();
+</script>
+</body>
+</html>

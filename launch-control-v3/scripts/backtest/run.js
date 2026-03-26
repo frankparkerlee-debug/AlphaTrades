@@ -10,6 +10,9 @@ import { classifyAllNews } from './news-scorer.js';
 import { replayAllDays } from './bar-replay.js';
 import { simulateAll } from './pnl-simulator.js';
 import { runMonteCarlo } from './monte-carlo.js';
+import { runWalkForward } from './walk-forward.js';
+import { runRegimeStress } from './regime-stress.js';
+import { runSensitivity } from './sensitivity.js';
 import { query } from '../../src/data/db.js';
 
 /**
@@ -88,6 +91,21 @@ export async function runBacktest(startDate, endDate, accountSize = 7500, ticker
   console.log('[BACKTEST] Running Monte Carlo simulation (10K iterations)...');
   backtestOutput.monteCarlo = runMonteCarlo(backtestOutput);
   console.log(`[BACKTEST] Monte Carlo complete. P(profit)=${backtestOutput.monteCarlo.base?.probability?.profit}%`);
+
+  // 8. Walk-forward validation
+  console.log('[BACKTEST] Running walk-forward validation...');
+  backtestOutput.walkForward = runWalkForward(backtestOutput);
+  console.log(`[BACKTEST] Walk-forward: ${backtestOutput.walkForward.summary?.verdict || backtestOutput.walkForward.error || 'done'}`);
+
+  // 9. Regime-aware stress testing
+  console.log('[BACKTEST] Running regime stress testing...');
+  backtestOutput.regimeStress = runRegimeStress(backtestOutput);
+  console.log(`[BACKTEST] Regime stress: ${backtestOutput.regimeStress.verdict || backtestOutput.regimeStress.error || 'done'}`);
+
+  // 10. Parameter sensitivity analysis
+  console.log('[BACKTEST] Running parameter sensitivity...');
+  backtestOutput.sensitivity = runSensitivity(backtestOutput);
+  console.log(`[BACKTEST] Sensitivity: ${backtestOutput.sensitivity.robustness?.verdict || backtestOutput.sensitivity.error || 'done'}`);
 
   return backtestOutput;
 }

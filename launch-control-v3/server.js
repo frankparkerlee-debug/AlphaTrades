@@ -447,17 +447,53 @@ app.get('/api/paper-trades/open', async (req, res) => {
   }
 });
 
-// Close a paper trade
+// Close a paper trade — now calculates final P&L and outcome
 app.post('/api/paper-trades/close', async (req, res) => {
   try {
-    const { paper_id } = req.body;
+    const { paper_id, exit_price } = req.body;
+
+    // Fetch current trade data to compute P&L
+    const trade = await db.query(
+      'SELECT entry_stock_price, current_stock_price, unrealized_pnl_pct, direction FROM lc_v3.paper_trades WHERE paper_id = $1',
+      [paper_id]
+    );
+
+    let finalPnl = null;
+    let exitStockPrice = exit_price || null;
+    let outcome = null;
+
+    if (trade.rows.length > 0) {
+      const t = trade.rows[0];
+      // Use provided exit price, or current price, or unrealized P&L
+      if (!exitStockPrice && t.current_stock_price) {
+        exitStockPrice = parseFloat(t.current_stock_price);
+      }
+
+      if (t.unrealized_pnl_pct !== null) {
+        finalPnl = parseFloat(t.unrealized_pnl_pct);
+      } else if (exitStockPrice && t.entry_stock_price) {
+        const entry = parseFloat(t.entry_stock_price);
+        const move = (exitStockPrice - entry) / entry;
+        // Approximate option P&L from underlying move (rough 3x leverage)
+        finalPnl = parseFloat((move * (t.direction === 'CALL' ? 3 : -3) * 100).toFixed(2));
+      }
+
+      if (finalPnl !== null) {
+        outcome = finalPnl > 1 ? 'WIN' : finalPnl < -1 ? 'LOSS' : 'FLAT';
+      }
+    }
+
     await db.query(`
       UPDATE lc_v3.paper_trades SET
         status = 'CLOSED',
-        exit_time = NOW()
+        exit_time = NOW(),
+        exit_stock_price = COALESCE($2, current_stock_price),
+        final_pnl_pct = $3,
+        outcome = $4,
+        exit_reason = 'MANUAL_CLOSE'
       WHERE paper_id = $1
-    `, [paper_id]);
-    res.json({ ok: true });
+    `, [paper_id, exitStockPrice, finalPnl, outcome]);
+    res.json({ ok: true, finalPnl, outcome });
   } catch (err) {
     res.json({ ok: false, error: err.message });
   }
@@ -760,9 +796,46 @@ app.get('/backtest', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'backtest.html'));
 });
 
-// Serve Monte Carlo dashboard
+// Serve Monte Carlo dashboard (legacy URL, redirects)
 app.get('/monte-carlo', (req, res) => {
-  res.sendFile(join(__dirname, 'public', 'monte-carlo.html'));
+  res.redirect('/validation#monte-carlo');
+});
+
+// Serve consolidated validation dashboard
+app.get('/validation', (req, res) => {
+  res.sendFile(join(__dirname, 'public', 'validation.html'));
+});
+
+// Get full validation results (MC + walk-forward + regime + sensitivity)
+app.get('/api/backtest/validation', async (req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT results->'monteCarlo' as mc, results->'walkForward' as wf,
+              results->'regimeStress' as regime, results->'sensitivity' as sens,
+              results->'config' as config, results->'summary' as summary,
+              results->'byGrade' as by_grade, results->'equityCurve' as equity_curve,
+              run_date, created_at
+       FROM lc_v3.backtest_results ORDER BY created_at DESC LIMIT 1`
+    );
+    if (result.rows.length === 0) {
+      return res.json({ results: null, lastRun: null });
+    }
+    const row = result.rows[0];
+    res.json({
+      monteCarlo:   row.mc,
+      walkForward:  row.wf,
+      regimeStress: row.regime,
+      sensitivity:  row.sens,
+      config:       row.config,
+      summary:      row.summary,
+      byGrade:      row.by_grade,
+      equityCurve:  row.equity_curve,
+      lastRun:      row.created_at?.toISOString(),
+      runDate:      row.run_date,
+    });
+  } catch (err) {
+    res.json({ results: null, error: err.message });
+  }
 });
 
 // Get Monte Carlo results (from latest backtest that includes MC data)
@@ -783,6 +856,78 @@ app.get('/api/backtest/monte-carlo', async (req, res) => {
     });
   } catch (err) {
     res.json({ results: null, error: err.message });
+  }
+});
+
+// Paper trading P&L summary with full breakdown
+app.get('/api/paper/summary', async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT
+        COUNT(*) as total,
+        COUNT(*) FILTER (WHERE status = 'OPEN') as open_count,
+        COUNT(*) FILTER (WHERE status = 'CLOSED') as closed_count,
+        COUNT(*) FILTER (WHERE outcome = 'WIN') as wins,
+        COUNT(*) FILTER (WHERE outcome = 'LOSS') as losses,
+        COUNT(*) FILTER (WHERE outcome = 'FLAT') as flats,
+        ROUND(AVG(final_pnl_pct) FILTER (WHERE status = 'CLOSED' AND final_pnl_pct IS NOT NULL)::numeric, 2) as avg_pnl,
+        ROUND(SUM(COALESCE(final_pnl_dollars, 0)) FILTER (WHERE status = 'CLOSED')::numeric, 2) as total_pnl_dollars,
+        ROUND(MAX(final_pnl_pct) FILTER (WHERE status = 'CLOSED')::numeric, 2) as best_trade,
+        ROUND(MIN(final_pnl_pct) FILTER (WHERE status = 'CLOSED')::numeric, 2) as worst_trade,
+        ROUND((COUNT(*) FILTER (WHERE outcome = 'WIN')::numeric / NULLIF(COUNT(*) FILTER (WHERE status = 'CLOSED'), 0) * 100)::numeric, 1) as win_rate,
+        COUNT(*) FILTER (WHERE auto_traded = TRUE) as auto_count,
+        COUNT(*) FILTER (WHERE auto_traded = FALSE OR auto_traded IS NULL) as manual_count
+      FROM lc_v3.paper_trades
+    `);
+
+    // Recent closed trades
+    const recent = await db.query(`
+      SELECT paper_id, ticker, direction, strategy, grade, entry_time, exit_time,
+             entry_stock_price, exit_stock_price, final_pnl_pct, final_pnl_dollars,
+             outcome, exit_reason, auto_traded,
+             EXTRACT(EPOCH FROM (exit_time - entry_time))/60 as hold_minutes
+      FROM lc_v3.paper_trades
+      WHERE status = 'CLOSED'
+      ORDER BY exit_time DESC
+      LIMIT 50
+    `);
+
+    // By strategy breakdown
+    const byStrategy = await db.query(`
+      SELECT strategy,
+        COUNT(*) as trades,
+        COUNT(*) FILTER (WHERE outcome = 'WIN') as wins,
+        ROUND(AVG(final_pnl_pct) FILTER (WHERE final_pnl_pct IS NOT NULL)::numeric, 2) as avg_pnl,
+        ROUND(SUM(COALESCE(final_pnl_dollars, 0))::numeric, 2) as total_pnl,
+        ROUND((COUNT(*) FILTER (WHERE outcome = 'WIN')::numeric / NULLIF(COUNT(*), 0) * 100)::numeric, 1) as win_rate
+      FROM lc_v3.paper_trades
+      WHERE status = 'CLOSED'
+      GROUP BY strategy
+      ORDER BY total_pnl DESC
+    `);
+
+    // By grade breakdown
+    const byGrade = await db.query(`
+      SELECT grade,
+        COUNT(*) as trades,
+        COUNT(*) FILTER (WHERE outcome = 'WIN') as wins,
+        ROUND(AVG(final_pnl_pct) FILTER (WHERE final_pnl_pct IS NOT NULL)::numeric, 2) as avg_pnl,
+        ROUND(SUM(COALESCE(final_pnl_dollars, 0))::numeric, 2) as total_pnl,
+        ROUND((COUNT(*) FILTER (WHERE outcome = 'WIN')::numeric / NULLIF(COUNT(*), 0) * 100)::numeric, 1) as win_rate
+      FROM lc_v3.paper_trades
+      WHERE status = 'CLOSED'
+      GROUP BY grade
+      ORDER BY grade
+    `);
+
+    res.json({
+      summary: result.rows[0] || {},
+      recentTrades: recent.rows,
+      byStrategy: byStrategy.rows,
+      byGrade: byGrade.rows,
+    });
+  } catch (err) {
+    res.json({ error: err.message });
   }
 });
 
