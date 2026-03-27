@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Launch Control v3 — Multi-Strategy Backtest</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg0:#060a0f;--bg1:#0b1118;--bg2:#111a24;--bg3:#182030;
+  --border:#1e2d3d;--border2:#243547;
+  --amber:#f59e0b;--amber2:#fbbf24;--green:#10b981;--green2:#34d399;
+  --red:#ef4444;--blue:#3b82f6;--purple:#8b5cf6;--cyan:#06b6d4;
+  --text1:#e2e8f0;--text2:#a8b8c8;--text3:#6b7f94;--text4:#3d5068;
+  --mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg0);color:var(--text1);font-family:var(--sans);font-size:13px}
+body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.025) 2px,rgba(0,0,0,.025) 4px)}
+::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:var(--bg0)}::-webkit-scrollbar-thumb{background:var(--border2)}
+
+/* Header */
+#header{position:sticky;top:0;z-index:100;display:flex;align-items:center;justify-content:space-between;padding:0 16px;height:44px;background:var(--bg1);border-bottom:1px solid var(--border)}
+.logo{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:13px;font-weight:700;letter-spacing:3px;color:var(--amber)}
+.logo-dot{width:7px;height:7px;border-radius:50%;background:var(--cyan)}
+.nav-links{display:flex;align-items:center;gap:12px}
+.nav-link{font-family:var(--mono);font-size:10px;color:var(--text3);text-decoration:none;letter-spacing:1px}
+.nav-link:hover{color:var(--amber)}
+.nav-link.active{color:var(--amber)}
+.run-btn{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:1px;padding:6px 14px;border-radius:3px;border:1px solid var(--amber);background:rgba(245,158,11,.1);color:var(--amber);cursor:pointer}
+.run-btn:hover{background:rgba(245,158,11,.2)}
+.run-btn:disabled{opacity:.4;cursor:not-allowed}
+.run-status{font-family:var(--mono);font-size:9px;color:var(--text3)}
+
+/* Tabs */
+.tabs{display:flex;gap:0;border-bottom:1px solid var(--border);background:var(--bg1);padding:0 16px;overflow-x:auto}
+.tab{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:1.5px;color:var(--text3);padding:10px 16px;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;user-select:none}
+.tab:hover{color:var(--text1)}
+.tab.active{color:var(--amber);border-bottom-color:var(--amber)}
+
+/* Layout */
+.container{max-width:1200px;margin:0 auto;padding:16px}
+.tab-content{display:none}.tab-content.active{display:block}
+
+/* Common components */
+.stat-row{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.stat{background:var(--bg2);border:1px solid var(--border);border-radius:5px;padding:10px 16px;min-width:100px;flex:1}
+.stat-label{font-size:8px;font-weight:700;letter-spacing:1.5px;color:var(--text3);text-transform:uppercase;margin-bottom:4px}
+.stat-value{font-family:var(--mono);font-size:18px;font-weight:700;color:var(--amber)}
+.stat-sub{font-family:var(--mono);font-size:9px;color:var(--text3);margin-top:2px}
+.section{background:var(--bg1);border:1px solid var(--border);border-radius:6px;padding:16px;margin-bottom:16px}
+.section-title{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:2px;color:var(--text3);margin-bottom:12px}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+.grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:16px}
+@media(max-width:700px){.grid-2,.grid-3{grid-template-columns:1fr}}
+
+/* Tables */
+.data-table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11px}
+.data-table th{text-align:left;padding:6px 8px;font-size:8px;font-weight:700;letter-spacing:1px;color:var(--text3);border-bottom:1px solid var(--border);text-transform:uppercase;cursor:pointer;user-select:none;white-space:nowrap}
+.data-table th:hover{color:var(--amber)}
+.data-table th.sort-asc::after{content:' ▲';font-size:7px}
+.data-table th.sort-desc::after{content:' ▼';font-size:7px}
+.data-table td{padding:5px 8px;border-bottom:1px solid var(--bg3);color:var(--text2)}
+.data-table tr:hover td{background:var(--bg2)}
+.pos{color:var(--green)}.neg{color:var(--red)}
+
+/* Badges */
+.badge{display:inline-block;padding:2px 8px;border-radius:3px;font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.5px}
+.badge-green{background:rgba(16,185,129,.15);color:var(--green);border:1px solid rgba(16,185,129,.3)}
+.badge-red{background:rgba(239,68,68,.15);color:var(--red);border:1px solid rgba(239,68,68,.3)}
+.badge-amber{background:rgba(245,158,11,.15);color:var(--amber);border:1px solid rgba(245,158,11,.3)}
+.badge-purple{background:rgba(139,92,246,.15);color:var(--purple);border:1px solid rgba(139,92,246,.3)}
+.badge-cyan{background:rgba(6,182,212,.15);color:var(--cyan);border:1px solid rgba(6,182,212,.3)}
+
+/* Verdict */
+.verdict{font-family:var(--mono);font-size:14px;font-weight:700;padding:12px 16px;border-radius:5px;margin-bottom:16px}
+.verdict-robust{background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.3);color:var(--green)}
+.verdict-moderate{background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);color:var(--amber)}
+.verdict-fragile{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:var(--red)}
+
+/* Chart */
+.chart-svg{width:100%}
+
+/* Heatmap */
+.heatmap-grid{display:grid;gap:2px;margin:8px 0}
+.heatmap-cell{display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;font-weight:600;padding:8px 4px;border-radius:3px;min-height:36px}
+.heatmap-label{font-family:var(--mono);font-size:9px;font-weight:700;color:var(--text3);letter-spacing:1px;display:flex;align-items:center;justify-content:center;padding:4px}
+
+/* Sparkline container */
+.sparkline-cell{display:flex;align-items:center;gap:6px}
+.sparkline-svg{flex-shrink:0}
+
+/* Signal rows */
+.signal-win td{border-left:2px solid var(--green)}
+.signal-loss td{border-left:2px solid var(--red)}
+
+/* Highlight row */
+.row-highlight{background:rgba(245,158,11,.08)}
+.row-highlight td{color:var(--amber) !important;font-weight:600}
+
+/* Empty / loading */
+.empty{text-align:center;padding:60px 20px;color:var(--text3)}
+.empty-text{font-family:var(--mono);font-size:12px;letter-spacing:1px;margin-bottom:8px}
+.loading-pulse{animation:pulse 1.5s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
+
+/* Scrollable signals */
+.signals-scroll{max-height:600px;overflow-y:auto}
+
+/* Bar chart */
+.bar-row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.bar-label{font-family:var(--mono);font-size:10px;color:var(--text2);width:80px;text-align:right;flex-shrink:0}
+.bar-track{flex:1;height:22px;background:var(--bg3);border-radius:3px;position:relative;overflow:hidden}
+.bar-fill{height:100%;border-radius:3px;transition:width .5s ease}
+.bar-value{position:absolute;right:8px;top:50%;transform:translateY(-50%);font-family:var(--mono);font-size:10px;font-weight:700;color:var(--text1)}
+.bar-value-outside{font-family:var(--mono);font-size:10px;font-weight:700;margin-left:6px;white-space:nowrap}
+
+/* Recommendation text */
+.recommendation{font-family:var(--mono);font-size:11px;color:var(--text2);padding:12px 16px;background:var(--bg2);border:1px solid var(--border);border-radius:5px;line-height:1.6;margin-top:12px}
+.recommendation strong{color:var(--amber)}
+
+/* Flag list */
+.flag-list{list-style:none;padding:0}
+.flag-list li{font-family:var(--mono);font-size:11px;padding:6px 12px;border-left:3px solid var(--red);margin-bottom:4px;background:rgba(239,68,68,.05);color:var(--text2)}
+.flag-list li.flag-warn{border-left-color:var(--amber);background:rgba(245,158,11,.05)}
+</style>
+</head>
+<body>
+
+<div id="header">
+  <div class="logo"><div class="logo-dot"></div>LAUNCH CONTROL — MULTI-STRATEGY</div>
+  <div class="nav-links">
+    <span class="run-status" id="runStatus"></span>
+    <button class="run-btn" id="runBtn" onclick="triggerRun()">RUN NOW</button>
+    <a href="/" class="nav-link">DASHBOARD</a>
+    <a href="/backtest" class="nav-link">BACKTEST</a>
+    <a href="/validation" class="nav-link">VALIDATION</a>
+    <span class="nav-link active">MULTI-STRATEGY</span>
+    <a href="/auto-trader" class="nav-link">AUTO-TRADER</a>
+  </div>
+</div>
+
+<div class="tabs" id="tabs">
+  <div class="tab active" data-tab="overview">OVERVIEW</div>
+  <div class="tab" data-tab="strategies">STRATEGIES</div>
+  <div class="tab" data-tab="correlation">CORRELATION</div>
+  <div class="tab" data-tab="sizing">SIZING</div>
+  <div class="tab" data-tab="validation">VALIDATION</div>
+  <div class="tab" data-tab="signals">SIGNALS</div>
+</div>
+
+<div class="container">
+  <div class="tab-content active" id="tc-overview"><div class="empty"><div class="empty-text loading-pulse">LOADING...</div></div></div>
+  <div class="tab-content" id="tc-strategies"></div>
+  <div class="tab-content" id="tc-correlation"></div>
+  <div class="tab-content" id="tc-sizing"></div>
+  <div class="tab-content" id="tc-validation"></div>
+  <div class="tab-content" id="tc-signals"></div>
+</div>
+
+<script>
+/* ── UTILITIES ─────────────────────────────────────────────────────────────── */
+const $=id=>document.getElementById(id);
+const fmt=n=>{if(n==null)return'--';return n>=0?`+$${Math.abs(n).toLocaleString(undefined,{maximumFractionDigits:0})}`:`-$${Math.abs(n).toLocaleString(undefined,{maximumFractionDigits:0})}`};
+const fmtDec=(n,d=2)=>{if(n==null)return'--';return n>=0?`+$${Math.abs(n).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d})}`:`-$${Math.abs(n).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d})}`};
+const pctFmt=n=>{if(n==null)return'--';return`${n>=0?'+':''}${n.toFixed(1)}%`};
+const cls=n=>n>0?'pos':n<0?'neg':'';
+const clr=n=>n>=0?'var(--green)':'var(--red)';
+
+/* ── TAB SWITCHING ─────────────────────────────────────────────────────────── */
+document.querySelectorAll('.tab').forEach(t=>{
+  t.onclick=()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    $('tc-'+t.dataset.tab).classList.add('active');
+  };
+});
+if(location.hash){const tab=location.hash.slice(1);const el=document.querySelector(`[data-tab="${tab}"]`);if(el)el.click()}
+
+/* ── GLOBAL DATA ───────────────────────────────────────────────────────────── */
+let DATA=null;
+
+async function loadData(){
+  try{
+    const res=await fetch('/api/multi-strategy').then(r=>r.json());
+    if(!res||!res.results){showEmpty();return}
+    DATA=res;
+    renderOverview(res);
+    renderStrategies(res);
+    renderCorrelation(res);
+    renderSizing(res);
+    renderValidation(res);
+    renderSignals(res);
+  }catch(e){
+    console.error('Load error:',e);
+    showEmpty();
+  }
+}
+
+function showEmpty(){
+  const tabs=['overview','strategies','correlation','sizing','validation','signals'];
+  tabs.forEach(t=>{
+    $('tc-'+t).innerHTML=`<div class="empty"><div class="empty-text">NO RESULTS YET</div><div style="font-size:11px;color:var(--text3);margin-top:8px">Click RUN NOW to generate multi-strategy backtest data, or configure strategies first.</div></div>`;
+  });
+}
+
+/* ── TAB 1: OVERVIEW ───────────────────────────────────────────────────────── */
+function renderOverview(res){
+  const d=res.results;
+  const s=d.summary||{};
+  const weekly=d.weekly||{};
+  let h='';
+
+  // Summary cards row
+  h+=`<div class="stat-row">
+    <div class="stat"><div class="stat-label">TOTAL SIGNALS</div><div class="stat-value">${s.totalSignals!=null?s.totalSignals:'--'}</div><div class="stat-sub">${s.signalsPerDay||'--'}/day</div></div>
+    <div class="stat"><div class="stat-label">WIN RATE</div><div class="stat-value" style="color:${(s.winRate||0)>=55?'var(--green)':(s.winRate||0)>=45?'var(--amber)':'var(--red)'}">${s.winRate!=null?s.winRate+'%':'--'}</div></div>
+    <div class="stat"><div class="stat-label">TOTAL P&L</div><div class="stat-value" style="color:${clr(s.totalPnlDollars||0)}">${s.totalPnlDollars!=null?fmt(s.totalPnlDollars):'--'}</div><div class="stat-sub">${s.totalPnlPct!=null?pctFmt(s.totalPnlPct):''}</div></div>
+    <div class="stat"><div class="stat-label">PROFIT FACTOR</div><div class="stat-value" style="color:${(s.profitFactor||0)>=1.5?'var(--green)':(s.profitFactor||0)>=1?'var(--amber)':'var(--red)'}">${s.profitFactor!=null?(s.profitFactor>=999?'INF':s.profitFactor.toFixed(2)):'--'}</div></div>
+    <div class="stat"><div class="stat-label">MAX DRAWDOWN</div><div class="stat-value neg">${s.maxDrawdownDollars!=null?fmt(s.maxDrawdownDollars):'--'}</div><div class="stat-sub">${s.maxDrawdownPct!=null?pctFmt(s.maxDrawdownPct):''}</div></div>
+    <div class="stat"><div class="stat-label">SHARPE</div><div class="stat-value" style="color:var(--cyan)">${s.sharpe!=null?s.sharpe.toFixed(2):'--'}</div></div>
+    <div class="stat"><div class="stat-label">TOTAL COSTS</div><div class="stat-value" style="color:var(--text2);font-size:14px">${s.totalCosts!=null?fmt(Math.round(s.totalCosts)):'--'}</div></div>
+  </div>`;
+
+  // Weekly performance
+  h+=`<div class="stat-row">
+    <div class="stat"><div class="stat-label">AVG WEEKLY RETURN</div><div class="stat-value" style="color:${clr(weekly.avgReturn||0)}">${weekly.avgReturn!=null?pctFmt(weekly.avgReturn):'--'}</div></div>
+    <div class="stat"><div class="stat-label">WEEKS > 15%</div><div class="stat-value">${weekly.weeksAbove15!=null?weekly.weeksAbove15:'--'}</div><div class="stat-sub">of ${weekly.totalWeeks||'--'} weeks</div></div>
+    <div class="stat"><div class="stat-label">WEEKS > 20%</div><div class="stat-value">${weekly.weeksAbove20!=null?weekly.weeksAbove20:'--'}</div><div class="stat-sub">of ${weekly.totalWeeks||'--'} weeks</div></div>
+  </div>`;
+
+  // Portfolio equity curve
+  if(d.equityCurve&&d.equityCurve.length>0){
+    h+=`<div class="section"><div class="section-title">PORTFOLIO EQUITY CURVE</div>${renderEquityCurve(d.equityCurve)}</div>`;
+  }
+
+  // By-strategy P&L bar chart
+  if(d.byStrategy&&d.byStrategy.length>0){
+    h+=`<div class="section"><div class="section-title">BY-STRATEGY P&L</div>${renderBarChart(d.byStrategy)}</div>`;
+  }
+
+  // Last run info
+  h+=`<div style="font-family:var(--mono);font-size:9px;color:var(--text4);margin-top:8px">Last run: ${res.lastRun?new Date(res.lastRun).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'})+' ET':'unknown'}</div>`;
+
+  if(res.lastRun){
+    $('runStatus').textContent=`Last: ${new Date(res.lastRun).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'})} ET`;
+  }
+
+  $('tc-overview').innerHTML=h;
+}
+
+function renderEquityCurve(curve){
+  if(!curve||curve.length===0)return'<div style="color:var(--text3);text-align:center;padding:40px">No data</div>';
+  const W=1100,H=220,pad={t:20,r:35,b:30,l:60};
+  const pw=W-pad.l-pad.r,ph=H-pad.t-pad.b;
+  const vals=curve.map(c=>c.cumPnl);
+  let yMin=Math.min(0,...vals),yMax=Math.max(0,...vals);
+  const yR=Math.max(1,yMax-yMin);
+  const x=i=>pad.l+i/(Math.max(1,curve.length-1))*pw;
+  const y=v=>pad.t+(yMax-v)/yR*ph;
+  const zeroY=y(0);
+
+  let svg=`<svg class="chart-svg" viewBox="0 0 ${W} ${H}">`;
+
+  // Grid lines
+  const gridSteps=5;
+  for(let i=0;i<=gridSteps;i++){
+    const v=yMin+yR*(i/gridSteps);
+    const gy=y(v);
+    svg+=`<line x1="${pad.l}" y1="${gy}" x2="${W-pad.r}" y2="${gy}" stroke="var(--bg3)" stroke-width=".5"/>`;
+    svg+=`<text x="${pad.l-6}" y="${gy+3}" fill="var(--text4)" font-family="var(--mono)" font-size="8" text-anchor="end">$${Math.round(v).toLocaleString()}</text>`;
+  }
+
+  // Zero line
+  svg+=`<line x1="${pad.l}" y1="${zeroY}" x2="${W-pad.r}" y2="${zeroY}" stroke="var(--border2)" stroke-width="1" stroke-dasharray="4,3"/>`;
+
+  // Build path segments for green (above zero) and red (below zero) fills
+  const pts=curve.map((c,i)=>({x:x(i),y:y(c.cumPnl),v:c.cumPnl}));
+
+  // Fill area: green above zero, red below
+  // Positive fill
+  let posPath=`M${pad.l},${zeroY}`;
+  for(const p of pts)posPath+=` L${p.x},${Math.min(p.y,zeroY)}`;
+  posPath+=` L${pts[pts.length-1].x},${zeroY} Z`;
+  svg+=`<path d="${posPath}" fill="rgba(16,185,129,.08)"/>`;
+
+  // Negative fill
+  let negPath=`M${pad.l},${zeroY}`;
+  for(const p of pts)negPath+=` L${p.x},${Math.max(p.y,zeroY)}`;
+  negPath+=` L${pts[pts.length-1].x},${zeroY} Z`;
+  svg+=`<path d="${negPath}" fill="rgba(239,68,68,.08)"/>`;
+
+  // Build line with green/red coloring
+  for(let i=0;i<pts.length-1;i++){
+    const a=pts[i],b=pts[i+1];
+    const c=(a.v+b.v)/2>=0?'var(--green)':'var(--red)';
+    svg+=`<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="${c}" stroke-width="2"/>`;
+  }
+
+  // Dots
+  for(const p of pts){
+    svg+=`<circle cx="${p.x}" cy="${p.y}" r="2.5" fill="${p.v>=0?'var(--green)':'var(--red)'}" stroke="var(--bg1)" stroke-width="1"/>`;
+  }
+
+  // X-axis labels
+  const xSteps=[0,Math.floor(curve.length*.25),Math.floor(curve.length*.5),Math.floor(curve.length*.75),curve.length-1];
+  for(const idx of xSteps){
+    if(curve[idx]){
+      svg+=`<text x="${x(idx)}" y="${H-6}" fill="var(--text4)" font-family="var(--mono)" font-size="8" text-anchor="middle">${(curve[idx].date||'').slice(5)}</text>`;
+    }
+  }
+
+  svg+=`</svg>`;
+  return svg;
+}
+
+function renderBarChart(strategies){
+  if(!strategies||strategies.length===0)return'';
+  const maxVal=Math.max(...strategies.map(s=>Math.abs(s.totalPnl||0)),1);
+  let h='';
+  for(const s of strategies){
+    const pnl=s.totalPnl||0;
+    const pct=Math.abs(pnl)/maxVal*100;
+    const color=pnl>=0?'var(--green)':'var(--red)';
+    h+=`<div class="bar-row">
+      <div class="bar-label">${s.name||s.strategy||'--'}</div>
+      <div class="bar-track">
+        <div class="bar-fill" style="width:${Math.max(pct,2)}%;background:${color};opacity:.6"></div>
+        <div class="bar-value" style="color:${color}">${fmt(pnl)}</div>
+      </div>
+    </div>`;
+  }
+  return h;
+}
+
+/* ── TAB 2: STRATEGIES ─────────────────────────────────────────────────────── */
+function renderStrategies(res){
+  const d=res.results;
+  const strats=d.byStrategy||d.strategies||[];
+  if(!strats.length){$('tc-strategies').innerHTML=noData();return}
+  let h='';
+
+  // Comparison table
+  h+=`<div class="section"><div class="section-title">STRATEGY COMPARISON</div>
+    <table class="data-table" id="stratTable">
+      <thead><tr>
+        <th>STRATEGY</th><th style="text-align:right">SIGNALS</th><th style="text-align:right">WIN RATE</th>
+        <th style="text-align:right">TOTAL P&L</th><th style="text-align:right">AVG P&L</th>
+        <th style="text-align:right">PROFIT FACTOR</th><th style="text-align:right">AVG HOLD</th>
+        <th style="text-align:right">COMMISSIONS</th><th>CURVE</th>
+      </tr></thead>
+      <tbody>`;
+
+  for(const s of strats){
+    const sparkSvg=renderSparkline(s.equityCurve||s.curve||[]);
+    h+=`<tr>
+      <td style="font-weight:700;color:var(--amber)">${s.name||s.strategy||'--'}</td>
+      <td style="text-align:right">${s.signals!=null?s.signals:(s.totalSignals||'--')}</td>
+      <td style="text-align:right">${s.winRate!=null?s.winRate+'%':'--'}</td>
+      <td style="text-align:right" class="${cls(s.totalPnl)}">${s.totalPnl!=null?fmt(s.totalPnl):'--'}</td>
+      <td style="text-align:right" class="${cls(s.avgPnl)}">${s.avgPnl!=null?fmtDec(s.avgPnl):'--'}</td>
+      <td style="text-align:right">${s.profitFactor!=null?(s.profitFactor>=999?'INF':s.profitFactor.toFixed(2)):'--'}</td>
+      <td style="text-align:right">${s.avgHold!=null?s.avgHold+'m':(s.avgHoldMinutes!=null?s.avgHoldMinutes+'m':'--')}</td>
+      <td style="text-align:right" class="neg">${s.commissions!=null?fmt(Math.round(s.commissions)):(s.totalCosts!=null?fmt(Math.round(s.totalCosts)):'--')}</td>
+      <td><div class="sparkline-cell">${sparkSvg}</div></td>
+    </tr>`;
+  }
+
+  h+=`</tbody></table></div>`;
+
+  // Individual strategy equity curves (larger)
+  h+=`<div class="section-title" style="margin-bottom:12px">STRATEGY EQUITY CURVES</div>`;
+  h+=`<div class="grid-2">`;
+  for(const s of strats){
+    const curve=s.equityCurve||s.curve||[];
+    if(curve.length>0){
+      h+=`<div class="section"><div class="section-title">${s.name||s.strategy||'--'}</div>${renderMiniEquityCurve(curve)}</div>`;
+    }
+  }
+  h+=`</div>`;
+
+  $('tc-strategies').innerHTML=h;
+}
+
+function renderSparkline(curve){
+  if(!curve||curve.length<2)return'<span style="color:var(--text4);font-size:9px">--</span>';
+  const W=80,H=24;
+  const vals=curve.map(c=>typeof c==='number'?c:(c.cumPnl||0));
+  const mn=Math.min(...vals),mx=Math.max(...vals);
+  const r=Math.max(1,mx-mn);
+  const pts=vals.map((v,i)=>`${(i/(vals.length-1))*W},${H-2-((v-mn)/r)*(H-4)}`).join(' ');
+  const last=vals[vals.length-1];
+  const c=last>=(vals[0]||0)?'var(--green)':'var(--red)';
+  return`<svg class="sparkline-svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><polyline points="${pts}" fill="none" stroke="${c}" stroke-width="1.5"/></svg>`;
+}
+
+function renderMiniEquityCurve(curve){
+  if(!curve||curve.length===0)return'';
+  const W=520,H=120,pad={t:10,r:20,b:20,l:45};
+  const pw=W-pad.l-pad.r,ph=H-pad.t-pad.b;
+  const vals=curve.map(c=>typeof c==='number'?c:(c.cumPnl||0));
+  let yMin=Math.min(0,...vals),yMax=Math.max(0,...vals);
+  const yR=Math.max(1,yMax-yMin);
+  const x=i=>pad.l+i/(Math.max(1,curve.length-1))*pw;
+  const y=v=>pad.t+(yMax-v)/yR*ph;
+  const zeroY=y(0);
+
+  let svg=`<svg class="chart-svg" viewBox="0 0 ${W} ${H}">`;
+  svg+=`<line x1="${pad.l}" y1="${zeroY}" x2="${W-pad.r}" y2="${zeroY}" stroke="var(--border2)" stroke-width=".5" stroke-dasharray="3,2"/>`;
+
+  const pts=vals.map((v,i)=>`${x(i)},${y(v)}`).join(' ');
+  const last=vals[vals.length-1];
+  const color=last>=0?'var(--green)':'var(--red)';
+  const fill=last>=0?'rgba(16,185,129,.08)':'rgba(239,68,68,.08)';
+
+  svg+=`<polygon points="${x(0)},${zeroY} ${pts} ${x(vals.length-1)},${zeroY}" fill="${fill}"/>`;
+  svg+=`<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5"/>`;
+
+  // Y labels
+  svg+=`<text x="${pad.l-4}" y="${y(yMax)+3}" fill="var(--text4)" font-family="var(--mono)" font-size="8" text-anchor="end">$${Math.round(yMax)}</text>`;
+  svg+=`<text x="${pad.l-4}" y="${y(yMin)+3}" fill="var(--text4)" font-family="var(--mono)" font-size="8" text-anchor="end">$${Math.round(yMin)}</text>`;
+
+  svg+=`</svg>`;
+  return svg;
+}
+
+/* ── TAB 3: CORRELATION ────────────────────────────────────────────────────── */
+function renderCorrelation(res){
+  const d=res.results;
+  const corr=d.correlation||{};
+  if(!corr.matrix&&!corr.diversification){$('tc-correlation').innerHTML=noData();return}
+  let h='';
+
+  // Correlation matrix heatmap
+  if(corr.matrix){
+    const names=corr.names||corr.strategies||Object.keys(corr.matrix);
+    const n=names.length;
+    h+=`<div class="section"><div class="section-title">RETURN CORRELATION MATRIX</div>`;
+    h+=`<div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-bottom:8px">Green = low correlation (good diversification) | Red = high correlation (redundancy)</div>`;
+
+    h+=`<div class="heatmap-grid" style="grid-template-columns:80px repeat(${n},1fr)">`;
+    // Header row
+    h+=`<div class="heatmap-label"></div>`;
+    for(const name of names){h+=`<div class="heatmap-label">${name}</div>`}
+    // Data rows
+    for(let i=0;i<n;i++){
+      h+=`<div class="heatmap-label" style="justify-content:flex-end;padding-right:8px">${names[i]}</div>`;
+      for(let j=0;j<n;j++){
+        const val=Array.isArray(corr.matrix)?
+          (Array.isArray(corr.matrix[i])?corr.matrix[i][j]:(corr.matrix[names[i]]?.[names[j]]||0)):
+          (corr.matrix[names[i]]?.[names[j]]||0);
+        const bg=corrColor(val);
+        const textColor=Math.abs(val)>0.6?'#fff':'var(--text1)';
+        h+=`<div class="heatmap-cell" style="background:${bg};color:${textColor}">${val!=null?val.toFixed(2):'--'}</div>`;
+      }
+    }
+    h+=`</div></div>`;
+  }
+
+  // Diversification metrics
+  if(corr.diversification){
+    const div=corr.diversification;
+    h+=`<div class="section"><div class="section-title">DIVERSIFICATION METRICS</div>`;
+    h+=`<div class="stat-row">
+      <div class="stat"><div class="stat-label">PORTFOLIO VOL</div><div class="stat-value" style="font-size:14px">${div.portfolioVol!=null?pctFmt(div.portfolioVol):'--'}</div></div>
+      <div class="stat"><div class="stat-label">SUM INDIVIDUAL VOLS</div><div class="stat-value" style="font-size:14px">${div.sumIndividualVols!=null?pctFmt(div.sumIndividualVols):'--'}</div></div>
+      <div class="stat"><div class="stat-label">DIVERSIFICATION BENEFIT</div><div class="stat-value" style="color:${(div.diversificationBenefit||0)>20?'var(--green)':'var(--amber)'}">${div.diversificationBenefit!=null?div.diversificationBenefit.toFixed(1)+'%':'--'}</div></div>
+      <div class="stat"><div class="stat-label">VERDICT</div><div class="stat-value">${verdictBadge(div.verdict||'--')}</div></div>
+    </div></div>`;
+  }
+
+  // Optimal weights
+  if(corr.optimalWeights){
+    const weights=corr.optimalWeights;
+    h+=`<div class="section"><div class="section-title">OPTIMAL ALLOCATION WEIGHTS</div>
+    <table class="data-table">
+      <thead><tr><th>STRATEGY</th><th style="text-align:right">WEIGHT</th><th>ALLOCATION</th></tr></thead>
+      <tbody>`;
+    const entries=Array.isArray(weights)?weights:Object.entries(weights).map(([k,v])=>({strategy:k,weight:v}));
+    for(const w of entries){
+      const pct=(typeof w.weight==='number'?w.weight*100:parseFloat(w.weight)||0);
+      h+=`<tr>
+        <td style="font-weight:700;color:var(--amber)">${w.strategy||w.name||'--'}</td>
+        <td style="text-align:right">${pct.toFixed(1)}%</td>
+        <td><div style="display:flex;align-items:center;gap:6px"><div style="width:${Math.max(pct*2,4)}px;height:14px;background:var(--amber);opacity:.5;border-radius:2px"></div></div></td>
+      </tr>`;
+    }
+    h+=`</tbody></table></div>`;
+  }
+
+  $('tc-correlation').innerHTML=h;
+}
+
+function corrColor(val){
+  if(val==null)return'var(--bg3)';
+  const abs=Math.abs(val);
+  if(val===1)return'var(--bg3)';
+  if(abs<0.3)return`rgba(16,185,129,${0.1+abs*0.6})`;
+  if(abs<0.6)return`rgba(245,158,11,${0.1+abs*0.4})`;
+  return`rgba(239,68,68,${0.1+abs*0.5})`;
+}
+
+function verdictBadge(verdict){
+  const v=(verdict||'').toUpperCase();
+  if(v==='STRONG')return`<span class="badge badge-green">STRONG</span>`;
+  if(v==='MODERATE')return`<span class="badge badge-amber">MODERATE</span>`;
+  if(v==='WEAK')return`<span class="badge badge-red">WEAK</span>`;
+  if(v==='ROBUST')return`<span class="badge badge-green">ROBUST</span>`;
+  if(v==='OVERFIT')return`<span class="badge badge-red">OVERFIT</span>`;
+  return`<span class="badge badge-amber">${v}</span>`;
+}
+
+/* ── TAB 4: SIZING ─────────────────────────────────────────────────────────── */
+function renderSizing(res){
+  const d=res.results;
+  const sizing=d.sizing||{};
+  if(!sizing.kelly&&!sizing.optimizer){$('tc-sizing').innerHTML=noData();return}
+  let h='';
+
+  // Kelly criterion table
+  if(sizing.kelly){
+    h+=`<div class="section"><div class="section-title">KELLY CRITERION BY STRATEGY</div>
+    <table class="data-table">
+      <thead><tr><th>STRATEGY</th><th style="text-align:right">WIN RATE</th><th style="text-align:right">WIN/LOSS RATIO</th><th style="text-align:right">FULL KELLY</th><th style="text-align:right">HALF KELLY</th><th style="text-align:right">QUARTER KELLY</th><th>RECOMMENDATION</th></tr></thead>
+      <tbody>`;
+    const entries=Array.isArray(sizing.kelly)?sizing.kelly:Object.entries(sizing.kelly).map(([k,v])=>({strategy:k,...v}));
+    for(const k of entries){
+      h+=`<tr>
+        <td style="font-weight:700;color:var(--amber)">${k.strategy||k.name||'--'}</td>
+        <td style="text-align:right">${k.winRate!=null?k.winRate+'%':'--'}</td>
+        <td style="text-align:right">${k.winLossRatio!=null?k.winLossRatio.toFixed(2):'--'}</td>
+        <td style="text-align:right;color:var(--red)">${k.fullKelly!=null?pctFmt(k.fullKelly):'--'}</td>
+        <td style="text-align:right;color:var(--amber)">${k.halfKelly!=null?pctFmt(k.halfKelly):'--'}</td>
+        <td style="text-align:right;color:var(--green)">${k.quarterKelly!=null?pctFmt(k.quarterKelly):'--'}</td>
+        <td>${k.recommended?`<span class="badge badge-cyan">${k.recommended}</span>`:'--'}</td>
+      </tr>`;
+    }
+    h+=`</tbody></table></div>`;
+  }
+
+  // Position sizing optimizer
+  if(sizing.optimizer){
+    h+=`<div class="section"><div class="section-title">POSITION SIZING OPTIMIZER</div>`;
+    h+=`<div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-bottom:12px">Testing contract multipliers from 0.5x to 3.0x against target and drawdown probabilities</div>`;
+    h+=`<table class="data-table">
+      <thead><tr>
+        <th>MULTIPLIER</th><th style="text-align:right">CONTRACTS</th>
+        <th style="text-align:right">P(TARGET)</th><th style="text-align:right">P(DRAWDOWN)</th>
+        <th style="text-align:right">EXPECTED P&L</th><th style="text-align:right">MAX DD</th>
+        <th></th>
+      </tr></thead>
+      <tbody>`;
+    const rows=Array.isArray(sizing.optimizer)?sizing.optimizer:(sizing.optimizer.rows||[]);
+    for(const r of rows){
+      const isOptimal=r.optimal||r.recommended||false;
+      h+=`<tr class="${isOptimal?'row-highlight':''}">
+        <td>${r.multiplier!=null?r.multiplier.toFixed(1)+'x':'--'}</td>
+        <td style="text-align:right">${r.contracts!=null?r.contracts:'--'}</td>
+        <td style="text-align:right;color:${(r.pTarget||0)>=50?'var(--green)':'var(--text2)'}">${r.pTarget!=null?r.pTarget.toFixed(1)+'%':'--'}</td>
+        <td style="text-align:right;color:${(r.pDrawdown||0)>20?'var(--red)':'var(--text2)'}">${r.pDrawdown!=null?r.pDrawdown.toFixed(1)+'%':'--'}</td>
+        <td style="text-align:right" class="${cls(r.expectedPnl)}">${r.expectedPnl!=null?fmt(Math.round(r.expectedPnl)):'--'}</td>
+        <td style="text-align:right" class="neg">${r.maxDrawdown!=null?fmt(Math.round(r.maxDrawdown)):'--'}</td>
+        <td>${isOptimal?'<span class="badge badge-green">OPTIMAL</span>':''}</td>
+      </tr>`;
+    }
+    h+=`</tbody></table></div>`;
+  }
+
+  // Recommendation
+  if(sizing.recommendation){
+    h+=`<div class="recommendation"><strong>RECOMMENDATION:</strong> ${sizing.recommendation}</div>`;
+  }
+
+  $('tc-sizing').innerHTML=h;
+}
+
+/* ── TAB 5: VALIDATION ─────────────────────────────────────────────────────── */
+function renderValidation(res){
+  const d=res.results;
+  const val=d.validation||{};
+  if(!val.oos&&!val.monteCarlo&&!val.flags){$('tc-validation').innerHTML=noData();return}
+  let h='';
+
+  // Out-of-sample comparison
+  if(val.oos){
+    const oos=val.oos;
+    h+=`<div class="section"><div class="section-title">OUT-OF-SAMPLE COMPARISON</div>`;
+
+    // Verdict
+    if(oos.verdict){
+      const vc=oos.verdict.toUpperCase()==='ROBUST'?'verdict-robust':oos.verdict.toUpperCase()==='MODERATE'?'verdict-moderate':'verdict-fragile';
+      h+=`<div class="verdict ${vc}">${oos.verdict.toUpperCase()}${oos.verdictDetail?' -- '+oos.verdictDetail:''}</div>`;
+    }
+
+    h+=`<table class="data-table">
+      <thead><tr><th>METRIC</th><th style="text-align:right">IN-SAMPLE</th><th style="text-align:right">OUT-OF-SAMPLE</th><th style="text-align:right">DEGRADATION</th></tr></thead>
+      <tbody>`;
+    const metrics=[
+      {label:'Win Rate',is:oos.isWinRate,oos:oos.oosWinRate,deg:oos.wrDegradation,suffix:'%'},
+      {label:'Total P&L',is:oos.isPnl,oos:oos.oosPnl,deg:oos.pnlDegradation,isFmt:true},
+      {label:'Profit Factor',is:oos.isProfitFactor,oos:oos.oosProfitFactor,deg:oos.pfDegradation,dec:2},
+      {label:'Sharpe',is:oos.isSharpe,oos:oos.oosSharpe,deg:oos.sharpeDegradation,dec:2},
+    ];
+    for(const m of metrics){
+      const isVal=m.isFmt?fmt(m.is):(m.dec?m.is?.toFixed(m.dec):(m.is!=null?m.is+(m.suffix||''):'--'));
+      const oosVal=m.isFmt?fmt(m.oos):(m.dec?m.oos?.toFixed(m.dec):(m.oos!=null?m.oos+(m.suffix||''):'--'));
+      const degVal=m.deg!=null?(m.deg>=1?`<span class="pos">${m.deg.toFixed(2)}x</span>`:(m.deg>=0.7?`<span style="color:var(--amber)">${m.deg.toFixed(2)}x</span>`:`<span class="neg">${m.deg.toFixed(2)}x</span>`)):'--';
+      h+=`<tr><td>${m.label}</td><td style="text-align:right">${isVal}</td><td style="text-align:right">${oosVal}</td><td style="text-align:right">${degVal}</td></tr>`;
+    }
+    h+=`</tbody></table></div>`;
+  }
+
+  // Monte Carlo summary
+  if(val.monteCarlo){
+    const mc=val.monteCarlo;
+    h+=`<div class="section"><div class="section-title">MONTE CARLO SUMMARY</div>`;
+    h+=`<div class="stat-row">
+      <div class="stat"><div class="stat-label">P(PROFIT)</div><div class="stat-value" style="color:${(mc.pProfit||0)>=50?'var(--green)':'var(--red)'}">${mc.pProfit!=null?mc.pProfit.toFixed(1)+'%':'--'}</div></div>
+      <div class="stat"><div class="stat-label">P(15%/WEEK)</div><div class="stat-value">${mc.p15PerWeek!=null?mc.p15PerWeek.toFixed(1)+'%':'--'}</div></div>
+      <div class="stat"><div class="stat-label">P(RUIN)</div><div class="stat-value" style="color:${(mc.pRuin||0)<5?'var(--green)':'var(--red)'}">${mc.pRuin!=null?mc.pRuin.toFixed(1)+'%':'--'}</div></div>
+      <div class="stat"><div class="stat-label">MEAN P&L</div><div class="stat-value" style="color:${clr(mc.meanPnl||0)}">${mc.meanPnl!=null?fmt(Math.round(mc.meanPnl)):'--'}</div></div>
+    </div></div>`;
+  }
+
+  // Reality check flags
+  if(val.flags&&val.flags.length>0){
+    h+=`<div class="section"><div class="section-title">REALITY CHECK FLAGS</div>`;
+    h+=`<ul class="flag-list">`;
+    for(const f of val.flags){
+      const severity=(f.severity||'').toLowerCase();
+      h+=`<li class="${severity==='warning'||severity==='warn'?'flag-warn':''}">${f.message||f.text||f}</li>`;
+    }
+    h+=`</ul></div>`;
+  }
+
+  // Cost impact analysis
+  if(val.costImpact){
+    const ci=val.costImpact;
+    h+=`<div class="section"><div class="section-title">COST IMPACT ANALYSIS</div>`;
+    h+=`<div class="stat-row">
+      <div class="stat"><div class="stat-label">GROSS P&L</div><div class="stat-value" style="color:${clr(ci.grossPnl||0)};font-size:14px">${ci.grossPnl!=null?fmt(Math.round(ci.grossPnl)):'--'}</div></div>
+      <div class="stat"><div class="stat-label">TOTAL COSTS</div><div class="stat-value neg" style="font-size:14px">${ci.totalCosts!=null?fmt(Math.round(ci.totalCosts)):'--'}</div></div>
+      <div class="stat"><div class="stat-label">NET P&L</div><div class="stat-value" style="color:${clr(ci.netPnl||0)};font-size:14px">${ci.netPnl!=null?fmt(Math.round(ci.netPnl)):'--'}</div></div>
+      <div class="stat"><div class="stat-label">COST AS % OF GROSS</div><div class="stat-value" style="font-size:14px">${ci.costPct!=null?ci.costPct.toFixed(1)+'%':'--'}</div></div>
+    </div></div>`;
+  }
+
+  $('tc-validation').innerHTML=h;
+}
+
+/* ── TAB 6: SIGNALS ────────────────────────────────────────────────────────── */
+let signalSortCol=-1;
+let signalSortDir=1;
+let signalData=[];
+
+function renderSignals(res){
+  const d=res.results;
+  signalData=(d.signals||[]).slice();
+  if(!signalData.length){$('tc-signals').innerHTML=noData('No signals data');return}
+  renderSignalTable();
+}
+
+function renderSignalTable(){
+  let h=`<div class="section signals-scroll"><div class="section-title">ALL SIGNALS (${signalData.length})</div>
+    <table class="data-table" id="signalTable">
+      <thead><tr>
+        <th data-col="0" class="${sortClass(0)}">STRATEGY</th>
+        <th data-col="1" class="${sortClass(1)}">DATE</th>
+        <th data-col="2" class="${sortClass(2)}">TIME</th>
+        <th data-col="3" class="${sortClass(3)}">TICKER</th>
+        <th data-col="4" class="${sortClass(4)}">DIR</th>
+        <th data-col="5" class="${sortClass(5)}">GRADE</th>
+        <th data-col="6" style="text-align:right" class="${sortClass(6)}">ENTRY</th>
+        <th data-col="7" style="text-align:right" class="${sortClass(7)}">EXIT</th>
+        <th data-col="8" style="text-align:right" class="${sortClass(8)}">P&L%</th>
+        <th data-col="9" style="text-align:right" class="${sortClass(9)}">P&L$</th>
+        <th data-col="10" style="text-align:right" class="${sortClass(10)}">HOLD</th>
+        <th data-col="11" class="${sortClass(11)}">SPREAD</th>
+        <th data-col="12" style="text-align:right" class="${sortClass(12)}">CONTRACTS</th>
+      </tr></thead>
+      <tbody>`;
+
+  for(const s of signalData){
+    const pnl=s.pnlDollars||s.pnl_dollars||0;
+    const rowCls=pnl>0?'signal-win':pnl<0?'signal-loss':'';
+    h+=`<tr class="${rowCls}">
+      <td style="font-size:9px">${s.strategy||'--'}</td>
+      <td>${s.date||'--'}</td>
+      <td>${s.time||''}</td>
+      <td style="color:var(--amber);font-weight:600">${s.ticker||'--'}</td>
+      <td style="color:${(s.direction||'').toUpperCase()==='CALL'?'var(--green)':'var(--red)'}">${s.direction||s.dir||'--'}</td>
+      <td style="font-weight:700;color:${gradeColor(s.grade)}">${s.grade||'--'}</td>
+      <td style="text-align:right">${s.entryPrice!=null?'$'+parseFloat(s.entryPrice).toFixed(2):(s.entry!=null?'$'+parseFloat(s.entry).toFixed(2):'--')}</td>
+      <td style="text-align:right">${s.exitPrice!=null?'$'+parseFloat(s.exitPrice).toFixed(2):(s.exit!=null?'$'+parseFloat(s.exit).toFixed(2):'--')}</td>
+      <td style="text-align:right" class="${cls(s.pnlPct||s.pnl_pct||0)}">${s.pnlPct!=null?pctFmt(s.pnlPct):(s.pnl_pct!=null?pctFmt(s.pnl_pct):'--')}</td>
+      <td style="text-align:right" class="${cls(pnl)}">${fmt(Math.round(pnl))}</td>
+      <td style="text-align:right">${s.holdMinutes!=null?s.holdMinutes+'m':(s.hold!=null?s.hold+'m':'--')}</td>
+      <td style="font-size:9px">${s.spreadType||s.spread_type||'--'}</td>
+      <td style="text-align:right">${s.contracts!=null?s.contracts:'--'}</td>
+    </tr>`;
+  }
+
+  h+=`</tbody></table></div>`;
+  $('tc-signals').innerHTML=h;
+
+  // Bind sort handlers
+  document.querySelectorAll('#signalTable th[data-col]').forEach(th=>{
+    th.onclick=()=>sortSignals(parseInt(th.dataset.col));
+  });
+}
+
+function sortClass(col){
+  if(signalSortCol!==col)return'';
+  return signalSortDir===1?'sort-asc':'sort-desc';
+}
+
+function sortSignals(col){
+  if(signalSortCol===col){signalSortDir*=-1}else{signalSortCol=col;signalSortDir=1}
+  const keys=['strategy','date','time','ticker','direction','grade','entryPrice','exitPrice','pnlPct','pnlDollars','holdMinutes','spreadType','contracts'];
+  const altKeys=['strategy','date','time','ticker','dir','grade','entry','exit','pnl_pct','pnl_dollars','hold','spread_type','contracts'];
+  const key=keys[col];
+  const alt=altKeys[col];
+  signalData.sort((a,b)=>{
+    let va=a[key]!=null?a[key]:a[alt];
+    let vb=b[key]!=null?b[key]:b[alt];
+    if(va==null)va='';if(vb==null)vb='';
+    if(typeof va==='number'&&typeof vb==='number')return(va-vb)*signalSortDir;
+    return String(va).localeCompare(String(vb))*signalSortDir;
+  });
+  renderSignalTable();
+}
+
+function gradeColor(g){
+  return{'A+':'#fbbf24','A':'#f59e0b','A-':'#10b981','B+':'#3b82f6','B':'#8b5cf6','B-':'#64748b'}[g]||'#64748b';
+}
+
+/* ── RUN NOW ───────────────────────────────────────────────────────────────── */
+async function triggerRun(){
+  const btn=$('runBtn');
+  btn.disabled=true;
+  btn.textContent='RUNNING...';
+  $('runStatus').textContent='Multi-strategy backtest running...';
+  $('runStatus').style.color='var(--amber)';
+
+  try{
+    const res=await fetch('/api/multi-strategy/run',{method:'POST'});
+    if(!res.ok){throw new Error('Run failed: '+res.status)}
+
+    // Poll for completion
+    const poll=setInterval(async()=>{
+      try{
+        const status=await fetch('/api/multi-strategy/status').then(r=>r.json());
+        if(!status.running){
+          clearInterval(poll);
+          btn.disabled=false;
+          btn.textContent='RUN NOW';
+          $('runStatus').style.color='';
+          if(status.error){
+            $('runStatus').textContent='Error: '+status.error;
+            $('runStatus').style.color='var(--red)';
+          }else{
+            loadData();
+          }
+        }
+      }catch(e){
+        // keep polling
+      }
+    },10000);
+  }catch(e){
+    btn.disabled=false;
+    btn.textContent='RUN NOW';
+    $('runStatus').textContent='Run failed: '+e.message;
+    $('runStatus').style.color='var(--red)';
+  }
+}
+
+/* ── HELPERS ───────────────────────────────────────────────────────────────── */
+function noData(msg){
+  return`<div class="empty"><div class="empty-text">${msg||'NO DATA'}</div><div style="font-size:11px;color:var(--text3);margin-top:8px">Click RUN NOW to generate multi-strategy backtest results.</div></div>`;
+}
+
+/* ── INIT ──────────────────────────────────────────────────────────────────── */
+loadData();
+</script>
+</body>
+</html>

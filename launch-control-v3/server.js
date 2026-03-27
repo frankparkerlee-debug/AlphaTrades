@@ -11,6 +11,10 @@ import { selectOptionsContract, getOptionsVolume } from './src/options/contract-
 import { getNewsEvents, getTickerState } from './src/data/state.js';
 import { computeNewsScore } from './src/scoring/news.js';
 import { runBacktest } from './scripts/backtest/run.js';
+import { runMultiStrategyBacktest } from './scripts/backtest/strategy-runner.js';
+import { computeCorrelationMatrix, portfolioMetrics, diversificationBenefit, optimalWeights } from './scripts/backtest/cross-strategy.js';
+import { kellyPerStrategy, targetSizing } from './scripts/backtest/position-sizing.js';
+import { runRealityChecks } from './scripts/backtest/reality-checks.js';
 import { scanGapReversal } from './src/strategies/gap-reversal.js';
 import { scanCapitulationBounce } from './src/strategies/capitulation-bounce.js';
 import { scanVolumeDropPut } from './src/strategies/volume-drop-put.js';
@@ -25,6 +29,8 @@ import { scanPreEarningsPut } from './src/strategies/pre-earnings-put.js';
 import { getRecentFlow } from './src/data/alpaca-streams.js';
 import { monitorOpenPositions } from './src/jobs/options-monitor.js';
 import { scoreContinuation } from './src/jobs/continuation-scorer.js';
+import { startAutoTrader, stopAutoTrader, getAutoTraderStatus } from './src/execution/auto-trader.js';
+import { manualHalt, resume as resumeTrading, getDailyState } from './src/execution/risk-manager.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app  = express();
@@ -1950,6 +1956,147 @@ app.get('/api/conviction/status', (req, res) => {
     resp.results = convictionScan.results.results;
   }
   res.json(resp);
+});
+
+// ── MULTI-STRATEGY BACKTEST ENDPOINTS ──────────────────────────────────────────
+
+app.get('/multi-strategy', (req, res) => {
+  res.sendFile(join(__dirname, 'public', 'multi-strategy.html'));
+});
+
+// Latest multi-strategy results
+app.get('/api/multi-strategy', async (req, res) => {
+  try {
+    const result = await db.query(
+      'SELECT * FROM lc_v3.backtest_multi_results ORDER BY run_date DESC LIMIT 1'
+    );
+    if (result.rows.length === 0) return res.json(null);
+    const row = result.rows[0];
+    res.json({
+      runDate: row.run_date,
+      startDate: row.start_date,
+      endDate: row.end_date,
+      ...row.portfolio,
+      strategies: row.strategies,
+      crossStrategy: row.cross_strategy,
+      positionSizing: row.position_sizing,
+      realityChecks: row.reality_checks,
+      monteCarlo: row.monte_carlo,
+      walkForward: row.walk_forward,
+      outOfSample: row.out_of_sample,
+    });
+  } catch (err) {
+    console.error('[API] multi-strategy error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Run multi-strategy backtest
+let multiStratRun = { status: 'idle' };
+
+app.post('/api/multi-strategy/run', async (req, res) => {
+  if (multiStratRun.status === 'running') {
+    return res.json({ status: 'already_running', started: multiStratRun.started_at });
+  }
+
+  multiStratRun = { status: 'running', started_at: new Date().toISOString() };
+  res.json({ status: 'started' });
+
+  try {
+    // Default: last 20 trading days
+    const endDate = new Date().toISOString().split('T')[0];
+    const startDateObj = new Date();
+    startDateObj.setDate(startDateObj.getDate() - 30);
+    const startDate = startDateObj.toISOString().split('T')[0];
+
+    const results = await runMultiStrategyBacktest(startDate, endDate, 7500);
+
+    // Cross-strategy analysis
+    const crossStrat = {
+      correlation: computeCorrelationMatrix(results.signals),
+      portfolio: portfolioMetrics(results.signals, 7500),
+      diversification: diversificationBenefit(results.signals, 7500),
+      weights: optimalWeights(results.signals),
+    };
+
+    // Position sizing
+    const sizing = {
+      kelly: kellyPerStrategy(results.signals),
+      optimal: targetSizing(results.signals, 7500),
+    };
+
+    // Reality checks
+    const realityChecks = await runRealityChecks(results.signals, 7500);
+
+    // Store in DB
+    await db.query(`
+      INSERT INTO lc_v3.backtest_multi_results
+        (run_date, start_date, end_date, strategies, portfolio, cross_strategy, position_sizing, reality_checks, monte_carlo, walk_forward, out_of_sample)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    `, [
+      endDate, startDate, endDate,
+      JSON.stringify(results.byStrategy),
+      JSON.stringify(results),
+      JSON.stringify(crossStrat),
+      JSON.stringify(sizing),
+      JSON.stringify(realityChecks),
+      JSON.stringify(results.monteCarlo),
+      JSON.stringify(results.walkForward),
+      JSON.stringify(results.outOfSample),
+    ]);
+
+    // Keep last 30 runs
+    await db.query(`
+      DELETE FROM lc_v3.backtest_multi_results
+      WHERE id NOT IN (
+        SELECT id FROM lc_v3.backtest_multi_results ORDER BY run_date DESC LIMIT 30
+      )
+    `);
+
+    multiStratRun = { status: 'complete', completed_at: new Date().toISOString(), summary: results.summary };
+  } catch (err) {
+    console.error('[MULTI-STRAT] Run failed:', err);
+    multiStratRun = { status: 'error', error: err.message };
+  }
+});
+
+app.get('/api/multi-strategy/status', (req, res) => {
+  res.json(multiStratRun);
+});
+
+// ── AUTO-TRADER ENDPOINTS ────────────────────────────────────────────────────
+
+app.get('/auto-trader', (req, res) => {
+  res.sendFile(join(__dirname, 'public', 'auto-trader.html'));
+});
+
+app.get('/api/auto-trader/status', (req, res) => {
+  res.json(getAutoTraderStatus());
+});
+
+app.post('/api/auto-trader/start', async (req, res) => {
+  try {
+    await startAutoTrader();
+    res.json({ status: 'started', ...getAutoTraderStatus() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/auto-trader/stop', (req, res) => {
+  stopAutoTrader();
+  res.json({ status: 'stopped', ...getAutoTraderStatus() });
+});
+
+app.post('/api/auto-trader/halt', (req, res) => {
+  const reason = req.body?.reason || 'Manual halt from dashboard';
+  manualHalt(reason);
+  res.json({ status: 'halted', reason, ...getAutoTraderStatus() });
+});
+
+app.post('/api/auto-trader/resume', (req, res) => {
+  resumeTrading();
+  res.json({ status: 'resumed', ...getAutoTraderStatus() });
 });
 
 // Catch-all — serve dashboard

@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Launch Control v3 -- Auto-Trader</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg0:#060a0f;--bg1:#0b1118;--bg2:#111a24;--bg3:#182030;
+  --border:#1e2d3d;--border2:#243547;
+  --amber:#f59e0b;--amber2:#fbbf24;--green:#10b981;--green2:#34d399;
+  --red:#ef4444;--blue:#3b82f6;--purple:#8b5cf6;--cyan:#06b6d4;
+  --text1:#e2e8f0;--text2:#a8b8c8;--text3:#6b7f94;--text4:#3d5068;
+  --mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg0);color:var(--text1);font-family:var(--sans);font-size:13px}
+body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.025) 2px,rgba(0,0,0,.025) 4px)}
+::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:var(--bg0)}::-webkit-scrollbar-thumb{background:var(--border2)}
+
+#header{position:sticky;top:0;z-index:100;display:flex;align-items:center;justify-content:space-between;padding:0 16px;height:44px;background:var(--bg1);border-bottom:1px solid var(--border)}
+.logo{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:13px;font-weight:700;letter-spacing:3px;color:var(--amber)}
+.logo-dot{width:7px;height:7px;border-radius:50%;background:var(--cyan)}
+.nav-links{display:flex;align-items:center;gap:12px}
+.nav-link{font-family:var(--mono);font-size:10px;color:var(--text3);text-decoration:none;letter-spacing:1px}
+.nav-link:hover{color:var(--amber)}
+.nav-link.active{color:var(--amber)}
+
+.container{max-width:1200px;margin:0 auto;padding:16px}
+.stat-row{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.stat{background:var(--bg2);border:1px solid var(--border);border-radius:5px;padding:10px 16px;min-width:100px;flex:1}
+.stat-label{font-size:8px;font-weight:700;letter-spacing:1.5px;color:var(--text3);text-transform:uppercase;margin-bottom:4px}
+.stat-value{font-family:var(--mono);font-size:18px;font-weight:700;color:var(--amber)}
+.stat-sub{font-family:var(--mono);font-size:9px;color:var(--text3);margin-top:2px}
+.section{background:var(--bg1);border:1px solid var(--border);border-radius:6px;padding:16px;margin-bottom:16px}
+.section-title{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:2px;color:var(--text3);margin-bottom:12px}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+@media(max-width:700px){.grid-2{grid-template-columns:1fr}}
+
+.data-table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11px}
+.data-table th{text-align:left;padding:6px 8px;font-size:8px;font-weight:700;letter-spacing:1px;color:var(--text3);border-bottom:1px solid var(--border);text-transform:uppercase;white-space:nowrap}
+.data-table td{padding:5px 8px;border-bottom:1px solid var(--bg3);color:var(--text2)}
+.data-table tr:hover td{background:var(--bg2)}
+.pos{color:var(--green)}.neg{color:var(--red)}
+
+.badge{display:inline-block;padding:2px 8px;border-radius:3px;font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.5px}
+.badge-green{background:rgba(16,185,129,.15);color:var(--green);border:1px solid rgba(16,185,129,.3)}
+.badge-red{background:rgba(239,68,68,.15);color:var(--red);border:1px solid rgba(239,68,68,.3)}
+.badge-amber{background:rgba(245,158,11,.15);color:var(--amber);border:1px solid rgba(245,158,11,.3)}
+.badge-cyan{background:rgba(6,182,212,.15);color:var(--cyan);border:1px solid rgba(6,182,212,.3)}
+
+/* Controls */
+.controls{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center}
+.ctrl-btn{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:1px;padding:8px 18px;border-radius:3px;cursor:pointer;border:1px solid;transition:all .15s}
+.btn-start{border-color:var(--green);background:rgba(16,185,129,.1);color:var(--green)}
+.btn-start:hover{background:rgba(16,185,129,.2)}
+.btn-stop{border-color:var(--amber);background:rgba(245,158,11,.1);color:var(--amber)}
+.btn-stop:hover{background:rgba(245,158,11,.2)}
+.btn-halt{border-color:var(--red);background:rgba(239,68,68,.1);color:var(--red)}
+.btn-halt:hover{background:rgba(239,68,68,.2)}
+.btn-resume{border-color:var(--cyan);background:rgba(6,182,212,.1);color:var(--cyan)}
+.btn-resume:hover{background:rgba(6,182,212,.2)}
+.ctrl-btn:disabled{opacity:.3;cursor:not-allowed}
+
+/* Engine status indicator */
+.engine-status{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:1px;margin-left:auto}
+.status-dot{width:8px;height:8px;border-radius:50%}
+.status-running .status-dot{background:var(--green);box-shadow:0 0 8px rgba(16,185,129,.5);animation:pulse-dot 2s ease-in-out infinite}
+.status-stopped .status-dot{background:var(--text4)}
+.status-halted .status-dot{background:var(--red);box-shadow:0 0 8px rgba(239,68,68,.5)}
+.status-dry .status-dot{background:var(--cyan);box-shadow:0 0 8px rgba(6,182,212,.5)}
+@keyframes pulse-dot{0%,100%{opacity:.6}50%{opacity:1}}
+
+/* Trade state badges */
+.state-pending{background:rgba(245,158,11,.15);color:var(--amber);border:1px solid rgba(245,158,11,.3)}
+.state-open{background:rgba(16,185,129,.15);color:var(--green);border:1px solid rgba(16,185,129,.3)}
+.state-closed{background:rgba(107,127,148,.15);color:var(--text3);border:1px solid rgba(107,127,148,.3)}
+
+.empty{text-align:center;padding:40px 20px;color:var(--text3)}
+.empty-text{font-family:var(--mono);font-size:12px;letter-spacing:1px}
+</style>
+</head>
+<body>
+
+<div id="header">
+  <div class="logo"><div class="logo-dot"></div>LAUNCH CONTROL -- AUTO-TRADER</div>
+  <div class="nav-links">
+    <a href="/" class="nav-link">DASHBOARD</a>
+    <a href="/backtest" class="nav-link">BACKTEST</a>
+    <a href="/validation" class="nav-link">VALIDATION</a>
+    <a href="/multi-strategy" class="nav-link">MULTI-STRATEGY</a>
+    <span class="nav-link active">AUTO-TRADER</span>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- Engine Controls -->
+  <div class="controls" id="controls">
+    <button class="ctrl-btn btn-start" id="btnStart" onclick="apiPost('start')">START ENGINE</button>
+    <button class="ctrl-btn btn-stop" id="btnStop" onclick="apiPost('stop')" disabled>STOP ENGINE</button>
+    <button class="ctrl-btn btn-halt" id="btnHalt" onclick="apiPost('halt')">EMERGENCY HALT</button>
+    <button class="ctrl-btn btn-resume" id="btnResume" onclick="apiPost('resume')" disabled>RESUME TRADING</button>
+    <div class="engine-status status-stopped" id="engineStatus">
+      <div class="status-dot"></div>
+      <span id="statusLabel">STOPPED</span>
+    </div>
+  </div>
+
+  <!-- Summary Stats -->
+  <div class="stat-row" id="summaryStats">
+    <div class="stat"><div class="stat-label">ENGINE STATUS</div><div class="stat-value" id="sEngine">--</div></div>
+    <div class="stat"><div class="stat-label">STARTING EQUITY</div><div class="stat-value" id="sEquity">--</div></div>
+    <div class="stat"><div class="stat-label">OPEN TRADES</div><div class="stat-value" id="sOpen">0</div></div>
+    <div class="stat"><div class="stat-label">DAILY TRADES</div><div class="stat-value" id="sTrades">0</div><div class="stat-sub" id="sTradesMax">/ 20 max</div></div>
+    <div class="stat"><div class="stat-label">DAILY P&L</div><div class="stat-value" id="sPnl">$0</div></div>
+    <div class="stat"><div class="stat-label">LOSS STREAK</div><div class="stat-value" id="sStreak">0</div></div>
+  </div>
+
+  <!-- Risk State -->
+  <div class="grid-2">
+    <div class="section">
+      <div class="section-title">RISK CONTROLS</div>
+      <table class="data-table" id="riskTable">
+        <tbody>
+          <tr><td style="color:var(--text3)">HALTED</td><td id="rHalted">--</td></tr>
+          <tr><td style="color:var(--text3)">HALT REASON</td><td id="rReason">--</td></tr>
+          <tr><td style="color:var(--text3)">CONSECUTIVE LOSSES</td><td id="rLosses">--</td></tr>
+          <tr><td style="color:var(--text3)">OPEN POSITIONS</td><td id="rPositions">--</td></tr>
+          <tr><td style="color:var(--text3)">MODE</td><td id="rMode">--</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <div class="section-title">RISK THRESHOLDS</div>
+      <table class="data-table">
+        <tbody>
+          <tr><td style="color:var(--text3)">MAX CONCURRENT</td><td>5 positions</td></tr>
+          <tr><td style="color:var(--text3)">DAILY LOSS LIMIT</td><td>-8% of account</td></tr>
+          <tr><td style="color:var(--text3)">PER-TRADE RISK</td><td>5% of account</td></tr>
+          <tr><td style="color:var(--text3)">MAX DAILY TRADES</td><td>20</td></tr>
+          <tr><td style="color:var(--text3)">KILL SWITCH</td><td style="color:var(--red)">-15% drawdown</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Open Trades -->
+  <div class="section">
+    <div class="section-title">OPEN TRADES</div>
+    <div id="openTrades">
+      <div class="empty"><div class="empty-text">NO OPEN TRADES</div></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const fmt=n=>n>=0?`+$${Math.abs(n).toLocaleString(undefined,{maximumFractionDigits:0})}`:`-$${Math.abs(n).toLocaleString(undefined,{maximumFractionDigits:0})}`;
+
+async function apiPost(action){
+  try{
+    const res=await fetch(`/api/auto-trader/${action}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
+    const data=await res.json();
+    if(data.error){alert('Error: '+data.error);return}
+    updateUI(data);
+  }catch(e){
+    alert('Request failed: '+e.message);
+  }
+}
+
+async function fetchStatus(){
+  try{
+    const res=await fetch('/api/auto-trader/status');
+    const data=await res.json();
+    updateUI(data);
+  }catch(e){
+    console.error('Status fetch failed:',e);
+  }
+}
+
+function updateUI(data){
+  const running=data.running;
+  const dryRun=data.dryRun;
+  const risk=data.risk||{};
+  const halted=risk.halted||false;
+
+  // Engine status indicator
+  const el=$('engineStatus');
+  el.className='engine-status '+(halted?'status-halted':running?(dryRun?'status-dry':'status-running'):'status-stopped');
+  $('statusLabel').textContent=halted?'HALTED':running?(dryRun?'DRY RUN':'LIVE'):'STOPPED';
+
+  // Button states
+  $('btnStart').disabled=running;
+  $('btnStop').disabled=!running;
+  $('btnHalt').disabled=halted;
+  $('btnResume').disabled=!halted;
+
+  // Summary
+  $('sEngine').textContent=halted?'HALTED':running?(dryRun?'DRY RUN':'LIVE'):'STOPPED';
+  $('sEngine').style.color=halted?'var(--red)':running?'var(--green)':'var(--text3)';
+  $('sEquity').textContent=data.startingEquity?'$'+data.startingEquity.toLocaleString(undefined,{maximumFractionDigits:0}):'--';
+  $('sOpen').textContent=(data.openTrades||[]).length;
+  $('sTrades').textContent=risk.trades||0;
+  $('sPnl').textContent=fmt(Math.round(risk.pnl||0));
+  $('sPnl').style.color=(risk.pnl||0)>=0?'var(--green)':'var(--red)';
+  $('sStreak').textContent=risk.consecutiveLosses||0;
+  $('sStreak').style.color=(risk.consecutiveLosses||0)>=3?'var(--red)':'var(--text1)';
+
+  // Risk state
+  $('rHalted').textContent=halted?'YES':'NO';
+  $('rHalted').style.color=halted?'var(--red)':'var(--green)';
+  $('rReason').textContent=risk.haltReason||'--';
+  $('rReason').style.color=risk.haltReason?'var(--red)':'var(--text2)';
+  $('rLosses').textContent=risk.consecutiveLosses||0;
+  $('rPositions').textContent=risk.openPositions||0;
+  $('rMode').innerHTML=dryRun?'<span class="badge badge-cyan">DRY RUN</span>':'<span class="badge badge-amber">LIVE</span>';
+
+  // Open trades table
+  const trades=data.openTrades||[];
+  if(trades.length===0){
+    $('openTrades').innerHTML='<div class="empty"><div class="empty-text">NO OPEN TRADES</div></div>';
+  }else{
+    let h='<table class="data-table"><thead><tr><th>ID</th><th>TICKER</th><th>DIR</th><th>STRATEGY</th><th>STATE</th><th>SPREAD</th><th style="text-align:right">ENTRY</th><th style="text-align:right">HOLD</th></tr></thead><tbody>';
+    for(const t of trades){
+      const stCls=t.state==='OPEN'?'state-open':t.state==='PENDING_ENTRY'?'state-pending':'state-closed';
+      h+=`<tr>
+        <td style="font-size:9px">${t.id||'--'}</td>
+        <td style="color:var(--amber);font-weight:600">${t.ticker||'--'}</td>
+        <td style="color:${(t.direction||'').toUpperCase()==='CALL'?'var(--green)':'var(--red)'}">${t.direction||'--'}</td>
+        <td style="font-size:9px">${t.strategy||'--'}</td>
+        <td><span class="badge ${stCls}">${t.state||'--'}</span></td>
+        <td style="font-size:9px">${t.spreadType||'--'}</td>
+        <td style="text-align:right">${t.entryPrice?'$'+parseFloat(t.entryPrice).toFixed(2):'--'}</td>
+        <td style="text-align:right">${t.holdMinutes!=null?t.holdMinutes+'m':'--'}</td>
+      </tr>`;
+    }
+    h+='</tbody></table>';
+    $('openTrades').innerHTML=h;
+  }
+}
+
+// Poll every 5 seconds
+fetchStatus();
+setInterval(fetchStatus,5000);
+</script>
+</body>
+</html>
