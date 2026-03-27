@@ -73,10 +73,10 @@ export function generateA1Signals(date, dayData, context) {
         recentBars, sessionOpen, prevDayBar?.c || sessionOpen, atr, direction
       );
 
-      // CRITICAL FILTER: Only FRESH moves
-      if (momentum.freshness !== 'FRESH') continue;
-      if (momentum.entryRisk !== 'LOW') continue;
-      if (momentum.volSurge < 1.2) continue; // need volume confirmation
+      // CRITICAL FILTER: Only FRESH or early DEVELOPING moves
+      if (momentum.freshness !== 'FRESH' && momentum.freshness !== 'DEVELOPING') continue;
+      if (momentum.entryRisk === 'HIGH' || momentum.entryRisk === 'EXTREME') continue;
+      if (momentum.volSurge < 1.1) continue; // need volume confirmation
 
       // ── Minimum move gate ──────────────────────────────────
       if (momentum.moveInATRs < 0.1) continue; // too small

@@ -128,7 +128,22 @@ export async function runMultiStrategyBacktest(startDate, endDate, accountSize =
     }
   }
 
+  // Log per-strategy signal counts for diagnostics
+  const signalCounts = {};
+  for (const s of allSignals) {
+    signalCounts[s.strategy] = (signalCounts[s.strategy] || 0) + 1;
+  }
   console.log(`[MULTI-STRAT] Total signals generated: ${allSignals.length}`);
+  for (const [strat, count] of Object.entries(signalCounts)) {
+    console.log(`[MULTI-STRAT]   ${strat}: ${count} signals`);
+  }
+  // Log data dependency warnings
+  const contagionPairs = Object.values(stratData.contagionMap || {}).reduce((a, b) => a + b.length, 0);
+  const earningsDates = Object.keys(stratData.earningsCalendar || {}).length;
+  const ivEntries = Object.keys(stratData.ivHistory || {}).length;
+  if (contagionPairs === 0) console.warn('[MULTI-STRAT] WARNING: contagion_map is empty — A2 strategy will produce 0 signals');
+  if (earningsDates === 0) console.warn('[MULTI-STRAT] WARNING: earnings calendar is empty — B2 strategy will produce 0 signals');
+  if (ivEntries === 0) console.warn('[MULTI-STRAT] WARNING: iv_history is empty — B1 using static iv_rank (may default to 50)');
 
   // 5. Apply portfolio constraints
   const constrained = applyPortfolioConstraints(allSignals, accountSize);
@@ -221,31 +236,37 @@ function applyPortfolioConstraints(signals, accountSize) {
 // ── Results Builder ────────────────────────────────────────────────────────────
 
 function buildMultiStratResults(results, config, tradingDays) {
-  const total = results.length;
-  const wins = results.filter(r => r.pnlDollars > 0);
-  const losses = results.filter(r => r.pnlDollars < 0);
-  const totalPnl = results.reduce((a, b) => a + b.pnlDollars, 0);
+  // Filter out any results with NaN/undefined pnlDollars (defensive)
+  const valid = results.filter(r => Number.isFinite(r.pnlDollars));
+  if (valid.length < results.length) {
+    console.warn(`[MULTI-STRAT] WARNING: ${results.length - valid.length} results had invalid pnlDollars — excluded`);
+  }
+
+  const total = valid.length;
+  const wins = valid.filter(r => r.pnlDollars > 0);
+  const losses = valid.filter(r => r.pnlDollars < 0);
+  const totalPnl = valid.reduce((a, b) => a + (b.pnlDollars || 0), 0);
   const totalPnlPct = config.accountSize > 0 ? (totalPnl / config.accountSize) * 100 : 0;
   const winRate = total > 0 ? (wins.length / total) * 100 : 0;
 
-  const grossWins = wins.reduce((a, b) => a + b.pnlDollars, 0);
-  const grossLosses = Math.abs(losses.reduce((a, b) => a + b.pnlDollars, 0));
+  const grossWins = wins.reduce((a, b) => a + (b.pnlDollars || 0), 0);
+  const grossLosses = Math.abs(losses.reduce((a, b) => a + (b.pnlDollars || 0), 0));
   const profitFactor = grossLosses > 0 ? grossWins / grossLosses : (grossWins > 0 ? 999 : 0);
 
-  const avgWin = wins.length > 0 ? wins.reduce((a, b) => a + b.pnlPct, 0) / wins.length : 0;
-  const avgLoss = losses.length > 0 ? losses.reduce((a, b) => a + b.pnlPct, 0) / losses.length : 0;
-  const avgHold = total > 0 ? Math.round(results.reduce((a, b) => a + (b.holdMinutes || 0), 0) / total) : 0;
+  const avgWin = wins.length > 0 ? wins.reduce((a, b) => a + (b.pnlPct || 0), 0) / wins.length : 0;
+  const avgLoss = losses.length > 0 ? losses.reduce((a, b) => a + (b.pnlPct || 0), 0) / losses.length : 0;
+  const avgHold = total > 0 ? Math.round(valid.reduce((a, b) => a + (b.holdMinutes || 0), 0) / total) : 0;
 
   // Equity curve + drawdown
   let peak = 0, maxDD = 0, cumPnl = 0;
   const equityCurve = [];
   const byDate = {};
-  for (const r of results) {
+  for (const r of valid) {
     if (!byDate[r.date]) byDate[r.date] = [];
     byDate[r.date].push(r);
   }
   for (const date of Object.keys(byDate).sort()) {
-    const dayPnl = byDate[date].reduce((a, b) => a + b.pnlDollars, 0);
+    const dayPnl = byDate[date].reduce((a, b) => a + (b.pnlDollars || 0), 0);
     cumPnl += dayPnl;
     peak = Math.max(peak, cumPnl);
     maxDD = Math.min(maxDD, cumPnl - peak);
@@ -254,23 +275,23 @@ function buildMultiStratResults(results, config, tradingDays) {
   const maxDDPct = config.accountSize > 0 ? (maxDD / config.accountSize) * 100 : 0;
 
   // Total costs
-  const totalCommissions = results.reduce((a, b) => a + (b.commissions || 0), 0);
-  const totalSlippage = results.reduce((a, b) => a + (b.slippage || 0), 0);
+  const totalCommissions = valid.reduce((a, b) => a + (b.commissions || 0), 0);
+  const totalSlippage = valid.reduce((a, b) => a + (b.slippage || 0), 0);
 
   // By strategy
-  const stratNames = [...new Set(results.map(r => r.strategy))];
+  const stratNames = [...new Set(valid.map(r => r.strategy))];
   const byStrategy = {};
   for (const strat of stratNames) {
-    const stratSigs = results.filter(r => r.strategy === strat);
+    const stratSigs = valid.filter(r => r.strategy === strat);
     const stratWins = stratSigs.filter(r => r.pnlDollars > 0);
-    const stratGrossWin = stratWins.reduce((a, b) => a + b.pnlDollars, 0);
-    const stratGrossLoss = Math.abs(stratSigs.filter(r => r.pnlDollars < 0).reduce((a, b) => a + b.pnlDollars, 0));
+    const stratGrossWin = stratWins.reduce((a, b) => a + (b.pnlDollars || 0), 0);
+    const stratGrossLoss = Math.abs(stratSigs.filter(r => r.pnlDollars < 0).reduce((a, b) => a + (b.pnlDollars || 0), 0));
 
     byStrategy[strat] = {
       count: stratSigs.length,
       winRate: stratSigs.length > 0 ? parseFloat((stratWins.length / stratSigs.length * 100).toFixed(1)) : 0,
-      totalPnl: stratSigs.reduce((a, b) => a + b.pnlDollars, 0),
-      avgPnl: stratSigs.length > 0 ? Math.round(stratSigs.reduce((a, b) => a + b.pnlDollars, 0) / stratSigs.length) : 0,
+      totalPnl: stratSigs.reduce((a, b) => a + (b.pnlDollars || 0), 0),
+      avgPnl: stratSigs.length > 0 ? Math.round(stratSigs.reduce((a, b) => a + (b.pnlDollars || 0), 0) / stratSigs.length) : 0,
       profitFactor: stratGrossLoss > 0 ? parseFloat((stratGrossWin / stratGrossLoss).toFixed(2)) : (stratGrossWin > 0 ? 999 : 0),
       avgHoldMinutes: stratSigs.length > 0 ? Math.round(stratSigs.reduce((a, b) => a + (b.holdMinutes || 0), 0) / stratSigs.length) : 0,
       commissions: stratSigs.reduce((a, b) => a + (b.commissions || 0), 0),
@@ -281,31 +302,31 @@ function buildMultiStratResults(results, config, tradingDays) {
   const grades = ['A+', 'A', 'A-', 'B+', 'B'];
   const byGrade = {};
   for (const g of grades) {
-    const gSigs = results.filter(r => r.grade === g);
+    const gSigs = valid.filter(r => r.grade === g);
     const gWins = gSigs.filter(r => r.pnlDollars > 0);
     byGrade[g] = {
       count: gSigs.length,
       winRate: gSigs.length > 0 ? parseFloat((gWins.length / gSigs.length * 100).toFixed(1)) : 0,
-      pnl: gSigs.reduce((a, b) => a + b.pnlDollars, 0),
+      pnl: gSigs.reduce((a, b) => a + (b.pnlDollars || 0), 0),
     };
   }
 
   // By exit type
-  const exitTypes = [...new Set(results.map(r => r.exitType))];
+  const exitTypes = [...new Set(valid.map(r => r.exitType))];
   const byExit = {};
   for (const et of exitTypes) {
-    const eSigs = results.filter(r => r.exitType === et);
+    const eSigs = valid.filter(r => r.exitType === et);
     byExit[et] = {
       count: eSigs.length,
       pct: total > 0 ? parseFloat((eSigs.length / total * 100).toFixed(1)) : 0,
-      pnl: eSigs.reduce((a, b) => a + b.pnlDollars, 0),
+      pnl: eSigs.reduce((a, b) => a + (b.pnlDollars || 0), 0),
     };
   }
 
   // Direction stats
-  const calls = results.filter(r => r.direction === 'CALL');
-  const puts = results.filter(r => r.direction === 'PUT');
-  const neutrals = results.filter(r => r.direction === 'NEUTRAL');
+  const calls = valid.filter(r => r.direction === 'CALL');
+  const puts = valid.filter(r => r.direction === 'PUT');
+  const neutrals = valid.filter(r => r.direction === 'NEUTRAL');
 
   // Weekly P&L for target analysis
   const weeklyPnls = computeWeeklyPnls(equityCurve, config.accountSize);
@@ -318,7 +339,7 @@ function buildMultiStratResults(results, config, tradingDays) {
       startDate: config.startDate,
       endDate: config.endDate,
       accountSize: config.accountSize,
-      tickerCount: new Set(results.map(r => r.ticker)).size,
+      tickerCount: new Set(valid.map(r => r.ticker)).size,
       tradingDays: tradingDays.length,
       strategies: stratNames,
     },
@@ -355,7 +376,7 @@ function buildMultiStratResults(results, config, tradingDays) {
     byGrade,
     byExit,
     equityCurve,
-    signals: results.map(r => ({
+    signals: valid.map(r => ({
       strategy: r.strategy, date: r.date, time: r.time,
       ticker: r.ticker, direction: r.direction, grade: r.grade,
       composite: r.composite, freshness: r.freshness,

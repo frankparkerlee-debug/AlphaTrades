@@ -16,7 +16,7 @@ import { classifyRegime } from '../../../src/scoring/intelligence.js';
 import { getSpreadWidth, POSITION_SIZES } from '../execution-model.js';
 
 const STRATEGY = 'B1_IV_PREMIUM';
-const MIN_IV_RANK       = 70;       // IV must be in top 30%
+const MIN_IV_RANK       = 55;       // IV must be above median (was 70 — too restrictive without iv_history populated)
 const MIN_EARNINGS_DAYS = 10;       // no entries within 10 days of earnings
 const HOLD_DAYS         = 5;        // target hold period
 const CREDIT_RATIO      = 0.32;     // collect ~32% of spread width as credit

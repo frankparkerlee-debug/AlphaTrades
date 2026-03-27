@@ -7,7 +7,7 @@ import { Pool } from 'pg';
 import cron from 'node-cron';
 import { readFileSync, existsSync } from 'fs';
 import { createServer } from 'http';
-import { selectOptionsContract, getOptionsVolume } from './src/options/contract-selector.js';
+import { selectOptionsContract, getOptionsVolume, fetchContractQuote } from './src/options/contract-selector.js';
 import { getNewsEvents, getTickerState } from './src/data/state.js';
 import { computeNewsScore } from './src/scoring/news.js';
 import { runBacktest } from './scripts/backtest/run.js';
@@ -3355,7 +3355,7 @@ async function monitorActiveSignals(alpacaHdrs, dataUrl, profiles) {
 
     // Get all ACTIVE and WEAKENING signals from today
     const res = await db.query(`
-      SELECT signal_id, ticker, direction, atr_multiple, grade, news_headline
+      SELECT signal_id, ticker, direction, atr_multiple, grade, news_headline, contract_symbol
       FROM lc_v3.signals
       WHERE status IN ('ACTIVE','WEAKENING','PAPER_ONLY')
       AND DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
@@ -3396,25 +3396,26 @@ async function monitorActiveSignals(alpacaHdrs, dataUrl, profiles) {
         console.log(`[MONITOR] ${signal.ticker} ${signal.direction} → ${result.status}: ${result.note}`);
       }
 
-      // Refresh live contract quotes (bid/ask/mid/greeks) but preserve original entry prices
+      // Refresh live contract quotes (bid/ask/mid/greeks) — NEVER touch t1/t2/t3/stop
+      // Targets are locked at entry time. Only live market data updates here.
       try {
-        const sigStrategy = ((signal.news_headline || '').match(/strategy=(\w+)/) || [])[1] || '';
-        const minDTE = STRATEGY_MIN_DTE[sigStrategy] ?? 0;
-        const contract = await selectOptionsContract(signal.ticker, signal.direction, signal.grade, price, atr, { minDTE });
-        if (contract) {
-          await db.query(`
-            UPDATE lc_v3.signals SET
-              contract_bid = $1, contract_ask = $2, contract_mid = $3,
-              contract_delta = $4, contract_iv = $5,
-              contract_t1 = $6, contract_t2 = $7, contract_t3 = $8, contract_stop = $9
-            WHERE signal_id = $10
-          `, [
-            contract.bid, contract.ask, contract.mid,
-            contract.delta, contract.iv,
-            contract.t1, contract.t2, contract.t3, contract.stop,
-            signal.signal_id,
-          ]);
+        if (signal.contract_symbol) {
+          // Fetch live quote for the SAME contract that was selected at entry
+          const quote = await fetchContractQuote(signal.contract_symbol);
+          if (quote && quote.mid > 0) {
+            await db.query(`
+              UPDATE lc_v3.signals SET
+                contract_bid = $1, contract_ask = $2, contract_mid = $3,
+                contract_delta = $4, contract_iv = $5
+              WHERE signal_id = $6
+            `, [
+              quote.bid, quote.ask, quote.mid,
+              quote.delta, quote.iv,
+              signal.signal_id,
+            ]);
+          }
         }
+        // If no contract_symbol yet, skip — backfill handles initial selection
       } catch (ce) {
         // Don't log every cycle — only on first failure
       }

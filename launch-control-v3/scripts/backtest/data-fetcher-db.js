@@ -2,8 +2,45 @@
  * Historical Data Fetcher — DB-backed version
  * Reads from lc_v3.bars instead of Alpaca API.
  * Used when running backtest on Render where bars are already seeded.
+ *
+ * Falls back to Alpaca API for SPY/QQQ/VIX when not in DB
+ * (critical for regime detection accuracy).
  */
 import { query } from '../../src/data/db.js';
+import axios from 'axios';
+
+const DATA_URL = process.env.ALPACA_DATA_URL || 'https://data.alpaca.markets';
+const API_HEADERS = {
+  'APCA-API-KEY-ID':     process.env.ALPACA_API_KEY,
+  'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY,
+};
+
+/**
+ * Fetch minute bars from Alpaca API for a single symbol.
+ * Used as fallback for SPY/QQQ/VIX when they're missing from DB.
+ */
+async function fetchBarsFromAPI(symbol, timeframe, startDate, endDate, feed = 'sip') {
+  const allBars = [];
+  let pageToken = null;
+  try {
+    do {
+      const params = {
+        timeframe, start: `${startDate}T00:00:00Z`, end: `${endDate}T23:59:59Z`,
+        feed, adjustment: 'all', limit: 10000,
+      };
+      if (pageToken) params.page_token = pageToken;
+      const res = await axios.get(`${DATA_URL}/v2/stocks/${symbol}/bars`, {
+        headers: API_HEADERS, params, timeout: 15000,
+      });
+      allBars.push(...(res.data.bars || []));
+      pageToken = res.data.next_page_token || null;
+    } while (pageToken);
+    console.log(`[DATA-DB] Fetched ${allBars.length} ${timeframe} bars for ${symbol} from Alpaca API`);
+  } catch (err) {
+    console.warn(`[DATA-DB] API fetch failed for ${symbol}: ${err.message}`);
+  }
+  return allBars;
+}
 
 /**
  * Fetch all data from the database for the given date range.
@@ -87,45 +124,59 @@ export async function fetchAllDataFromDB(config, tickers) {
     }
   }
 
-  // ETF minute bars (SPY/QQQ if they're in the bars table)
-  // If not in bars table, synthesize from a high-volume ticker (e.g., AAPL or NVDA)
+  // ETF minute bars (SPY/QQQ) — critical for regime detection
+  // If not in DB, fetch from Alpaca API (real data >> synthetic flat bars)
   const etfMinuteBars = {};
   for (const etf of ['SPY', 'QQQ']) {
     etfMinuteBars[etf] = minuteBars[etf] || {};
   }
 
-  // If no SPY/QQQ bars, use the first ticker with the most bars as time reference
-  // and create synthetic SPY/QQQ entries so the replay engine can iterate
-  if (Object.keys(etfMinuteBars.SPY).length === 0) {
-    console.log('[DATA-DB] No SPY/QQQ bars in DB — synthesizing time reference from ticker bars');
-    // Find ticker with most bars
-    let refTicker = null, maxBars = 0;
-    for (const [ticker, idx] of Object.entries(minuteBars)) {
-      const count = Object.keys(idx).length;
-      if (count > maxBars) { maxBars = count; refTicker = ticker; }
-    }
-    if (refTicker) {
-      console.log(`[DATA-DB] Using ${refTicker} (${maxBars} bars) as time reference`);
-      // Copy the reference ticker's bars as synthetic SPY/QQQ
-      // with c=0 so market scores default to neutral
-      for (const [key, bar] of Object.entries(minuteBars[refTicker])) {
-        const synthBar = { t: bar.t, o: 100, h: 100, l: 100, c: 100, v: 0 };
-        if (!etfMinuteBars.SPY[key]) etfMinuteBars.SPY[key] = synthBar;
-        if (!etfMinuteBars.QQQ[key]) etfMinuteBars.QQQ[key] = synthBar;
+  if (Object.keys(etfMinuteBars.SPY).length === 0 && API_HEADERS['APCA-API-KEY-ID']) {
+    console.log('[DATA-DB] No SPY/QQQ bars in DB — fetching from Alpaca API for accurate regime detection');
+    for (const etf of ['SPY', 'QQQ']) {
+      try {
+        const apiBars = await fetchBarsFromAPI(etf, '1Min', startDate, endDate, 'sip');
+        for (const bar of apiBars) {
+          const ts = new Date(bar.t);
+          const minuteKey = ts.toISOString().slice(0, 16);
+          const dateStr = ts.toISOString().split('T')[0];
+          const formatted = { t: bar.t, o: bar.o, h: bar.h, l: bar.l, c: bar.c, v: bar.v || 0, vw: bar.vw || null };
+          etfMinuteBars[etf][minuteKey] = formatted;
+          // Also add to daily aggregation
+          if (!dailyBars[etf]) dailyBars[etf] = {};
+          if (!dailyBars[etf][dateStr]) {
+            dailyBars[etf][dateStr] = { t: `${dateStr}T16:00:00Z`, o: bar.o, h: bar.h, l: bar.l, c: bar.c, v: 0 };
+          } else {
+            const d = dailyBars[etf][dateStr];
+            d.h = Math.max(d.h, bar.h);
+            d.l = Math.min(d.l, bar.l);
+            d.c = bar.c;
+            d.v += (bar.v || 0);
+          }
+        }
+      } catch (err) {
+        console.warn(`[DATA-DB] Failed to fetch ${etf} from API: ${err.message}`);
       }
-      // Synthetic daily bars for prevClose
-      if (!dailyBars.SPY) dailyBars.SPY = {};
-      if (!dailyBars.QQQ) dailyBars.QQQ = {};
-      for (const [date, agg] of Object.entries(dailyByTicker[refTicker] || {})) {
-        if (!dailyBars.SPY[date]) dailyBars.SPY[date] = { t: `${date}T16:00:00Z`, o: 100, h: 100, l: 100, c: 100, v: 0 };
-        if (!dailyBars.QQQ[date]) dailyBars.QQQ[date] = { t: `${date}T16:00:00Z`, o: 100, h: 100, l: 100, c: 100, v: 0 };
-      }
     }
+    console.log(`[DATA-DB] SPY bars: ${Object.keys(etfMinuteBars.SPY).length}, QQQ bars: ${Object.keys(etfMinuteBars.QQQ).length}`);
   }
 
-  // VIX — not in DB, use default
+  // VIX — fetch from API for accurate volatility regime detection
   const vixByTime = {};
-  console.log('[DATA-DB] VIX not in DB — using default 18');
+  if (API_HEADERS['APCA-API-KEY-ID']) {
+    try {
+      const vixBars = await fetchBarsFromAPI('VIX', '15Min', startDate, endDate, 'iex');
+      for (const bar of vixBars) {
+        const key = new Date(bar.t).toISOString().slice(0, 16);
+        vixByTime[key] = bar.c;
+      }
+      console.log(`[DATA-DB] VIX: ${Object.keys(vixByTime).length} data points loaded`);
+    } catch (err) {
+      console.warn(`[DATA-DB] VIX fetch failed — using default 18: ${err.message}`);
+    }
+  } else {
+    console.log('[DATA-DB] No Alpaca keys — VIX defaults to 18');
+  }
 
   // News — not in DB for backtest, will return empty
   const newsByTickerDate = {};

@@ -272,6 +272,79 @@ export async function selectOptionsContract(ticker, direction, grade, currentPri
 }
 
 /**
+ * Fetch a live quote for a SPECIFIC options contract symbol.
+ * Used by the monitor to refresh bid/ask/mid/greeks without re-running selection.
+ * @param {string} contractSymbol - OCC symbol like "AAPL260327C00175000"
+ * @returns {Object|null} { bid, ask, mid, delta, gamma, theta, vega, iv } or null
+ */
+export async function fetchContractQuote(contractSymbol) {
+  try {
+    // Extract underlying ticker from OCC symbol (1-6 alpha chars at start)
+    const ticker = contractSymbol.match(/^([A-Z]{1,6})/)?.[1];
+    if (!ticker) return null;
+
+    const res = await axios.get(`${DATA_URL}/v1beta1/options/snapshots/${ticker}`, {
+      headers,
+      params: { limit: 100 },
+      timeout: 10000,
+    });
+    const snaps = res.data?.snapshots || {};
+    const snap = snaps[contractSymbol];
+    if (!snap) {
+      // Try paginating to find it
+      let pageToken = res.data?.next_page_token;
+      let pages = 1;
+      while (pageToken && pages < 5) {
+        const nextRes = await axios.get(`${DATA_URL}/v1beta1/options/snapshots/${ticker}`, {
+          headers,
+          params: { limit: 100, page_token: pageToken },
+          timeout: 10000,
+        });
+        const nextSnaps = nextRes.data?.snapshots || {};
+        if (nextSnaps[contractSymbol]) {
+          const s = nextSnaps[contractSymbol];
+          const greeks = s.greeks || {};
+          const quote = s.latestQuote || {};
+          const bid = quote.bp || 0;
+          const ask = quote.ap || 0;
+          const mid = bid > 0 && ask > 0 ? parseFloat(((bid + ask) / 2).toFixed(2)) : 0;
+          return {
+            bid, ask, mid,
+            delta: parseFloat((Math.abs(greeks.delta || 0)).toFixed(3)),
+            gamma: parseFloat((Math.abs(greeks.gamma || 0)).toFixed(5)),
+            theta: parseFloat((greeks.theta || 0).toFixed(4)),
+            vega: parseFloat((greeks.vega || 0).toFixed(4)),
+            iv: parseFloat(((greeks.impliedVolatility || 0) * 100).toFixed(1)),
+          };
+        }
+        pageToken = nextRes.data?.next_page_token;
+        pages++;
+      }
+      console.log(`[contract] Quote not found for ${contractSymbol}`);
+      return null;
+    }
+
+    const greeks = snap.greeks || {};
+    const quote = snap.latestQuote || {};
+    const bid = quote.bp || 0;
+    const ask = quote.ap || 0;
+    const mid = bid > 0 && ask > 0 ? parseFloat(((bid + ask) / 2).toFixed(2)) : 0;
+
+    return {
+      bid, ask, mid,
+      delta: parseFloat((Math.abs(greeks.delta || 0)).toFixed(3)),
+      gamma: parseFloat((Math.abs(greeks.gamma || 0)).toFixed(5)),
+      theta: parseFloat((greeks.theta || 0).toFixed(4)),
+      vega: parseFloat((greeks.vega || 0).toFixed(4)),
+      iv: parseFloat(((greeks.impliedVolatility || 0) * 100).toFixed(1)),
+    };
+  } catch (err) {
+    console.error(`[contract] Quote fetch failed for ${contractSymbol}:`, err.message);
+    return null;
+  }
+}
+
+/**
  * Check total options volume for a ticker today.
  * Returns total volume across all call+put snapshots.
  */

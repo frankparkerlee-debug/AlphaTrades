@@ -18,7 +18,7 @@ import { analyzeTrend, classifyRegime } from '../../../src/scoring/intelligence.
 import { getSpreadWidth, POSITION_SIZES } from '../execution-model.js';
 
 const STRATEGY = 'A3_OVEREXTENSION_REVERSAL';
-const MIN_ATR_OVEREXTENSION = 2.0;    // must be >= 2 ATR from open
+const MIN_ATR_OVEREXTENSION = 1.5;    // must be >= 1.5 ATR from open (was 2.0 — too restrictive intraday)
 const MIN_REVERSION_SPEED   = 0.4;    // profile.mean_reversion_speed minimum
 const MIN_EARNINGS_DAYS     = 3;      // no entries within 3 days of earnings
 const MAX_HOLD_MINUTES      = 30;

@@ -130,31 +130,37 @@ function buildEmptyResults(config) {
 }
 
 function buildResults(results, config) {
-  const total     = results.length;
-  const wins      = results.filter(r => r.pnlDollars > 0);
-  const losses    = results.filter(r => r.pnlDollars < 0);
-  const totalPnl  = results.reduce((a, b) => a + b.pnlDollars, 0);
+  // Filter out results with NaN/undefined pnlDollars (defensive)
+  const valid = results.filter(r => Number.isFinite(r.pnlDollars));
+  if (valid.length < results.length) {
+    console.warn(`[BACKTEST] WARNING: ${results.length - valid.length} results had invalid pnlDollars — excluded`);
+  }
+
+  const total     = valid.length;
+  const wins      = valid.filter(r => r.pnlDollars > 0);
+  const losses    = valid.filter(r => r.pnlDollars < 0);
+  const totalPnl  = valid.reduce((a, b) => a + (b.pnlDollars || 0), 0);
   const totalPnlPct = config.accountSize > 0 ? (totalPnl / config.accountSize) * 100 : 0;
   const winRate   = total > 0 ? (wins.length / total) * 100 : 0;
 
-  const grossWins   = wins.reduce((a, b) => a + b.pnlDollars, 0);
-  const grossLosses = Math.abs(losses.reduce((a, b) => a + b.pnlDollars, 0));
+  const grossWins   = wins.reduce((a, b) => a + (b.pnlDollars || 0), 0);
+  const grossLosses = Math.abs(losses.reduce((a, b) => a + (b.pnlDollars || 0), 0));
   const profitFactor = grossLosses > 0 ? grossWins / grossLosses : (grossWins > 0 ? 999 : 0);
 
-  const avgWin  = wins.length > 0 ? wins.reduce((a, b) => a + b.pnlPct, 0) / wins.length : 0;
-  const avgLoss = losses.length > 0 ? losses.reduce((a, b) => a + b.pnlPct, 0) / losses.length : 0;
-  const avgHold = total > 0 ? Math.round(results.reduce((a, b) => a + b.holdMinutes, 0) / total) : 0;
+  const avgWin  = wins.length > 0 ? wins.reduce((a, b) => a + (b.pnlPct || 0), 0) / wins.length : 0;
+  const avgLoss = losses.length > 0 ? losses.reduce((a, b) => a + (b.pnlPct || 0), 0) / losses.length : 0;
+  const avgHold = total > 0 ? Math.round(valid.reduce((a, b) => a + (b.holdMinutes || 0), 0) / total) : 0;
 
   // Equity curve + max drawdown
   let peak = 0, maxDD = 0, cumPnl = 0;
   const equityCurve = [];
   const byDate = {};
-  for (const r of results) {
+  for (const r of valid) {
     if (!byDate[r.date]) byDate[r.date] = [];
     byDate[r.date].push(r);
   }
   for (const date of Object.keys(byDate).sort()) {
-    const dayPnl = byDate[date].reduce((a, b) => a + b.pnlDollars, 0);
+    const dayPnl = byDate[date].reduce((a, b) => a + (b.pnlDollars || 0), 0);
     cumPnl += dayPnl;
     peak = Math.max(peak, cumPnl);
     maxDD = Math.min(maxDD, cumPnl - peak);
@@ -167,13 +173,13 @@ function buildResults(results, config) {
   const grades = ['A+', 'A', 'A-', 'B+', 'B'];
   const byGrade = {};
   for (const g of grades) {
-    const gSigs = results.filter(r => r.grade === g);
+    const gSigs = valid.filter(r => r.grade === g);
     const gWins = gSigs.filter(r => r.pnlDollars > 0);
     byGrade[g] = {
       count: gSigs.length,
       winRate: gSigs.length > 0 ? parseFloat((gWins.length / gSigs.length * 100).toFixed(1)) : 0,
-      pnl: gSigs.reduce((a, b) => a + b.pnlDollars, 0),
-      avgPnl: gSigs.length > 0 ? Math.round(gSigs.reduce((a, b) => a + b.pnlDollars, 0) / gSigs.length) : 0,
+      pnl: gSigs.reduce((a, b) => a + (b.pnlDollars || 0), 0),
+      avgPnl: gSigs.length > 0 ? Math.round(gSigs.reduce((a, b) => a + (b.pnlDollars || 0), 0) / gSigs.length) : 0,
     };
   }
 
@@ -181,17 +187,17 @@ function buildResults(results, config) {
   const exitTypes = ['T1', 'T2', 'T3', 'STOP', 'EOD'];
   const byExit = {};
   for (const et of exitTypes) {
-    const eSigs = results.filter(r => r.exitType === et);
+    const eSigs = valid.filter(r => r.exitType === et);
     byExit[et] = {
       count: eSigs.length,
       pct: total > 0 ? parseFloat((eSigs.length / total * 100).toFixed(1)) : 0,
-      pnl: eSigs.reduce((a, b) => a + b.pnlDollars, 0),
+      pnl: eSigs.reduce((a, b) => a + (b.pnlDollars || 0), 0),
     };
   }
 
   // By ticker
   const tickerMap = {};
-  for (const r of results) {
+  for (const r of valid) {
     if (!tickerMap[r.ticker]) tickerMap[r.ticker] = [];
     tickerMap[r.ticker].push(r);
   }
@@ -200,26 +206,26 @@ function buildResults(results, config) {
       ticker,
       count: sigs.length,
       winRate: parseFloat((sigs.filter(s => s.pnlDollars > 0).length / sigs.length * 100).toFixed(1)),
-      pnl: sigs.reduce((a, b) => a + b.pnlDollars, 0),
+      pnl: sigs.reduce((a, b) => a + (b.pnlDollars || 0), 0),
     }))
     .sort((a, b) => b.pnl - a.pnl);
 
   // By hour
   const hourMap = {};
-  for (const r of results) {
+  for (const r of valid) {
     const h = r.time.slice(11, 13);
     if (!hourMap[h]) hourMap[h] = { count: 0, wins: 0, pnl: 0 };
     hourMap[h].count++;
     if (r.pnlDollars > 0) hourMap[h].wins++;
-    hourMap[h].pnl += r.pnlDollars;
+    hourMap[h].pnl += (r.pnlDollars || 0);
   }
   const byHour = Object.entries(hourMap).map(([h, d]) => ({
     hour: h, ...d, winRate: d.count > 0 ? parseFloat((d.wins / d.count * 100).toFixed(1)) : 0,
   })).sort((a, b) => a.hour.localeCompare(b.hour));
 
   // Direction stats
-  const calls = results.filter(r => r.direction === 'CALL');
-  const puts  = results.filter(r => r.direction === 'PUT');
+  const calls = valid.filter(r => r.direction === 'CALL');
+  const puts  = valid.filter(r => r.direction === 'PUT');
 
   return {
     config: {
@@ -247,7 +253,7 @@ function buildResults(results, config) {
       putWinRate: puts.length > 0 ? parseFloat((puts.filter(r => r.pnlDollars > 0).length / puts.length * 100).toFixed(1)) : 0,
     },
     byGrade, byExit, byTicker, byHour, equityCurve,
-    signals: results.map(r => ({
+    signals: valid.map(r => ({
       date: r.date, time: r.time, ticker: r.ticker, direction: r.direction,
       grade: r.grade, composite: r.composite, freshness: r.freshness,
       regime: r.regime, signalType: r.signalType,
