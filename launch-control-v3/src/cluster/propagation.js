@@ -125,7 +125,7 @@ export async function runPropagationCheck() {
         WHERE ticker = $1
         AND DATE(created_at AT TIME ZONE 'America/New_York') = $2
       `, [follower.follower_ticker, today]);
-      if (parseInt(existing.rows[0].count) > 0) continue;
+      if (parseInt(existing.rows[0]?.count || 0) > 0) continue;
 
       // Check if follower has already moved (lag window missed)
       const followerState = getTickerState(follower.follower_ticker);

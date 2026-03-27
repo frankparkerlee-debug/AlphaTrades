@@ -236,7 +236,7 @@ export async function runBaseLayerScan() {
     AND signal_tier = 'primary'
   `, [today]);
 
-  if (parseInt(primaryToday.rows[0].count) > 0) return; // primary signals exist
+  if (parseInt(primaryToday.rows[0]?.count || 0) > 0) return; // primary signals exist
 
   logger.info('Base layer scan: no primary signals today — scanning for best B+ setup');
 

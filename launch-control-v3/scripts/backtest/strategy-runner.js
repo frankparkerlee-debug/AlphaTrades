@@ -121,6 +121,7 @@ export async function runMultiStrategyBacktest(startDate, endDate, accountSize =
         allSignals.push(...signals);
       } catch (err) {
         console.log(`[MULTI-STRAT] ${strat.name} error on ${day}: ${err.message}`);
+        console.log(`[MULTI-STRAT] Stack: ${err.stack?.split('\n').slice(0, 3).join(' | ')}`);
       }
     }
   }

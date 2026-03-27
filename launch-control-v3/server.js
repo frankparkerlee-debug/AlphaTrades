@@ -2055,8 +2055,9 @@ app.post('/api/multi-strategy/run', async (req, res) => {
 
     multiStratRun = { status: 'complete', completed_at: new Date().toISOString(), summary: results.summary };
   } catch (err) {
-    console.error('[MULTI-STRAT] Run failed:', err);
-    multiStratRun = { status: 'error', error: err.message };
+    console.error('[MULTI-STRAT] Run failed:', err.message);
+    console.error('[MULTI-STRAT] Stack:', err.stack);
+    multiStratRun = { status: 'error', error: err.message, stack: err.stack };
   }
 });
 
