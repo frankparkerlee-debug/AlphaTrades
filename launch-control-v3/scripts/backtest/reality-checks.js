@@ -228,7 +228,7 @@ function analyzeCostImpact(signals, accountSize) {
     costAsPctOfGross: grossPnl !== 0 ? parseFloat((totalCosts / Math.abs(grossPnl) * 100).toFixed(1)) : 0,
     costPerTrade: signals.length > 0 ? parseFloat((totalCosts / signals.length).toFixed(2)) : 0,
     breakEvenTrades: totalCosts > 0 && signals.length > 0
-      ? Math.ceil(totalCosts / (totalPnl / signals.length || 1))
+      ? Math.max(0, Math.ceil(totalCosts / Math.max(1, totalPnl / signals.length)))
       : 0,
   };
 }

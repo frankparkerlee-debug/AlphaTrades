@@ -16,6 +16,14 @@
  */
 export function splitTrainTest(signals, tradingDays, trainRatio = 0.70) {
   const sorted = [...tradingDays].sort();
+  if (sorted.length === 0) {
+    return {
+      train: { signals: [], days: [] },
+      test:  { signals: [], days: [] },
+      splitDate: null,
+      meta: { totalDays: 0, trainDays: 0, testDays: 0, trainSignals: 0, testSignals: 0, trainRatio: 0 },
+    };
+  }
   const splitIdx = Math.floor(sorted.length * trainRatio);
   const splitDate = sorted[splitIdx] || sorted[sorted.length - 1];
 

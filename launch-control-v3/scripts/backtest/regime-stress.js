@@ -156,8 +156,8 @@ export function runRegimeStress(backtestResults) {
     heavyWinDaysPct: parseFloat((heavyWinDays.length / dailyStats.length * 100).toFixed(1)),
     avgDailyPnl: Math.round(mean(dailyStats.map(d => d.pnl))),
     dailyPnlStdDev: Math.round(Math.sqrt(mean(dailyStats.map(d => d.pnl).map(p => (p - mean(dailyStats.map(d => d.pnl))) ** 2)))),
-    worstDay: dailyStats.sort((a, b) => a.pnl - b.pnl)[0],
-    bestDay: dailyStats.sort((a, b) => b.pnl - a.pnl)[0],
+    worstDay: [...dailyStats].sort((a, b) => a.pnl - b.pnl)[0],
+    bestDay: [...dailyStats].sort((a, b) => b.pnl - a.pnl)[0],
     dailyPnls: dailyStats.map(d => ({ date: d.date, pnl: d.pnl, signals: d.signals, winRate: d.winRate })),
   };
 

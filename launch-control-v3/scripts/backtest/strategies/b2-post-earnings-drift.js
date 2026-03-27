@@ -116,7 +116,7 @@ export function generateB2Signals(date, dayData, context) {
     signals.push({
       strategy: STRATEGY,
       date,
-      time: entryMinuteKey + ':00',
+      time: entryMinuteKey,
       ticker,
       direction,
       grade,

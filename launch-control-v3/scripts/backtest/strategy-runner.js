@@ -72,7 +72,7 @@ export async function runMultiStrategyBacktest(startDate, endDate, accountSize =
   try {
     console.log('[MULTI-STRAT] Fetching bar data from DB...');
     data = await fetchAllDataFromDB(config, tickers);
-    if (data.tradingDays.length === 0) {
+    if (!data.tradingDays || data.tradingDays.length === 0) {
       console.log('[MULTI-STRAT] No bars in DB — falling back to API...');
       data = await fetchAllData(config, tickers);
     }
@@ -177,7 +177,7 @@ function applyPortfolioConstraints(signals, accountSize) {
   // Sort by date/time, then apply concurrent position limits
   const sorted = [...signals].sort((a, b) => {
     if (a.date !== b.date) return a.date.localeCompare(b.date);
-    return a.time.localeCompare(b.time);
+    return (a.time || '').localeCompare(b.time || '');
   });
 
   const accepted = [];
@@ -224,7 +224,7 @@ function buildMultiStratResults(results, config, tradingDays) {
 
   const avgWin = wins.length > 0 ? wins.reduce((a, b) => a + b.pnlPct, 0) / wins.length : 0;
   const avgLoss = losses.length > 0 ? losses.reduce((a, b) => a + b.pnlPct, 0) / losses.length : 0;
-  const avgHold = total > 0 ? Math.round(results.reduce((a, b) => a + b.holdMinutes, 0) / total) : 0;
+  const avgHold = total > 0 ? Math.round(results.reduce((a, b) => a + (b.holdMinutes || 0), 0) / total) : 0;
 
   // Equity curve + drawdown
   let peak = 0, maxDD = 0, cumPnl = 0;
@@ -262,7 +262,7 @@ function buildMultiStratResults(results, config, tradingDays) {
       totalPnl: stratSigs.reduce((a, b) => a + b.pnlDollars, 0),
       avgPnl: stratSigs.length > 0 ? Math.round(stratSigs.reduce((a, b) => a + b.pnlDollars, 0) / stratSigs.length) : 0,
       profitFactor: stratGrossLoss > 0 ? parseFloat((stratGrossWin / stratGrossLoss).toFixed(2)) : (stratGrossWin > 0 ? 999 : 0),
-      avgHoldMinutes: stratSigs.length > 0 ? Math.round(stratSigs.reduce((a, b) => a + b.holdMinutes, 0) / stratSigs.length) : 0,
+      avgHoldMinutes: stratSigs.length > 0 ? Math.round(stratSigs.reduce((a, b) => a + (b.holdMinutes || 0), 0) / stratSigs.length) : 0,
       commissions: stratSigs.reduce((a, b) => a + (b.commissions || 0), 0),
     };
   }
@@ -298,7 +298,7 @@ function buildMultiStratResults(results, config, tradingDays) {
   const neutrals = results.filter(r => r.direction === 'NEUTRAL');
 
   // Weekly P&L for target analysis
-  const weeklyPnls = computeWeeklyPnls(equityCurve);
+  const weeklyPnls = computeWeeklyPnls(equityCurve, config.accountSize);
   const weeklyReturn = weeklyPnls.map(w => w.pnlPct);
   const weeksAbove15 = weeklyReturn.filter(r => r >= 15).length;
   const weeksAbove20 = weeklyReturn.filter(r => r >= 20).length;
@@ -386,7 +386,7 @@ function buildEmptyResults(config) {
   };
 }
 
-function computeWeeklyPnls(equityCurve) {
+function computeWeeklyPnls(equityCurve, accountSize = 7500) {
   if (equityCurve.length === 0) return [];
 
   const weeks = [];
@@ -416,10 +416,8 @@ function computeWeeklyPnls(equityCurve) {
     weeks.push({ weekStart, pnl: weekPnl, signals: weekSignals });
   }
 
-  // Add pnlPct based on account size (from config)
-  const accountSize = 7500;
   return weeks.map(w => ({
     ...w,
-    pnlPct: parseFloat((w.pnl / accountSize * 100).toFixed(2)),
+    pnlPct: parseFloat((w.pnl / 7500 * 100).toFixed(2)),
   }));
 }

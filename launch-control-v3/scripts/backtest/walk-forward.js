@@ -76,8 +76,10 @@ export function runWalkForward(backtestResults) {
     const trainDates = dates.slice(0, testStart);
     const testDates = dates.slice(testStart, testStart + TEST_WINDOW_DAYS);
 
-    const trainSignals = signals.filter(s => trainDates.includes(s.date));
-    const testSignals = signals.filter(s => testDates.includes(s.date));
+    const trainSet = new Set(trainDates);
+    const testSet = new Set(testDates);
+    const trainSignals = signals.filter(s => trainSet.has(s.date));
+    const testSignals = signals.filter(s => testSet.has(s.date));
 
     if (trainSignals.length < MIN_SIGNALS_PER_WINDOW || testSignals.length < MIN_SIGNALS_PER_WINDOW) continue;
 
@@ -149,8 +151,9 @@ export function runWalkForward(backtestResults) {
     const mid = Math.floor(gDates.length / 2);
     if (mid < 2) continue;
 
-    const firstHalf = gSignals.filter(s => gDates.indexOf(s.date) < mid);
-    const secondHalf = gSignals.filter(s => gDates.indexOf(s.date) >= mid);
+    const firstHalfDates = new Set(gDates.slice(0, mid));
+    const firstHalf = gSignals.filter(s => firstHalfDates.has(s.date));
+    const secondHalf = gSignals.filter(s => !firstHalfDates.has(s.date));
 
     byGrade[g] = {
       firstHalf: {

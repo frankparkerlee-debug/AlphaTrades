@@ -132,7 +132,7 @@ export function generateA3Signals(date, dayData, context) {
       signals.push({
         strategy: STRATEGY,
         date,
-        time: minuteKey + ':00',
+        time: minuteKey,
         ticker,
         direction: reversionDirection,
         grade,

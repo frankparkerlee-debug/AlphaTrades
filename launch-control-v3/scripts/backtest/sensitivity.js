@@ -65,7 +65,7 @@ function regradeSignals(signals, thresholds, accountSize) {
     const sizeDollars = accountSize * sizePct;
 
     // Keep the same P&L percentage but adjust dollar P&L for new size
-    const pnlDollars = Math.round(sizeDollars * (s.pnlPct / 100));
+    const pnlDollars = Math.round(sizeDollars * ((s.pnlPct || 0) / 100));
 
     return { ...s, grade: newGrade, pnlDollars, sizeDollars };
   }).filter(Boolean);

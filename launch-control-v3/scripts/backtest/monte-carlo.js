@@ -31,6 +31,7 @@ function mean(arr) {
 }
 
 function stddev(arr) {
+  if (arr.length === 0) return 0;
   const m = mean(arr);
   return Math.sqrt(arr.reduce((sum, v) => sum + (v - m) ** 2, 0) / arr.length);
 }
@@ -340,8 +341,9 @@ function buildHistogram(values, buckets) {
   const clean = values.filter(v => Number.isFinite(v));
   if (clean.length === 0) return [];
 
-  const min = Math.min(...clean);
-  const max = Math.max(...clean);
+  // Use reduce to avoid stack overflow on large arrays
+  const min = clean.reduce((a, b) => a < b ? a : b, clean[0]);
+  const max = clean.reduce((a, b) => a > b ? a : b, clean[0]);
   const range = max - min || 1;
   const bucketSize = range / buckets;
 
@@ -357,7 +359,7 @@ function buildHistogram(values, buckets) {
   }
 
   // Normalize to percentages
-  const total = values.length;
+  const total = clean.length;
   for (const b of bins) {
     b.pct = parseFloat((b.count / total * 100).toFixed(2));
   }

@@ -140,7 +140,7 @@ export function generateA2Signals(date, dayData, context) {
       signals.push({
         strategy: STRATEGY,
         date,
-        time: fire.time + ':00',
+        time: fire.time,
         ticker: follower,
         direction: fire.direction,
         grade,
@@ -150,7 +150,7 @@ export function generateA2Signals(date, dayData, context) {
         spreadWidth,
         entryDebit: spreadWidth * 0.45,
         stopCondition:   { type: 'ATR', value: 0.5 },
-        targetCondition: { type: 'ATR', value: expectedMag / followerAtr / followerBar.c || 0.8 },
+        targetCondition: { type: 'ATR', value: (followerAtr > 0 && followerBar.c > 0) ? Math.max(0.3, Math.min(2.0, expectedMag / followerAtr / followerBar.c)) : 0.8 },
         maxHoldMinutes: Math.max(15, holdMinutes * 2), // allow 2x the avg lag
         holdDays: 0,
         sizePct,

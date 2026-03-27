@@ -160,7 +160,7 @@ export function simulateDebitSpread(signal, bars, params) {
   let exitType = 'EOD';
   let exitBar = bars[bars.length - 1] || null;
   let holdMinutes = 0;
-  const entryTime = new Date(signal.time + ':00Z');
+  const entryTime = new Date(signal.time.length <= 16 ? signal.time + ':00Z' : signal.time);
 
   for (let i = 0; i < bars.length; i++) {
     const bar = bars[i];
@@ -355,7 +355,7 @@ export function simulateCreditSpread(signal, bars, params) {
   let exitType = 'EOD';
   let exitBar = bars[bars.length - 1] || null;
   let holdMinutes = 0;
-  const entryTime = new Date(signal.time + ':00Z');
+  const entryTime = new Date(signal.time.length <= 16 ? signal.time + ':00Z' : signal.time);
 
   for (let i = 0; i < bars.length; i++) {
     const bar = bars[i];
@@ -501,7 +501,7 @@ export function simulateIronCondor(signal, bars, params) {
   let exitType = 'EXPIRY';
   let exitBar = bars[bars.length - 1] || null;
   let holdMinutes = 0;
-  const entryTime = new Date(signal.time + ':00Z');
+  const entryTime = new Date(signal.time.length <= 16 ? signal.time + ':00Z' : signal.time);
 
   for (let i = 0; i < bars.length; i++) {
     const bar = bars[i];
@@ -609,8 +609,9 @@ export function simulateAllSpreads(signals, rawMinuteBars, opts = {}) {
   for (const signal of signals) {
     const tickerBars = rawMinuteBars[signal.ticker] || [];
 
-    // Get bars after signal time
-    const signalTime = signal.time + ':00Z';
+    // Get bars after signal time — normalize time to valid ISO
+    const rawTime = signal.time.length <= 16 ? signal.time + ':00Z' : signal.time;
+    const signalTimeMs = new Date(rawTime).getTime();
     const signalDate = signal.date;
 
     let remaining;
@@ -622,14 +623,16 @@ export function simulateAllSpreads(signals, rawMinuteBars, opts = {}) {
       const endDateStr = endDateObj.toISOString().split('T')[0];
 
       remaining = tickerBars.filter(b => {
+        const bt = new Date(b.t).getTime();
         const bd = new Date(b.t).toISOString().split('T')[0];
-        return b.t > signalTime && bd <= endDateStr;
+        return bt > signalTimeMs && bd <= endDateStr;
       }).sort((a, b) => new Date(a.t) - new Date(b.t));
     } else {
       // Intraday: same day only
       remaining = tickerBars.filter(b => {
+        const bt = new Date(b.t).getTime();
         const bd = new Date(b.t).toISOString().split('T')[0];
-        return bd === signalDate && b.t > signalTime;
+        return bd === signalDate && bt > signalTimeMs;
       }).sort((a, b) => new Date(a.t) - new Date(b.t));
     }
 

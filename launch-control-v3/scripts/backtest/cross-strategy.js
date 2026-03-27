@@ -10,6 +10,7 @@ function mean(arr) {
 }
 
 function stddev(arr) {
+  if (arr.length === 0) return 0;
   const m = mean(arr);
   return Math.sqrt(arr.reduce((s, v) => s + (v - m) ** 2, 0) / arr.length);
 }

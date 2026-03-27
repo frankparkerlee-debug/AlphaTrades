@@ -125,7 +125,7 @@ export function generateA1Signals(date, dayData, context) {
       signals.push({
         strategy: STRATEGY,
         date,
-        time: minuteKey.replace('T', 'T') + ':00',
+        time: minuteKey,
         ticker,
         direction,
         grade,
