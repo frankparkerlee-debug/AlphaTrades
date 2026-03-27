@@ -143,9 +143,10 @@ function simulate(signals, dailyCounts, accountSize, iterations, simDays) {
 
       for (let s = 0; s < nSignals; s++) {
         const trade = pickRandom(signals);
-        dayPnl += trade.pnlDollars;
+        const pnl = trade.pnlDollars || 0;
+        dayPnl += pnl;
         trades++;
-        if (trade.pnlDollars > 0) wins++;
+        if (pnl > 0) wins++;
       }
 
       cumPnl += dayPnl;
@@ -335,8 +336,12 @@ function computeTradeStats(signals) {
 // ── Histogram Builder ───────────────────────────────────────────────────────
 
 function buildHistogram(values, buckets) {
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  // Filter out NaN/Infinity values that break histogram math
+  const clean = values.filter(v => Number.isFinite(v));
+  if (clean.length === 0) return [];
+
+  const min = Math.min(...clean);
+  const max = Math.max(...clean);
   const range = max - min || 1;
   const bucketSize = range / buckets;
 
@@ -346,8 +351,8 @@ function buildHistogram(values, buckets) {
     count: 0,
   }));
 
-  for (const v of values) {
-    const idx = Math.min(Math.floor((v - min) / bucketSize), buckets - 1);
+  for (const v of clean) {
+    const idx = Math.max(0, Math.min(Math.floor((v - min) / bucketSize), buckets - 1));
     bins[idx].count++;
   }
 
