@@ -16,6 +16,8 @@ import { runMonteCarlo } from './monte-carlo.js';
 import { runWalkForward } from './walk-forward.js';
 import { runRegimeStress } from './regime-stress.js';
 import { runSensitivity } from './sensitivity.js';
+import { analyzeEntryExitQuality } from './entry-exit-analysis.js';
+import { runStatisticalTests } from './statistical-tests.js';
 import { query } from '../../src/data/db.js';
 
 // Strategy imports
@@ -166,6 +168,14 @@ export async function runMultiStrategyBacktest(startDate, endDate, accountSize =
   // 12. Sensitivity
   console.log('[MULTI-STRAT] Running sensitivity analysis...');
   output.sensitivity = runSensitivity(output);
+
+  // 13. Entry/exit quality (MFE/MAE analysis)
+  console.log('[MULTI-STRAT] Running entry/exit quality analysis...');
+  output.entryExitQuality = analyzeEntryExitQuality(output);
+
+  // 14. Institutional statistical tests (DSR, t-test, block bootstrap, CVaR, benchmark)
+  console.log('[MULTI-STRAT] Running statistical significance tests...');
+  output.statisticalTests = runStatisticalTests(output);
 
   console.log(`[MULTI-STRAT] Backtest complete.\n`);
   return output;
@@ -355,6 +365,8 @@ function buildMultiStratResults(results, config, tradingDays) {
       holdMinutes: r.holdMinutes, scores: r.scores,
       spreadType: r.spreadType, contracts: r.contracts,
       commissions: r.commissions,
+      mfePct: r.mfePct, maePct: r.maePct,
+      exitEfficiency: r.exitEfficiency,
     })),
   };
 }

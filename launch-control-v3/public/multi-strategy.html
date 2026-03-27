@@ -147,6 +147,8 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;b
   <div class="tab" data-tab="correlation">CORRELATION</div>
   <div class="tab" data-tab="sizing">SIZING</div>
   <div class="tab" data-tab="validation">VALIDATION</div>
+  <div class="tab" data-tab="entryexit">ENTRY/EXIT</div>
+  <div class="tab" data-tab="statistical">STATISTICAL</div>
   <div class="tab" data-tab="signals">SIGNALS</div>
 </div>
 
@@ -156,6 +158,8 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;b
   <div class="tab-content" id="tc-correlation"></div>
   <div class="tab-content" id="tc-sizing"></div>
   <div class="tab-content" id="tc-validation"></div>
+  <div class="tab-content" id="tc-entryexit"></div>
+  <div class="tab-content" id="tc-statistical"></div>
   <div class="tab-content" id="tc-signals"></div>
 </div>
 
@@ -192,6 +196,8 @@ async function loadData(){
     renderCorrelation(res);
     renderSizing(res);
     renderValidation(res);
+    renderEntryExit(res);
+    renderStatistical(res);
     renderSignals(res);
   }catch(e){
     console.error('Load error:',e);
@@ -200,7 +206,7 @@ async function loadData(){
 }
 
 function showEmpty(){
-  const tabs=['overview','strategies','correlation','sizing','validation','signals'];
+  const tabs=['overview','strategies','correlation','sizing','validation','entryexit','statistical','signals'];
   tabs.forEach(t=>{
     $('tc-'+t).innerHTML=`<div class="empty"><div class="empty-text">NO RESULTS YET</div><div style="font-size:11px;color:var(--text3);margin-top:8px">Click RUN NOW to generate multi-strategy backtest data, or configure strategies first.</div></div>`;
   });
@@ -650,7 +656,220 @@ function renderValidation(res){
   $('tc-validation').innerHTML=h;
 }
 
-/* ── TAB 6: SIGNALS ────────────────────────────────────────────────────────── */
+/* ── TAB 6: ENTRY/EXIT QUALITY ─────────────────────────────────────────────── */
+
+function renderEntryExit(res){
+  const ee=res.entryExitQuality;
+  if(!ee||ee.error){$('tc-entryexit').innerHTML=noData(ee?.error);return}
+  let h='';
+
+  // Verdict
+  const vc=ee.verdict==='EFFICIENT'?'verdict-robust':ee.verdict==='IMPROVABLE'?'verdict-moderate':'verdict-fragile';
+  h+=`<div class="verdict ${vc}">${ee.verdict} -- ${ee.verdictDetail||''}</div>`;
+
+  // Exit quality stats
+  h+=`<div class="section"><div class="section-title">EXIT EFFICIENCY</div>
+  <div class="stat-row">
+    <div class="stat"><div class="stat-label">MEAN EFFICIENCY</div><div class="stat-value">${(ee.exitQuality?.meanEfficiency*100||0).toFixed(1)}%</div></div>
+    <div class="stat"><div class="stat-label">MEDIAN EFFICIENCY</div><div class="stat-value">${(ee.exitQuality?.medianEfficiency*100||0).toFixed(1)}%</div></div>
+    <div class="stat"><div class="stat-label">CAPTURE >50%</div><div class="stat-value">${ee.exitQuality?.captureAbove50Pct||0}%</div></div>
+    <div class="stat"><div class="stat-label">CAPTURE >75%</div><div class="stat-value">${ee.exitQuality?.captureAbove75Pct||0}%</div></div>
+  </div></div>`;
+
+  // MFE/MAE
+  h+=`<div class="section"><div class="section-title">MAXIMUM FAVORABLE / ADVERSE EXCURSION</div>
+  <div class="stat-row">
+    <div class="stat"><div class="stat-label">AVG MFE</div><div class="stat-value pos">${ee.mfeAnalysis?.meanMFE||0}%</div></div>
+    <div class="stat"><div class="stat-label">AVG MAE</div><div class="stat-value neg">${ee.maeAnalysis?.meanMAE||0}%</div></div>
+    <div class="stat"><div class="stat-label">ALPHA LEAKAGE</div><div class="stat-value" style="color:${(ee.mfeAnalysis?.alphaLeakagePct||0)>30?'var(--red)':'var(--green)'}">${ee.mfeAnalysis?.alphaLeakagePct||0}%</div></div>
+    <div class="stat"><div class="stat-label">LUCKY WINS</div><div class="stat-value" style="color:${(ee.maeAnalysis?.luckyWinPct||0)>20?'var(--red)':'var(--green)'}">${ee.maeAnalysis?.luckyWinPct||0}%</div></div>
+  </div></div>`;
+
+  // By exit type
+  if(ee.byExitType){
+    h+=`<div class="section"><div class="section-title">BY EXIT TYPE</div>
+    <table class="data-table"><thead><tr><th>EXIT TYPE</th><th style="text-align:right">COUNT</th><th style="text-align:right">% OF TOTAL</th><th style="text-align:right">WIN RATE</th><th style="text-align:right">AVG EFFICIENCY</th><th style="text-align:right">TOTAL P&L</th></tr></thead><tbody>`;
+    for(const[et,d]of Object.entries(ee.byExitType)){
+      h+=`<tr><td>${et}</td><td style="text-align:right">${d.count}</td><td style="text-align:right">${d.pctOfTotal}%</td><td style="text-align:right">${d.winRate}%</td><td style="text-align:right">${(d.avgEfficiency*100).toFixed(1)}%</td><td style="text-align:right;color:${clr(d.totalPnl)}">${fmt(d.totalPnl)}</td></tr>`;
+    }
+    h+=`</tbody></table></div>`;
+  }
+
+  // By strategy
+  if(ee.byStrategy){
+    h+=`<div class="section"><div class="section-title">BY STRATEGY</div>
+    <table class="data-table"><thead><tr><th>STRATEGY</th><th style="text-align:right">COUNT</th><th style="text-align:right">AVG EFFICIENCY</th><th style="text-align:right">AVG MFE</th><th style="text-align:right">AVG MAE</th><th style="text-align:right">ALPHA LEAK</th><th style="text-align:right">LUCKY WINS</th></tr></thead><tbody>`;
+    for(const[s,d]of Object.entries(ee.byStrategy)){
+      h+=`<tr><td>${s}</td><td style="text-align:right">${d.count}</td><td style="text-align:right">${(d.avgEfficiency*100).toFixed(1)}%</td><td style="text-align:right">${d.avgMFE}%</td><td style="text-align:right">${d.avgMAE}%</td><td style="text-align:right">${d.alphaLeakage}</td><td style="text-align:right">${d.luckyWins}</td></tr>`;
+    }
+    h+=`</tbody></table></div>`;
+  }
+
+  // Hourly quality
+  if(ee.hourlyQuality&&ee.hourlyQuality.length>0){
+    h+=`<div class="section"><div class="section-title">ENTRY TIMING BY HOUR</div>
+    <table class="data-table"><thead><tr><th>HOUR (ET)</th><th style="text-align:right">SIGNALS</th><th style="text-align:right">WIN RATE</th><th style="text-align:right">AVG EFFICIENCY</th><th style="text-align:right">AVG P&L</th></tr></thead><tbody>`;
+    for(const h2 of ee.hourlyQuality){
+      h+=`<tr><td>${h2.etHour}:00</td><td style="text-align:right">${h2.signals}</td><td style="text-align:right">${h2.winRate}%</td><td style="text-align:right">${(h2.avgEfficiency*100).toFixed(1)}%</td><td style="text-align:right;color:${clr(h2.avgPnl)}">${fmt(h2.avgPnl)}</td></tr>`;
+    }
+    h+=`</tbody></table></div>`;
+  }
+
+  // Issues
+  if(ee.issues&&ee.issues.length>0){
+    h+=`<div class="section"><div class="section-title">ISSUES DETECTED</div><ul class="flag-list">`;
+    for(const i of ee.issues) h+=`<li class="flag-warn">${i}</li>`;
+    h+=`</ul></div>`;
+  }
+
+  $('tc-entryexit').innerHTML=h;
+}
+
+function noData(msg){return `<div class="empty"><div class="empty-text">${msg||'NO DATA AVAILABLE'}</div></div>`}
+
+/* ── TAB 7: STATISTICAL TESTS ─────────────────────────────────────────────── */
+
+function renderStatistical(res){
+  const st=res.statisticalTests;
+  if(!st||st.error){$('tc-statistical').innerHTML=noData(st?.error);return}
+  let h='';
+
+  // Overall verdict
+  if(st.overallVerdict){
+    const ov=st.overallVerdict;
+    const vc=ov.conclusion.startsWith('STATISTICALLY_VIABLE')?'verdict-robust':ov.conclusion.startsWith('MARGINAL')?'verdict-moderate':'verdict-fragile';
+    h+=`<div class="verdict ${vc}">${ov.conclusion}</div>`;
+    h+=`<div style="margin:8px 0 16px;font-size:11px;color:var(--text2)">`;
+    for(const d of ov.details){
+      const icon=d.startsWith('PASS')?'<span class="pos">PASS</span>':d.startsWith('FAIL')?'<span class="neg">FAIL</span>':'<span style="color:var(--amber)">WARN</span>';
+      h+=`<div style="margin:3px 0">${icon} ${d.slice(d.indexOf(':')+2)}</div>`;
+    }
+    h+=`</div>`;
+  }
+
+  // Deflated Sharpe
+  if(st.deflatedSharpe){
+    const ds=st.deflatedSharpe;
+    h+=`<div class="section"><div class="section-title">DEFLATED SHARPE RATIO (Multiple Testing Correction)</div>
+    <div class="stat-row">
+      <div class="stat"><div class="stat-label">OBSERVED SHARPE</div><div class="stat-value">${ds.observedSharpe||'--'}</div></div>
+      <div class="stat"><div class="stat-label">EXPECTED MAX RANDOM</div><div class="stat-value">${ds.expectedMaxRandomSharpe||'--'}</div></div>
+      <div class="stat"><div class="stat-label">P-VALUE</div><div class="stat-value" style="color:${(ds.pValue||1)<0.05?'var(--green)':'var(--red)'}">${ds.pValue||'--'}</div></div>
+      <div class="stat"><div class="stat-label">VERDICT</div><div class="stat-value" style="font-size:12px;color:${ds.significant?'var(--green)':'var(--red)'}">${ds.interpretation||'--'}</div></div>
+    </div>
+    <div style="font-size:10px;color:var(--text3);margin-top:4px">Tests whether the Sharpe ratio survives correction for testing ${5} strategies. If p > 0.05, the Sharpe could be luck.</div>
+    </div>`;
+  }
+
+  // T-test
+  if(st.tTest){
+    const tt=st.tTest;
+    h+=`<div class="section"><div class="section-title">T-TEST ON DAILY RETURNS</div>
+    <div class="stat-row">
+      <div class="stat"><div class="stat-label">MEAN DAILY P&L</div><div class="stat-value" style="color:${clr(tt.meanReturn||0)}">${fmt(Math.round(tt.meanReturn||0))}</div></div>
+      <div class="stat"><div class="stat-label">T-STATISTIC</div><div class="stat-value">${tt.tStatistic||'--'}</div></div>
+      <div class="stat"><div class="stat-label">P-VALUE</div><div class="stat-value" style="color:${(tt.pValue||1)<0.05?'var(--green)':'var(--red)'}">${tt.pValue||'--'}</div></div>
+      <div class="stat"><div class="stat-label">OBSERVATIONS</div><div class="stat-value">${tt.n||'--'}</div></div>
+    </div></div>`;
+  }
+
+  // Per-strategy t-tests
+  if(st.strategyTTests){
+    h+=`<div class="section"><div class="section-title">STRATEGY-LEVEL T-TESTS</div>
+    <table class="data-table"><thead><tr><th>STRATEGY</th><th style="text-align:right">MEAN P&L</th><th style="text-align:right">T-STAT</th><th style="text-align:right">P-VALUE</th><th style="text-align:right">SIGNIFICANT</th></tr></thead><tbody>`;
+    for(const[s,t]of Object.entries(st.strategyTTests)){
+      h+=`<tr><td>${s}</td><td style="text-align:right;color:${clr(t.meanReturn||0)}">${fmt(Math.round(t.meanReturn||0))}</td><td style="text-align:right">${t.tStatistic||'--'}</td><td style="text-align:right">${t.pValue||'--'}</td><td style="text-align:right;color:${t.significant?'var(--green)':'var(--red)'}">${t.significant?'YES':'NO'}</td></tr>`;
+    }
+    h+=`</tbody></table></div>`;
+  }
+
+  // Block bootstrap
+  if(st.blockBootstrap&&!st.blockBootstrap.error){
+    const bb=st.blockBootstrap;
+    h+=`<div class="section"><div class="section-title">BLOCK BOOTSTRAP (Autocorrelation-Preserving MC)</div>
+    <div class="stat-row">
+      <div class="stat"><div class="stat-label">P(PROFIT)</div><div class="stat-value" style="color:${bb.probProfit>=50?'var(--green)':'var(--red)'}">${bb.probProfit}%</div></div>
+      <div class="stat"><div class="stat-label">MEAN P&L</div><div class="stat-value" style="color:${clr(bb.pnl?.mean||0)}">${fmt(bb.pnl?.mean||0)}</div></div>
+      <div class="stat"><div class="stat-label">5TH PCTILE</div><div class="stat-value neg">${fmt(bb.pnl?.p5||0)}</div></div>
+      <div class="stat"><div class="stat-label">95TH PCTILE</div><div class="stat-value pos">${fmt(bb.pnl?.p95||0)}</div></div>
+      <div class="stat"><div class="stat-label">P(RUIN 15%)</div><div class="stat-value" style="color:${bb.probRuin15<5?'var(--green)':'var(--red)'}">${bb.probRuin15}%</div></div>
+    </div>
+    <div style="font-size:10px;color:var(--text3);margin-top:4px">Block size: ${bb.blockSize} days. Preserves win/loss clustering unlike standard MC.</div>
+    </div>`;
+  }
+
+  // CVaR
+  if(st.cvar&&!st.cvar.error){
+    const cv=st.cvar;
+    h+=`<div class="section"><div class="section-title">CONDITIONAL VALUE AT RISK (Expected Shortfall)</div>
+    <div class="stat-row">
+      <div class="stat"><div class="stat-label">VaR 95%</div><div class="stat-value neg">${fmt(cv.VaR_95)}</div></div>
+      <div class="stat"><div class="stat-label">CVaR 95%</div><div class="stat-value neg">${fmt(cv.CVaR_95)}</div></div>
+      <div class="stat"><div class="stat-label">VaR 99%</div><div class="stat-value neg">${fmt(cv.VaR_99)}</div></div>
+      <div class="stat"><div class="stat-label">WORST DAY</div><div class="stat-value neg">${fmt(cv.worstDay)}</div></div>
+    </div>
+    <div style="font-size:10px;color:var(--text3);margin-top:4px">CVaR = average loss in the worst 5% of days. More conservative than VaR. ${cv.interpretation||''}</div>
+    </div>`;
+  }
+
+  // Benchmark
+  if(st.benchmark&&!st.benchmark.error){
+    const bm=st.benchmark;
+    const bmColor=bm.verdict.includes('BEATS')?'var(--green)':bm.verdict.includes('POSITIVE')?'var(--amber)':'var(--red)';
+    h+=`<div class="section"><div class="section-title">BENCHMARK COMPARISON</div>
+    <div class="stat-row">
+      <div class="stat"><div class="stat-label">STRATEGY RETURN</div><div class="stat-value" style="color:${clr(bm.strategyReturn)}">${pctFmt(bm.strategyReturn)}</div></div>
+      <div class="stat"><div class="stat-label">SPY BUY & HOLD</div><div class="stat-value">${pctFmt(bm.spyReturn)}</div></div>
+      <div class="stat"><div class="stat-label">EXCESS vs SPY</div><div class="stat-value" style="color:${clr(bm.excessOverSPY)}">${pctFmt(bm.excessOverSPY)}</div></div>
+      <div class="stat"><div class="stat-label">ANNUALIZED SHARPE</div><div class="stat-value">${bm.annualizedSharpe}</div></div>
+      <div class="stat"><div class="stat-label">INFO RATIO</div><div class="stat-value">${bm.informationRatio}</div></div>
+    </div>
+    <div style="font-size:11px;font-weight:600;color:${bmColor};margin-top:4px">${bm.verdict.replace(/_/g,' ')}</div>
+    </div>`;
+  }
+
+  // Drawdown duration
+  if(st.drawdownDuration&&!st.drawdownDuration.error){
+    const dd=st.drawdownDuration;
+    h+=`<div class="section"><div class="section-title">DRAWDOWN DURATION</div>
+    <div class="stat-row">
+      <div class="stat"><div class="stat-label">MAX DURATION</div><div class="stat-value">${dd.maxDurationDays||0}d</div></div>
+      <div class="stat"><div class="stat-label">AVG DURATION</div><div class="stat-value">${dd.avgDurationDays||0}d</div></div>
+      <div class="stat"><div class="stat-label">P(3+ DAY DD)</div><div class="stat-value">${dd.probDrawdown3Plus||0}%</div></div>
+      <div class="stat"><div class="stat-label">P(5+ DAY DD)</div><div class="stat-value">${dd.probDrawdown5Plus||0}%</div></div>
+    </div>
+    <div style="font-size:11px;font-weight:600;color:${dd.verdict==='SHORT_RECOVERIES'?'var(--green)':dd.verdict==='MODERATE_RECOVERIES'?'var(--amber)':'var(--red)'};">${dd.verdict?.replace(/_/g,' ')}</div>
+    </div>`;
+  }
+
+  // Return distribution
+  if(st.returnDistribution&&!st.returnDistribution.error){
+    const rd=st.returnDistribution;
+    h+=`<div class="section"><div class="section-title">RETURN DISTRIBUTION</div>
+    <div class="stat-row">
+      <div class="stat"><div class="stat-label">SKEWNESS</div><div class="stat-value">${rd.skewness}</div></div>
+      <div class="stat"><div class="stat-label">EXCESS KURTOSIS</div><div class="stat-value">${rd.excessKurtosis}</div></div>
+      <div class="stat"><div class="stat-label">NORMAL?</div><div class="stat-value" style="font-size:12px">${rd.isNormal?'YES':'NO'}</div></div>
+    </div>
+    <div style="font-size:10px;color:var(--text3);margin-top:4px">${rd.interpretation?.skew||''}<br>${rd.interpretation?.tails||''}</div>
+    </div>`;
+  }
+
+  // Regime transition
+  if(st.regimeTransition&&!st.regimeTransition.error){
+    const rt=st.regimeTransition;
+    h+=`<div class="section"><div class="section-title">REGIME TRANSITION ADAPTATION</div>
+    <div class="stat-row">
+      <div class="stat"><div class="stat-label">TRANSITIONS</div><div class="stat-value">${rt.totalTransitions}</div></div>
+      <div class="stat"><div class="stat-label">ADAPTATION RATE</div><div class="stat-value" style="color:${rt.adaptationRate>=60?'var(--green)':'var(--red)'}">${rt.adaptationRate}%</div></div>
+      <div class="stat"><div class="stat-label">VERDICT</div><div class="stat-value" style="font-size:12px">${rt.verdict?.replace(/_/g,' ')||'--'}</div></div>
+    </div></div>`;
+  }
+
+  $('tc-statistical').innerHTML=h;
+}
+
+/* ── TAB 8: SIGNALS ────────────────────────────────────────────────────────── */
 let signalSortCol=-1;
 let signalSortDir=1;
 let signalData=[];

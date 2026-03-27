@@ -2011,22 +2011,23 @@ app.post('/api/multi-strategy/run', async (req, res) => {
 
     const results = await runMultiStrategyBacktest(startDate, endDate, 7500);
 
-    // Cross-strategy analysis
-    const crossStrat = {
-      correlation: computeCorrelationMatrix(results.signals),
-      portfolio: portfolioMetrics(results.signals, 7500),
-      diversification: diversificationBenefit(results.signals, 7500),
-      weights: optimalWeights(results.signals),
-    };
+    // Cross-strategy analysis (guard empty signals)
+    const sigs = results.signals || [];
+    const crossStrat = sigs.length >= 5 ? {
+      correlation: computeCorrelationMatrix(sigs),
+      portfolio: portfolioMetrics(sigs, 7500),
+      diversification: diversificationBenefit(sigs, 7500),
+      weights: optimalWeights(sigs),
+    } : { error: 'Not enough signals for cross-strategy analysis' };
 
     // Position sizing
-    const sizing = {
-      kelly: kellyPerStrategy(results.signals),
-      optimal: targetSizing(results.signals, 7500),
-    };
+    const sizing = sigs.length >= 5 ? {
+      kelly: kellyPerStrategy(sigs),
+      optimal: targetSizing(sigs, 7500),
+    } : { error: 'Not enough signals for position sizing' };
 
     // Reality checks
-    const realityChecks = await runRealityChecks(results.signals, 7500);
+    const realityChecks = await runRealityChecks(sigs, 7500);
 
     // Store in DB
     await db.query(`

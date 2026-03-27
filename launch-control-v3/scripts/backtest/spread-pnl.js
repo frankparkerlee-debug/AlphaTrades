@@ -156,10 +156,12 @@ export function simulateDebitSpread(signal, bars, params) {
   const stopLossThreshold = debitPerShare * 0.30;    // close if spread loses 70% of debit
   const profitTarget = debitPerShare + (maxGain * 0.65); // take profit at 65% of max gain
 
-  // Scan bars
+  // Scan bars — track MFE/MAE for entry/exit quality analysis
   let exitType = 'EOD';
   let exitBar = bars[bars.length - 1] || null;
   let holdMinutes = 0;
+  let mfePrice = entryPrice;  // max favorable excursion price
+  let maePrice = entryPrice;  // max adverse excursion price
   const entryTime = new Date(signal.time.length <= 16 ? signal.time + ':00Z' : signal.time);
 
   for (let i = 0; i < bars.length; i++) {
@@ -168,6 +170,15 @@ export function simulateDebitSpread(signal, bars, params) {
     const minutesHeld = Math.round((barTime - entryTime) / 60000);
 
     if (minutesHeld < 0) continue; // bar before entry
+
+    // Track MFE/MAE
+    if (direction === 'CALL') {
+      mfePrice = Math.max(mfePrice, bar.h);
+      maePrice = Math.min(maePrice, bar.l);
+    } else {
+      mfePrice = Math.min(mfePrice, bar.l);
+      maePrice = Math.max(maePrice, bar.h);
+    }
 
     // Check max hold time
     if (holdDays === 0 && minutesHeld > maxHoldMinutes) {
@@ -269,6 +280,16 @@ export function simulateDebitSpread(signal, bars, params) {
     slippage:    costs.slippage,
     totalCosts:  costs.totalCost,
     grossPnl:    Math.round(grossPnl),
+    // MFE/MAE as percentage of entry price
+    mfePct: parseFloat((Math.abs(mfePrice - entryPrice) / entryPrice * 100 * mult).toFixed(2)),
+    maePct: parseFloat((Math.abs(maePrice - entryPrice) / entryPrice * 100 * (direction === 'CALL' ? -1 : 1) * (maePrice < entryPrice && direction === 'CALL' ? 1 : maePrice > entryPrice && direction === 'PUT' ? 1 : -1)).toFixed(2)),
+    mfePrice,
+    maePrice,
+    exitEfficiency: (() => {
+      const mfePnl = Math.abs(mfePrice - entryPrice) / entryPrice * 100;
+      const actualPnl = Math.abs(pnlPct);
+      return mfePnl > 0 ? parseFloat(Math.min(1, actualPnl / mfePnl).toFixed(3)) : 0;
+    })(),
     spreadDetails: {
       type: spreadType,
       width: spreadWidth,
@@ -355,6 +376,8 @@ export function simulateCreditSpread(signal, bars, params) {
   let exitType = 'EOD';
   let exitBar = bars[bars.length - 1] || null;
   let holdMinutes = 0;
+  let bestPnl = 0;   // MFE for credit spread (best P&L reached)
+  let worstPnl = 0;  // MAE for credit spread (worst P&L reached)
   const entryTime = new Date(signal.time.length <= 16 ? signal.time + ':00Z' : signal.time);
 
   for (let i = 0; i < bars.length; i++) {
@@ -395,6 +418,10 @@ export function simulateCreditSpread(signal, bars, params) {
 
     // Current P&L = credit received - cost to close
     const currentPnl = creditPerShare - currentCostToClose;
+
+    // Track MFE/MAE
+    bestPnl = Math.max(bestPnl, currentPnl);
+    worstPnl = Math.min(worstPnl, currentPnl);
 
     if (currentPnl <= -stopLossAmount) {
       exitType = 'SPREAD_STOP';
@@ -442,6 +469,9 @@ export function simulateCreditSpread(signal, bars, params) {
     slippage:    costs.slippage,
     totalCosts:  costs.totalCost,
     grossPnl:    Math.round(grossPnl),
+    mfePct: maxLoss > 0 ? parseFloat((bestPnl / maxLoss * 100).toFixed(2)) : 0,
+    maePct: maxLoss > 0 ? parseFloat((worstPnl / maxLoss * 100).toFixed(2)) : 0,
+    exitEfficiency: bestPnl > 0 ? parseFloat(Math.min(1, pnlPerShare / bestPnl).toFixed(3)) : 0,
     spreadDetails: {
       type: spreadType,
       width: spreadWidth,
@@ -501,6 +531,8 @@ export function simulateIronCondor(signal, bars, params) {
   let exitType = 'EXPIRY';
   let exitBar = bars[bars.length - 1] || null;
   let holdMinutes = 0;
+  let bestPnl = 0;
+  let worstPnl = 0;
   const entryTime = new Date(signal.time.length <= 16 ? signal.time + ':00Z' : signal.time);
 
   for (let i = 0; i < bars.length; i++) {
@@ -531,6 +563,9 @@ export function simulateIronCondor(signal, bars, params) {
     );
     const totalCostToClose = callSideCost + putSideCost;
     const currentPnl = creditPerShare - totalCostToClose;
+
+    bestPnl = Math.max(bestPnl, currentPnl);
+    worstPnl = Math.min(worstPnl, currentPnl);
 
     if (currentPnl <= -stopLossAmount) {
       exitType = 'STOP';
@@ -576,6 +611,9 @@ export function simulateIronCondor(signal, bars, params) {
     slippage:    costs.slippage,
     totalCosts:  costs.totalCost,
     grossPnl:    Math.round(grossPnl),
+    mfePct: maxLoss > 0 ? parseFloat((bestPnl / maxLoss * 100).toFixed(2)) : 0,
+    maePct: maxLoss > 0 ? parseFloat((worstPnl / maxLoss * 100).toFixed(2)) : 0,
+    exitEfficiency: bestPnl > 0 ? parseFloat(Math.min(1, pnlPerShare / bestPnl).toFixed(3)) : 0,
     spreadDetails: {
       type: 'IRON_CONDOR',
       width: spreadWidth,
