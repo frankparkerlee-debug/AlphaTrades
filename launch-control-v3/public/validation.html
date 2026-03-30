@@ -115,23 +115,23 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;b
 </div>
 
 <div class="tabs" id="tabs">
-  <div class="tab active" data-tab="overview">OVERVIEW</div>
-  <div class="tab" data-tab="monte-carlo">MONTE CARLO</div>
-  <div class="tab" data-tab="walk-forward">WALK-FORWARD</div>
-  <div class="tab" data-tab="regime">REGIME STRESS</div>
-  <div class="tab" data-tab="sensitivity">SENSITIVITY</div>
+  <div class="tab active" data-tab="strategy-cards">PER-STRATEGY VALIDATION</div>
+  <div class="tab" data-tab="overview">AGGREGATE OVERVIEW</div>
+  <div class="tab" data-tab="monte-carlo">AGGREGATE MC</div>
+  <div class="tab" data-tab="walk-forward">AGGREGATE WALK-FWD</div>
+  <div class="tab" data-tab="regime">AGGREGATE REGIME</div>
+  <div class="tab" data-tab="sensitivity">AGGREGATE SENSITIVITY</div>
   <div class="tab" data-tab="paper">PAPER P&L</div>
-  <div class="tab" data-tab="strategy-cards">STRATEGY CARDS</div>
 </div>
 
 <div class="container">
-  <div class="tab-content active" id="tc-overview"><div class="empty"><div class="empty-text">LOADING...</div></div></div>
+  <div class="tab-content active" id="tc-strategy-cards"><div class="empty"><div class="empty-text">LOADING...</div></div></div>
+  <div class="tab-content" id="tc-overview"><div class="empty"><div class="empty-text">LOADING...</div></div></div>
   <div class="tab-content" id="tc-monte-carlo"></div>
   <div class="tab-content" id="tc-walk-forward"></div>
   <div class="tab-content" id="tc-regime"></div>
   <div class="tab-content" id="tc-sensitivity"></div>
   <div class="tab-content" id="tc-paper"></div>
-  <div class="tab-content" id="tc-strategy-cards"><div class="empty"><div class="empty-text">LOADING...</div></div></div>
 </div>
 
 <script>
@@ -660,7 +660,29 @@ function renderStrategyCards(d){
     if(v==='DEPLOY')deploy++;else if(v==='REFINE')refine++;else if(v==='SHELVE')shelve++;else insuf++;
   });
 
-  let h=`<div class="sc-summary-row">
+  // Check if all strategies share identical validation (tested as one)
+  const allVals=strategies.map(s=>sv[s]).filter(Boolean);
+  const hasTruePerStrategy=allVals.length>1&&new Set(allVals.map(v=>v.signalCount)).size>1;
+
+  let h=`<div class="section" style="margin-bottom:16px;border-left:3px solid var(--amber)">
+    <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--amber);letter-spacing:1px;margin-bottom:6px">INDEPENDENT PER-STRATEGY VALIDATION</div>
+    <div style="font-size:11px;color:var(--text2);line-height:1.6">
+      Each strategy below was tested <strong style="color:var(--text1)">independently</strong> through the full validation pipeline:
+      Monte Carlo simulation, walk-forward analysis, regime stress testing, out-of-sample split, and statistical significance (t-test).
+      <strong style="color:var(--green)">DEPLOY</strong> = passed all gates.
+      <strong style="color:var(--amber)">REFINE</strong> = shows edge but needs tuning.
+      <strong style="color:var(--red)">SHELVE</strong> = no proven edge, disabled.
+      Strategies cannot hide behind aggregate results -- each must stand on its own.
+    </div>
+  </div>`;
+
+  if(!hasTruePerStrategy&&allVals.length>1){
+    h+=`<div class="verdict verdict-fragile" style="margin-bottom:16px">
+      DATA MAY BE STALE -- Run a fresh backtest from <a href="/backtest" style="color:var(--amber)">/backtest</a> to generate per-strategy validation with the new 16-strategy engine.
+    </div>`;
+  }
+
+  h+=`<div class="sc-summary-row">
     <div class="sc-summary-stat"><div class="stat-label">TOTAL STRATEGIES</div><div class="stat-value">${strategies.length}</div></div>
     <div class="sc-summary-stat"><div class="stat-label">DEPLOY</div><div class="stat-value" style="color:var(--green)">${deploy}</div></div>
     <div class="sc-summary-stat"><div class="stat-label">REFINE</div><div class="stat-value" style="color:var(--amber)">${refine}</div></div>
@@ -677,21 +699,32 @@ function renderStrategyCards(d){
     return(order[va]??3)-(order[vb]??3);
   });
 
+  const STRAT_TYPE={
+    ORB_BREAKOUT:'DAY',VWAP_BOUNCE:'DAY',FIRST_PULLBACK:'DAY',GAP_FILL_REVERSION:'DAY',
+    POWER_HOUR_MOMENTUM:'DAY',MACRO_REACTION:'DAY',EXTREME_REVERSAL:'DAY',
+    EOD_MEAN_REVERSION:'DAY',HIGH_RVOL_BREAKOUT:'DAY',
+    PEAD_DRIFT:'SWING',SECTOR_LAGGARD:'SWING',SHORT_SQUEEZE_MOMENTUM:'SWING',
+    OPTIONS_FLOW:'SWING',ANALYST_DRIFT:'SWING',VIX_REVERSAL:'SWING',
+    ZERO_DTE_SCALP:'SCALP'
+  };
+  const TYPE_COLOR={DAY:'var(--blue)',SWING:'var(--purple)',SCALP:'var(--amber)'};
+
   for(const strat of strategies){
     const card=rc[strat]||{};
     const val=sv[strat]||{};
     const cal=gc[strat]||{};
     const verdict=card.verdict?.decision||val.verdict||'INSUFFICIENT_DATA';
-    const vLower=verdict.toLowerCase().replace('_','-');
     const cls=verdict==='DEPLOY'?'sc-deploy':verdict==='REFINE'?'sc-refine':verdict==='SHELVE'?'sc-shelve':'sc-insufficient';
     const vBadge=verdict==='DEPLOY'?'sc-verdict-deploy':verdict==='REFINE'?'sc-verdict-refine':verdict==='SHELVE'?'sc-verdict-shelve':'sc-verdict-insufficient';
+    const sType=STRAT_TYPE[strat]||'';
+    const sColor=TYPE_COLOR[sType]||'var(--text3)';
 
     h+=`<div class="sc-card ${cls}">`;
     // Header
     h+=`<div class="sc-header">
       <div>
-        <div class="sc-name">${strat.replace(/_/g,' ')}</div>
-        <div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-top:2px">${card.signalCount||val.signalCount||0} signals</div>
+        <div class="sc-name">${strat.replace(/_/g,' ')}${sType?` <span style="font-size:9px;color:${sColor};border:1px solid ${sColor};padding:1px 5px;border-radius:2px;margin-left:6px;vertical-align:middle">${sType}</span>`:''}</div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-top:2px">${card.signalCount||val.signalCount||0} signals tested independently</div>
       </div>
       <div class="sc-verdict-badge ${vBadge}">${verdict.replace('_',' ')}</div>
     </div>`;
