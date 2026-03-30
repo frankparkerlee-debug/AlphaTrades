@@ -221,17 +221,13 @@ body::after {
 }
 .strat-badge { display: flex; align-items: center; gap: 6px; }
 .strat-hold { font-size: 9px; font-weight: 500; opacity: 0.8; }
-.strat-gap     { background: rgba(16,185,129,0.1); color: var(--green); border-bottom: 3px solid var(--green); }
-.strat-cap     { background: rgba(59,130,246,0.1); color: var(--blue); border-bottom: 3px solid var(--blue); }
-.strat-vdp     { background: rgba(239,68,68,0.1); color: var(--red); border-bottom: 3px solid var(--red); }
-.strat-consec  { background: rgba(139,92,246,0.1); color: var(--purple); border-bottom: 3px solid var(--purple); }
-.strat-gapup   { background: rgba(249,115,22,0.1); color: #f97316; border-bottom: 3px solid #f97316; }
-.strat-sector  { background: rgba(34,211,238,0.1); color: #22d3ee; border-bottom: 3px solid #22d3ee; }
-.strat-calendar { background: rgba(168,85,247,0.1); color: #a855f7; border-bottom: 3px solid #a855f7; }
-.strat-erput    { background: rgba(239,68,68,0.12); color: #ef4444; border-bottom: 3px solid #ef4444; }
-.strat-breakdown { background: rgba(239,68,68,0.10); color: #f87171; border-bottom: 3px solid #f87171; }
-.strat-weakness  { background: rgba(251,146,60,0.10); color: #fb923c; border-bottom: 3px solid #fb923c; }
-.strat-momentum{ background: rgba(245,158,11,0.08); color: var(--amber); border-bottom: 3px solid var(--amber); }
+.strat-orb{ background: rgba(59,130,246,0.08); color: var(--blue); border-bottom: 3px solid var(--blue); }
+.strat-vwap{ background: rgba(16,185,129,0.08); color: var(--green); border-bottom: 3px solid var(--green); }
+.strat-pullback{ background: rgba(139,92,246,0.08); color: var(--purple); border-bottom: 3px solid var(--purple); }
+.strat-gap{ background: rgba(245,158,11,0.08); color: var(--amber); border-bottom: 3px solid var(--amber); }
+.strat-power{ background: rgba(239,68,68,0.08); color: var(--red); border-bottom: 3px solid var(--red); }
+.strat-sr{ background: rgba(20,184,166,0.08); color: #14b8a6; border-bottom: 3px solid #14b8a6; }
+.strat-macro{ background: rgba(251,146,60,0.08); color: #fb923c; border-bottom: 3px solid #fb923c; }
 .paper-only-banner {
   background: rgba(139,92,246,0.12); border: 1px solid var(--purple); border-radius: 3px;
   padding: 5px 10px; margin-bottom: 8px; font-family: var(--mono); font-size: 10px;
@@ -893,7 +889,7 @@ function render() {
   }
 
   const html = list.map(buildCard).join('');
-  const hash = workspace + '|' + list.map(s => `${s.signal_id}:${s.composite_raw}:${s.grade}:${s.status}:${s.confirmation_count}:${s.contract_mid}:${s.momentum_trend}`).join('|');
+  const hash = workspace + '|' + list.map(s => `${s.signal_id}:${s.composite_raw}:${s.grade}:${s.status}:${s.contract_mid}`).join('|');
   if (hash !== lastRenderHash) {
     document.getElementById('signalGrid').innerHTML = html;
     lastRenderHash = hash;
@@ -932,22 +928,17 @@ function parseStrategy(s) {
 
 function buildStratBanner(strategy) {
   const map = {
-    GAP_REVERSAL:            { cls: 'strat-gap',    label: 'GAP REVERSAL', win: '83.9% WIN', hold: '' },
-    GAP_UP_REVERSAL:         { cls: 'strat-gapup',  label: 'GAP UP PUT', win: '90% WIN', hold: '' },
-    CAPITULATION_BOUNCE:     { cls: 'strat-cap',    label: 'CAPITULATION', win: '72% WIN', hold: 'OVERNIGHT HOLD' },
-    VOL_DROP_PUT:            { cls: 'strat-vdp',    label: 'VOL DROP PUT', win: '57% WIN', hold: 'PUT · OVERNIGHT' },
-    CONSEC_BOUNCE:           { cls: 'strat-consec', label: 'CONSEC BOUNCE', win: '64-85%', hold: 'MULTI-DAY HOLD' },
-    SECTOR_ROTATION_BOUNCE:  { cls: 'strat-sector', label: 'SECTOR BOUNCE', win: '90% WIN', hold: 'SAME DAY · EXIT 2PM' },
-    OVERNIGHT_CALENDAR:      { cls: 'strat-calendar', label: 'OVERNIGHT CALENDAR', win: '82% WIN', hold: 'OVERNIGHT · EXIT 9:30AM' },
-    PRE_EARNINGS_PUT:        { cls: 'strat-erput', label: 'PRE-EARNINGS PUT', win: 'CONVICTION', hold: 'MULTI-DAY · HARD EXIT' },
-    BREAKDOWN_PUT:           { cls: 'strat-breakdown', label: 'BREAKDOWN PUT', win: '', hold: 'PUT · INTRADAY' },
-    RELATIVE_WEAKNESS_PUT:   { cls: 'strat-weakness', label: 'REL WEAKNESS PUT', win: '', hold: 'PUT · INTRADAY' },
+    ORB_BREAKOUT:          { cls: 'strat-orb',    label: 'ORB BREAKOUT',   hold: 'INTRADAY · 60M MAX' },
+    VWAP_BOUNCE:           { cls: 'strat-vwap',   label: 'VWAP BOUNCE',    hold: 'INTRADAY · 90M MAX' },
+    FIRST_PULLBACK:        { cls: 'strat-pullback',label: 'FIRST PULLBACK', hold: 'INTRADAY · 90M MAX' },
+    GAP_FILL_REVERSION:    { cls: 'strat-gap',    label: 'GAP FILL',       hold: 'INTRADAY · 120M MAX' },
+    POWER_HOUR_MOMENTUM:   { cls: 'strat-power',  label: 'POWER HOUR',     hold: 'INTRADAY · 45M MAX' },
+    SR_BOUNCE:             { cls: 'strat-sr',     label: 'S/R BOUNCE',     hold: 'INTRADAY · 90M MAX' },
+    MACRO_REACTION:        { cls: 'strat-macro',  label: 'MACRO REACTION', hold: 'INTRADAY · 180M MAX · HALF SIZE' },
   };
   const info = map[strategy];
-  if (!info) {
-    return `<div class="strat-banner strat-momentum"><span class="strat-badge">MOMENTUM · UNVALIDATED</span></div>`;
-  }
-  return `<div class="strat-banner ${info.cls}"><span class="strat-badge">${info.label} · ${info.win}</span>${info.hold ? `<span class="strat-hold">${info.hold}</span>` : ''}</div>`;
+  if (!info) return '';
+  return `<div class="strat-banner ${info.cls}"><span class="strat-badge">${info.label}</span>${info.hold ? `<span class="strat-hold">${info.hold}</span>` : ''}</div>`;
 }
 
 function buildLockedTargets(s) {
@@ -1193,18 +1184,6 @@ function buildCard(s) {
       <div class="pillar"><div class="pillar-score">${s.score_timing??'—'}</div><div class="pillar-label">TIME</div></div>
     </div>
     <div class="tags">${tags.join('')}${s.confirmation_count > 1 ? `<span class="tag" style="background:rgba(245,158,11,0.15);color:var(--amber);border:1px solid var(--amber)">x${s.confirmation_count}</span>` : ''}</div>
-    ${s.confirmation_count > 1 ? (() => {
-      const trendArrow = s.momentum_trend === 'STRENGTHENING' ? '<span style="color:var(--green)">&#9650;</span>'
-                       : s.momentum_trend === 'WEAKENING' ? '<span style="color:var(--red)">&#9660;</span>'
-                       : '<span style="color:var(--text3)">&#9644;</span>';
-      const peakLabel = (s.peak_composite && s.peak_composite !== s.composite_raw)
-        ? `<span style="color:var(--text3);font-size:9px">peak: ${s.peak_grade}/${s.peak_composite}</span>` : '';
-      const firstSeen = s.first_seen_at ? (() => {
-        const mins = Math.round((Date.now() - new Date(s.first_seen_at).getTime()) / 60000);
-        return `<span style="color:var(--text3);font-size:9px">first seen ${mins}min ago</span>`;
-      })() : '';
-      return `<div style="display:flex;align-items:center;gap:8px;margin:4px 0;font-family:var(--mono);font-size:10px">${trendArrow} ${peakLabel} ${firstSeen}</div>`;
-    })() : ''}
     ${propCtx}
     ${s.news_headline ? (() => {
       const isFreshnessNote = s.news_headline.includes('Risk:') || s.news_headline.includes('From Open:');

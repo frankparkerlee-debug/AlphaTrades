@@ -1,8 +1,9 @@
 /**
  * Multi-Strategy Backtest Runner
  *
- * Orchestrates all 7 research-backed strategies, applies portfolio constraints,
- * simulates spread P&L, and feeds validation pipeline.
+ * Orchestrates all 16 research-backed strategies (9 day, 6 swing, 1 scalp),
+ * applies portfolio constraints, simulates single-leg P&L, and feeds
+ * validation pipeline.
  *
  * Returns a unified results object for frontend consumption.
  */
@@ -28,13 +29,25 @@ import { query } from '../../src/data/db.js';
 
 // Live strategy imports (cash account — single-leg options with confluence)
 import {
+  // Day trades (9)
   generateORBBreakoutSignals,
   generateVWAPBounceSignals,
   generateFirstPullbackSignals,
   generateGapFillSignals,
   generatePowerHourMomentumSignals,
-  generateSRBounceSignals,
   generateMacroReactionSignals,
+  generateExtremeReversalSignals,
+  generateEODMeanReversionSignals,
+  generateHighRvolBreakoutSignals,
+  // Swing trades (6)
+  generatePEADDriftSignals,
+  generateSectorLaggardSignals,
+  generateShortSqueezeSignals,
+  generateOptionsFlowSignals,
+  generateAnalystDriftSignals,
+  generateVIXReversalSignals,
+  // Scalp (1)
+  generateZeroDTEScalpSignals,
 } from './strategies/live-adapter.js';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
@@ -44,13 +57,25 @@ const MAX_DAILY_RISK_PCT       = 0.40; // max 40% of account at risk per day
 
 // Live strategies (cash account, single-leg options, confluence-validated)
 const LIVE_STRATEGIES = [
+  // Day trades (primary) — all intraday, holdDays: 0
   { name: 'ORB_BREAKOUT',          fn: generateORBBreakoutSignals,       intraday: true },
   { name: 'VWAP_BOUNCE',           fn: generateVWAPBounceSignals,        intraday: true },
   { name: 'FIRST_PULLBACK',        fn: generateFirstPullbackSignals,     intraday: true },
   { name: 'GAP_FILL_REVERSION',    fn: generateGapFillSignals,           intraday: true },
   { name: 'POWER_HOUR_MOMENTUM',   fn: generatePowerHourMomentumSignals, intraday: true },
-  { name: 'SR_BOUNCE',             fn: generateSRBounceSignals,          intraday: true },
   { name: 'MACRO_REACTION',        fn: generateMacroReactionSignals,     intraday: true },
+  { name: 'EXTREME_REVERSAL',      fn: generateExtremeReversalSignals,   intraday: true },
+  { name: 'EOD_MEAN_REVERSION',    fn: generateEODMeanReversionSignals,  intraday: true },
+  { name: 'HIGH_RVOL_BREAKOUT',    fn: generateHighRvolBreakoutSignals,  intraday: true },
+  // Swing trades (secondary) — holdDays > 0
+  { name: 'PEAD_DRIFT',            fn: generatePEADDriftSignals,         intraday: false },
+  { name: 'SECTOR_LAGGARD',        fn: generateSectorLaggardSignals,     intraday: false },
+  { name: 'SHORT_SQUEEZE_MOMENTUM',fn: generateShortSqueezeSignals,      intraday: false },
+  { name: 'OPTIONS_FLOW',          fn: generateOptionsFlowSignals,       intraday: false },
+  { name: 'ANALYST_DRIFT',         fn: generateAnalystDriftSignals,      intraday: false },
+  { name: 'VIX_REVERSAL',          fn: generateVIXReversalSignals,       intraday: false },
+  // Scalp
+  { name: 'ZERO_DTE_SCALP',        fn: generateZeroDTEScalpSignals,      intraday: true },
 ];
 
 // SPREAD_STRATEGIES decommissioned — no documented edge, worse than coin flip

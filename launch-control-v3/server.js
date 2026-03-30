@@ -14,24 +14,17 @@ import { runMultiStrategyBacktest } from './scripts/backtest/strategy-runner.js'
 import { computeCorrelationMatrix, portfolioMetrics, diversificationBenefit, optimalWeights } from './scripts/backtest/cross-strategy.js';
 import { kellyPerStrategy, targetSizing } from './scripts/backtest/position-sizing.js';
 import { runRealityChecks } from './scripts/backtest/reality-checks.js';
+// Kept scanners (map to 7 research-backed strategies, will be rewritten after backtest validation)
 import { scanGapReversal } from './src/strategies/gap-reversal.js';
-import { scanCapitulationBounce } from './src/strategies/capitulation-bounce.js';
-import { scanVolumeDropPut } from './src/strategies/volume-drop-put.js';
-import { scanConsecutiveDrop } from './src/strategies/consecutive-drop.js';
-import { scanSectorRotationBounce } from './src/strategies/sector-rotation-bounce.js';
 import { scanGapUpReversal } from './src/strategies/gap-up-reversal.js';
-import { scanBreakdownPut } from './src/strategies/breakdown-put.js';
-import { scanRelativeWeaknessPut } from './src/strategies/relative-weakness-put.js';
-import { scoreConvictionSetup } from './src/strategies/conviction-scorer.js';
-import { scanOvernightCalendar } from './src/strategies/overnight-calendar.js';
-import { scanPreEarningsPut } from './src/strategies/pre-earnings-put.js';
-import { scanCreditSpread } from './src/strategies/credit-spread.js';
+import { scanCapitulationBounce } from './src/strategies/capitulation-bounce.js';
+import { scanSectorRotationBounce } from './src/strategies/sector-rotation-bounce.js';
 import { scanOpeningRangeBreakout } from './src/strategies/opening-range-breakout.js';
 import { scanVwapReclaim } from './src/strategies/vwap-reclaim.js';
 import { scanPowerHour } from './src/strategies/power-hour.js';
-import { scanCorrelationCascade } from './src/strategies/correlation-cascade.js';
 import { scanPostMacro } from './src/strategies/post-macro.js';
 import { scanFailedBreakdown } from './src/strategies/failed-breakdown.js';
+import { scoreConvictionSetup } from './src/strategies/conviction-scorer.js';
 import { getRecentFlow } from './src/data/alpaca-streams.js';
 import { monitorOpenPositions } from './src/jobs/options-monitor.js';
 import { scoreContinuation } from './src/jobs/continuation-scorer.js';
@@ -720,7 +713,8 @@ app.get('/api/debug/scoring/:ticker', async (req, res) => {
       'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY,
     };
     const dataUrl = process.env.ALPACA_DATA_URL || 'https://data.alpaca.markets';
-    const { analyzeMomentum, shouldSkipOnFreshness } = await import('./src/scoring/momentum.js');
+    // analyzeMomentum decommissioned — momentum scoring removed
+    const { shouldSkipOnFreshness } = await import('./src/scoring/momentum.js');
     const { analyzeLevels, analyzeTrend, gateSignal, classifyRegime } = await import('./src/scoring/intelligence.js');
 
     const snapRes = await axios.get(`${dataUrl}/v2/stocks/snapshots`, {
@@ -748,21 +742,15 @@ app.get('/api/debug/scoring/:ticker', async (req, res) => {
 
     const syntheticBars = [prevBar, latestBar].filter(Boolean).map(b => ({ o: b.o, h: b.h, l: b.l, c: b.c, v: b.v || 0 }));
 
-    // PA score (fallback logic matching poller)
+    // PA score — analyzeMomentum decommissioned, inline fallback only
     let paScore, freshness;
-    if (syntheticBars.length >= 5) {
-      const momentum = analyzeMomentum(syntheticBars, openPrice, prevClose, atr, direction);
-      paScore = momentum.momentumScore;
-      freshness = momentum.freshness;
-    } else {
-      freshness = moveInATRs < 0.5 ? 'FRESH'
-                : moveInATRs < 1.0 ? 'DEVELOPING'
-                : moveInATRs < 1.5 ? 'EXTENDED'
-                : moveInATRs < 2.0 ? 'LATE'
-                : 'EXHAUSTED';
-      const freshnessPenalty = moveInATRs > 1.5 ? 0.5 : moveInATRs > 1.0 ? 0.75 : 1.0;
-      paScore = Math.min(35, Math.round(moveInATRs * 35 * freshnessPenalty));
-    }
+    freshness = moveInATRs < 0.5 ? 'FRESH'
+              : moveInATRs < 1.0 ? 'DEVELOPING'
+              : moveInATRs < 1.5 ? 'EXTENDED'
+              : moveInATRs < 2.0 ? 'LATE'
+              : 'EXHAUSTED';
+    const freshnessPenalty = moveInATRs > 1.5 ? 0.5 : moveInATRs > 1.0 ? 0.75 : 1.0;
+    paScore = Math.min(35, Math.round(moveInATRs * 35 * freshnessPenalty));
 
     const mkt = snapRes.data;
     const spyPct = mkt.SPY ? ((mkt.SPY.latestTrade?.p||0)-(mkt.SPY.prevDailyBar?.c||0))/(mkt.SPY.prevDailyBar?.c||1) : 0;
@@ -2284,7 +2272,8 @@ async function startRestPoller() {
 
       // Import intelligence functions
       const { analyzeLevels, analyzeTrend, gateSignal } = await import('./src/scoring/intelligence.js');
-      const { analyzeMomentum, shouldSkipOnFreshness } = await import('./src/scoring/momentum.js');
+      // analyzeMomentum decommissioned — momentum scoring removed
+      const { shouldSkipOnFreshness } = await import('./src/scoring/momentum.js');
 
       let written = 0;
       const today = new Date().toISOString().split('T')[0];
@@ -2336,27 +2325,17 @@ async function startRestPoller() {
         let momentum, freshness, paScore;
         const atrMult = moveInATRs; // session move in ATRs, not minute-to-minute
 
-        if (syntheticBars.length >= 5) {
-          momentum = analyzeMomentum(syntheticBars, openPrice, prevClose, atr, direction);
-          freshness = momentum.freshness;
-          paScore = momentum.momentumScore;
+        // analyzeMomentum decommissioned — inline fallback only
+        freshness = moveInATRs < 0.5 ? 'FRESH'
+                  : moveInATRs < 1.0 ? 'DEVELOPING'
+                  : moveInATRs < 1.5 ? 'EXTENDED'
+                  : moveInATRs < 2.0 ? 'LATE'
+                  : 'EXHAUSTED';
+        if (freshness === 'EXHAUSTED') continue;
 
-          if (shouldSkipOnFreshness(freshness, momentum.entryRisk)) {
-            continue;
-          }
-        } else {
-          // REST poller fallback — score based on session move from open
-          freshness = moveInATRs < 0.5 ? 'FRESH'
-                    : moveInATRs < 1.0 ? 'DEVELOPING'
-                    : moveInATRs < 1.5 ? 'EXTENDED'
-                    : moveInATRs < 2.0 ? 'LATE'
-                    : 'EXHAUSTED';
-          if (freshness === 'EXHAUSTED') continue;
-
-          const freshnessPenalty = moveInATRs > 1.5 ? 0.5 : moveInATRs > 1.0 ? 0.75 : 1.0;
-          paScore = Math.min(35, Math.round(moveInATRs * 35 * freshnessPenalty));
-          momentum = { momentumScore: paScore, freshness, entryRisk: freshness === 'FRESH' ? 'LOW' : 'MODERATE', barsInMove: 0, moveFromOpen: parseFloat((moveFromOpen * 100).toFixed(3)), recentAccel: parseFloat((absRecent * 100).toFixed(3)), volSurge: 1, exhaustion: false, moveInATRs: parseFloat(moveInATRs.toFixed(2)) };
-        }
+        const freshnessPenalty = moveInATRs > 1.5 ? 0.5 : moveInATRs > 1.0 ? 0.75 : 1.0;
+        paScore = Math.min(35, Math.round(moveInATRs * 35 * freshnessPenalty));
+        momentum = { momentumScore: paScore, freshness, entryRisk: freshness === 'FRESH' ? 'LOW' : 'MODERATE', barsInMove: 0, moveFromOpen: parseFloat((moveFromOpen * 100).toFixed(3)), recentAccel: parseFloat((absRecent * 100).toFixed(3)), volSurge: 1, exhaustion: false, moveInATRs: parseFloat(moveInATRs.toFixed(2)) };
 
         // Run intelligence analysis
         const levels = analyzeLevels(mockState, atr);
@@ -2693,32 +2672,10 @@ async function startRestPoller() {
           }
           const levelData = { prevDayLows, prevDayHighs, todayLows, todayHighs, dailyBars, vwaps, intradayBars: intradayBarsMap };
 
-          // Run all strategy scanners
-          const gapSignals = scanGapReversal(stratSnapshots, prevCloses, firstCandles, levelData);
-          const capSignals = scanCapitulationBounce(stratSnapshots, prevCloses, volumeBaselines, levelData);
-          const putSignals = scanVolumeDropPut(stratSnapshots, prevCloses, volumeBaselines, levelData);
-          const consecSignals = scanConsecutiveDrop(Object.keys(allSnaps), dailyBars, { currentPrices, prevCloses, prevDayLows, prevDayHighs, todayLows, todayHighs });
-          const sectorSignals = scanSectorRotationBounce(stratSnapshots, prevCloses, spyPct, firstCandles, qqqPct);
-          const gapUpSignals = scanGapUpReversal(stratSnapshots, prevCloses, firstCandles, levelData);
-          // DISABLED: requires spreads (calendar = two legs) — shelved until $25K margin account
-          // const calendarSignals = scanOvernightCalendar(stratSnapshots, mkt.SPY, vix, macroEvent);
-          const calendarSignals = [];
-          const breakdownSignals = scanBreakdownPut(stratSnapshots, prevCloses, spyPct, qqqPct, volumeBaselines, levelData);
-          const relWeaknessSignals = scanRelativeWeaknessPut(stratSnapshots, prevCloses, spyPct, qqqPct, volumeBaselines, levelData);
-          // DISABLED: requires spreads — shelved until $25K margin account
-          // const creditSignals = scanCreditSpread(stratSnapshots, prevCloses, spyPct, qqqPct, volumeBaselines, levelData, profiles);
-          const creditSignals = [];
-          // Income strategies
-          const orbSignals = scanOpeningRangeBreakout(stratSnapshots, prevCloses, spyPct, qqqPct, volumeBaselines, levelData, profiles);
-          const vwapSignals = scanVwapReclaim(stratSnapshots, prevCloses, spyPct, qqqPct, volumeBaselines, levelData, profiles);
-          // Alpha strategies
-          const powerHourSignals = scanPowerHour(stratSnapshots, prevCloses, spyPct, qqqPct, volumeBaselines, levelData, profiles);
-          const cascadeSignals = scanCorrelationCascade(stratSnapshots, prevCloses, spyPct, qqqPct, volumeBaselines, levelData, profiles);
-          const postMacroSignals = scanPostMacro(stratSnapshots, prevCloses, spyPct, qqqPct, volumeBaselines, levelData, profiles, macroEvent);
-          const failedBreakSignals = scanFailedBreakdown(stratSnapshots, prevCloses, spyPct, qqqPct, volumeBaselines, levelData, profiles);
-          const allStratSignals = [...gapSignals, ...capSignals, ...putSignals, ...consecSignals,
-            ...(macroEvent ? [] : sectorSignals), ...gapUpSignals, ...calendarSignals, ...breakdownSignals, ...relWeaknessSignals, ...creditSignals,
-            ...orbSignals, ...vwapSignals, ...powerHourSignals, ...cascadeSignals, ...postMacroSignals, ...failedBreakSignals];
+          // Old strategy scanners decommissioned — no documented edge (28.3% directional accuracy)
+          // New 7 research-backed strategies run via backtest pipeline only.
+          // Live scanners for new strategies will be built when backtest validates them.
+          const allStratSignals = [];
 
           // Diagnostic: log scanner inputs + outputs every 5th cycle
           if (continuationCycle % 5 === 0) {
@@ -3103,8 +3060,8 @@ async function startRestPoller() {
           }
 
           // Debug summary — always log so we know scanners ran
-          console.log(`[POLL SUMMARY] checked=${Object.keys(stratSnapshots).length} prevCloses=${Object.keys(prevCloses).length} firstCandles=${Object.keys(firstCandles).length} GAP_DOWN=${gapSignals.length} GAP_UP=${gapUpSignals.length} SECTOR=${sectorSignals.length} CAPIT=${capSignals.length} VOL_DROP=${putSignals.length} CONSEC=${consecSignals.length} CAL=${calendarSignals.length}`);
-          if (gapSignals.length > 0 || capSignals.length > 0 || gapUpSignals.length > 0 || sectorSignals.length > 0) {
+          console.log(`[POLL SUMMARY] checked=${Object.keys(stratSnapshots).length} prevCloses=${Object.keys(prevCloses).length} firstCandles=${Object.keys(firstCandles).length} stratSignals=${allStratSignals.length}`);
+          if (allStratSignals.length > 0) {
             console.log(`[STRATEGY FIRED] ${allStratSignals.map(s => `${s.ticker}:${s.strategy}`).join(', ')}`);
           }
         } catch (stratErr) {
@@ -3112,99 +3069,8 @@ async function startRestPoller() {
         }
       }
 
-      // ── PRE-EARNINGS PUT SCANNER (runs hourly using conviction data) ──
-      if (session === 'REGULAR' && continuationCycle % 60 === 5) {
-        try {
-          // Fetch conviction scores for all tickers
-          const convTickerRes = await db.query(`
-            SELECT ticker FROM lc_v3.equity_profiles
-            UNION SELECT ticker FROM lc_v3.conviction_universe
-          `);
-          const convTickers = convTickerRes.rows.map(r => r.ticker);
-          const convScores = [];
-          for (const ticker of convTickers) {
-            try {
-              const result = await scoreConvictionSetup(ticker, db);
-              if (result.conviction_score >= 50) {
-                // Enrich with price vs 52w high
-                const priceRes = await db.query(
-                  'SELECT price, year_high FROM lc_v3.equity_profiles WHERE ticker = $1',
-                  [ticker]
-                );
-                if (priceRes.rows[0]?.price && priceRes.rows[0]?.year_high) {
-                  const price = parseFloat(priceRes.rows[0].price);
-                  const high = parseFloat(priceRes.rows[0].year_high);
-                  result.current_price = price;
-                  result.price_vs_52w_high_pct = high > 0 ? -((high - price) / high * 100) : null;
-                }
-                convScores.push(result);
-              }
-            } catch { /* skip ticker */ }
-          }
-
-          // Build ticker intelligence map
-          const tiRes = await db.query(`
-            SELECT ticker, earnings_date, iv_rank_30d, analyst_consensus
-            FROM lc_v3.ticker_intelligence
-          `);
-          const tiMap = {};
-          for (const row of tiRes.rows) {
-            tiMap[row.ticker] = row;
-          }
-
-          const preEarningsSignals = scanPreEarningsPut(convScores, tiMap);
-          if (preEarningsSignals.length > 0) {
-            console.log(`[PRE-EARNINGS] ${preEarningsSignals.length} candidates found`);
-          }
-
-          // Insert pre-earnings signals using same pipeline
-          for (const sig of preEarningsSignals) {
-            const dupCheck = await db.query(`
-              SELECT 1 FROM lc_v3.signals
-              WHERE ticker = $1 AND direction = $2
-                AND DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
-                AND news_headline LIKE $3
-              LIMIT 1
-            `, [sig.ticker, sig.direction, `%strategy=${sig.strategy}%`]);
-            if (dupCheck.rows.length > 0) continue;
-
-            const compositeRaw = sig.confidence;
-            const signalNote = [
-              `strategy=${sig.strategy}`,
-              `confidence=${sig.confidence}%`,
-              `conviction=${sig.conviction_score}`,
-              `earningsDate=${sig.earnings_date}`,
-              `daysToER=${sig.days_to_earnings}`,
-              `ivRank=${sig.iv_rank}%`,
-              `belowHigh=${sig.pct_below_high}%`,
-              `strike=${sig.strike_range}`,
-              `hardExit=${sig.hard_exit}`,
-              `size=${sig.position_size_pct}%`,
-              sig.note || null,
-            ].filter(Boolean).join(' · ');
-
-            const expiryInterval = `${sig.exit_within_days || 22} days`;
-
-            const preGrade = toGrade(compositeRaw) || 'B';
-            await db.query(`
-              INSERT INTO lc_v3.signals (
-                ticker, direction, grade, status, composite_raw, signal_tier,
-                price_at_signal, news_headline,
-                first_seen_at, last_confirmed_at, confirmation_count,
-                peak_composite, peak_grade, composite_history, momentum_trend,
-                expires_at, created_at
-              ) VALUES ($1,$2,$6,'ACTIVE',$3,'primary',$4,$5,
-                NOW(), NOW(), 1, $3, $6, '[]'::jsonb, 'NEW',
-                NOW() + INTERVAL '${expiryInterval}', NOW())
-              RETURNING signal_id
-            `, [sig.ticker, sig.direction, compositeRaw, sig.entry_price, signalNote, preGrade]);
-
-            console.log(`[PRE-EARNINGS] ${sig.ticker} PUT conviction=${sig.conviction_score} ER=${sig.days_to_earnings}d IV=${sig.iv_rank}%`);
-          }
-        } catch (preEarnErr) {
-          console.error('[PRE-EARNINGS] Scanner error:', preEarnErr.message);
-        }
-      }
+      // PRE-EARNINGS PUT SCANNER — disabled (strategy deleted, no validated edge)
+      // Will be replaced when live scanners are rewritten for the 7 validated strategies.
 
       // Post-signal monitoring — check active signals for breakdowns
       await monitorActiveSignals(alpacaHdrs, dataUrl, profiles);

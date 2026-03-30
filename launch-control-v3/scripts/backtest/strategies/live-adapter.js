@@ -12,7 +12,9 @@
  *
  * Strategies covered:
  *   ORB_BREAKOUT, VWAP_BOUNCE, FIRST_PULLBACK, GAP_FILL_REVERSION,
- *   POWER_HOUR_MOMENTUM, SR_BOUNCE, MACRO_REACTION
+ *   POWER_HOUR_MOMENTUM, MACRO_REACTION, EXTREME_REVERSAL, EOD_MEAN_REVERSION,
+ *   HIGH_RVOL_BREAKOUT, PEAD_DRIFT, SECTOR_LAGGARD, SHORT_SQUEEZE_MOMENTUM,
+ *   OPTIONS_FLOW, ANALYST_DRIFT, VIX_REVERSAL, ZERO_DTE_SCALP
  */
 
 import { checkConfluence } from '../../../src/indicators/confluence.js';
@@ -53,13 +55,25 @@ function confidenceToGrade(confidence, strategy) {
  * Hold time configuration per strategy.
  */
 const HOLD_CONFIG = {
+  // Day trades (primary)
   ORB_BREAKOUT:          { maxHoldMinutes: 60,  holdDays: 0 },
   VWAP_BOUNCE:           { maxHoldMinutes: 90,  holdDays: 0 },
   FIRST_PULLBACK:        { maxHoldMinutes: 90,  holdDays: 0 },
   GAP_FILL_REVERSION:    { maxHoldMinutes: 120, holdDays: 0 },
   POWER_HOUR_MOMENTUM:   { maxHoldMinutes: 45,  holdDays: 0 },
-  SR_BOUNCE:             { maxHoldMinutes: 90,  holdDays: 0 },
   MACRO_REACTION:        { maxHoldMinutes: 180, holdDays: 0 },
+  EXTREME_REVERSAL:      { maxHoldMinutes: 120, holdDays: 0 },
+  EOD_MEAN_REVERSION:    { maxHoldMinutes: 25,  holdDays: 0 },
+  HIGH_RVOL_BREAKOUT:    { maxHoldMinutes: 60,  holdDays: 0 },
+  // Swing trades (secondary)
+  PEAD_DRIFT:            { maxHoldMinutes: 390, holdDays: 3 },
+  SECTOR_LAGGARD:        { maxHoldMinutes: 390, holdDays: 2 },
+  SHORT_SQUEEZE_MOMENTUM:{ maxHoldMinutes: 390, holdDays: 3 },
+  OPTIONS_FLOW:          { maxHoldMinutes: 390, holdDays: 5 },
+  ANALYST_DRIFT:         { maxHoldMinutes: 390, holdDays: 20 },
+  VIX_REVERSAL:          { maxHoldMinutes: 390, holdDays: 20 },
+  // Scalp
+  ZERO_DTE_SCALP:        { maxHoldMinutes: 15,  holdDays: 0 },
 };
 
 /**
@@ -372,6 +386,7 @@ function levelsConverging(levels, price, tolerance = 0.001) {
  * ORB_BREAKOUT
  *
  * Edge: Institutional order flow at open. First 5 min reveals overnight order imbalance.
+ * "Stocks in Play" filter: high RVOL (2x+) per Zarattini, Barbon & Aziz 2024 (Sharpe 2.81, 36% alpha).
  * Time: Bars 5-60 from open (9:35-10:30 AM). FIRST breakout only.
  * Range: First 5 bars. Min width 0.2%, max 1.5% of price.
  */
@@ -390,6 +405,18 @@ export function generateORBBreakoutSignals(date, dayData, context) {
 
     const allKeys = getMinuteKeys(minuteBars, ticker, date);
     if (allKeys.length < RANGE_BARS + 10) continue;
+
+    // "Stocks in Play" filter: require 2x+ relative volume in opening range
+    // per Zarattini et al. 2024 -- high RVOL is the key differentiator
+    const tickerMinutesCheck = minuteBars[ticker] || {};
+    let orTotalVol = 0;
+    for (let j = 0; j < RANGE_BARS && j < allKeys.length; j++) {
+      orTotalVol += tickerMinutesCheck[allKeys[j]]?.v || 0;
+    }
+    const avgDailyVol = profile.avg_volume_20d || profile.avg_volume || 0;
+    // Approximate expected volume in first 5 min: ~8% of daily volume
+    const expectedORVol = avgDailyVol * 0.08;
+    if (expectedORVol > 0 && orTotalVol < expectedORVol * 2.0) continue;
 
     const tickerMinutes = minuteBars[ticker] || {};
     const sessionOpen = tickerMinutes[allKeys[0]]?.o;
@@ -526,7 +553,7 @@ export function generateVWAPBounceSignals(date, dayData, context) {
       if (!vwap || vwap <= 0) continue;
 
       const distPct = Math.abs(currentPrice - vwap) / vwap;
-      if (distPct < 0.001 || distPct > 0.003) continue;
+      if (distPct < 0.0015 || distPct > 0.005) continue; // 0.15-0.5% from VWAP
 
       // Direction: if price is just above VWAP after being below = CALL bounce
       // If price is just below VWAP after being above = PUT bounce
@@ -589,8 +616,10 @@ export function generateVWAPBounceSignals(date, dayData, context) {
       confidence += 3; // strategy bonus
       confidence = Math.max(60, Math.min(95, confidence));
 
-      // Stop: beyond VWAP
-      const stopDistance = 0.12; // $0.10-0.15 average
+      // Stop: 0.3 ATR beyond VWAP (scales with stock price/volatility)
+      const atr = profile.atr_20d || 0.025;
+      const atrDollar = atr * currentPrice;
+      const stopDistance = 0.3 * atrDollar;
       const stopPrice = direction === 'CALL'
         ? +(vwap - stopDistance).toFixed(2)
         : +(vwap + stopDistance).toFixed(2);
@@ -677,6 +706,17 @@ export function generateFirstPullbackSignals(date, dayData, context) {
       // Detect first pullback
       const pullback = detectPullback(bars, direction, atrDollar);
       if (!pullback.detected) continue;
+
+      // Pullback depth check: must retrace < 50% of the initial move
+      // Deeper retracement = trend exhaustion, not profit-taking pause
+      const moveExtreme = direction === 'CALL'
+        ? Math.max(...bars.map(b => b.h))
+        : Math.min(...bars.map(b => b.l));
+      const totalMove = Math.abs(moveExtreme - sessionOpen);
+      const pullbackDepth = direction === 'CALL'
+        ? moveExtreme - pullback.pullbackLow
+        : pullback.pullbackHigh - moveExtreme;
+      if (totalMove > 0 && pullbackDepth / totalMove > 0.50) continue;
 
       // VWAP alignment
       const vwap = computeVWAP(bars);
@@ -860,13 +900,14 @@ export function generateGapFillSignals(date, dayData, context) {
     if (logicType === 'CONTINUATION' && absGap >= 0.015) confidence += 3;
     confidence = Math.max(60, Math.min(95, confidence));
 
-    // Stop: 0.5 ATR from entry
+    // Stop: 0.5 ATR for reversion, 0.75 ATR for continuation (wider due to gap volatility)
+    const stopATR = logicType === 'CONTINUATION' ? 0.75 : 0.5;
     const stopPrice = direction === 'CALL'
-      ? +(currentPrice - 0.5 * atrDollar).toFixed(2)
-      : +(currentPrice + 0.5 * atrDollar).toFixed(2);
+      ? +(currentPrice - stopATR * atrDollar).toFixed(2)
+      : +(currentPrice + stopATR * atrDollar).toFixed(2);
 
     // Target: gap fill (prev close) or 2:1 R:R
-    const risk = 0.5 * atrDollar;
+    const risk = stopATR * atrDollar;
     let targetPrice;
     if (logicType === 'REVERSION') {
       // Target is gap fill (prev close)
@@ -945,8 +986,8 @@ export function generatePowerHourMomentumSignals(date, dayData, context) {
     if (direction === 'CALL' && currentPrice <= vwap) continue;
     if (direction === 'PUT' && currentPrice >= vwap) continue;
 
-    // No reversal bars in last 30 bars
-    const last30 = bars.slice(-30);
+    // No strong reversal bars in last 10 bars (relaxed from 30 per Gao et al.)
+    const last30 = bars.slice(-10);
     const reversalThreshold = 0.15 * atrDollar;
     let hasReversal = false;
     for (const bar of last30) {
@@ -1035,154 +1076,7 @@ export function generatePowerHourMomentumSignals(date, dayData, context) {
   return signals.slice(0, 5);
 }
 
-/**
- * SR_BOUNCE
- *
- * Edge: Level convergence. When 2+ independent levels converge, multiple participants see the same level.
- * Time: Offsets 15-360 (9:45 AM - 3:30 PM). Check every 30 bars.
- */
-export function generateSRBounceSignals(date, dayData, context) {
-  const { minuteBars, etfMinuteBars, dailyBars } = dayData;
-  const { profiles, tickers } = context;
-  const signals = [];
-  const tickerCounts = {};
-
-  const CHECK_OFFSETS = [15, 45, 75, 105, 135, 165, 195, 225, 255, 285, 315, 345, 360];
-
-  for (const ticker of tickers) {
-    const profile = profiles[ticker];
-    if (!profile) continue;
-
-    const prevBar = findPrevDayBar(dailyBars, ticker, date);
-    if (!prevBar) continue;
-
-    const allKeys = getMinuteKeys(minuteBars, ticker, date);
-    if (allKeys.length < 20) continue;
-
-    const tickerMinutes = minuteBars[ticker] || {};
-
-    // Compute opening range once
-    const or = computeOpeningRange(minuteBars, ticker, date, 5);
-
-    for (const offset of CHECK_OFFSETS) {
-      if (offset >= allKeys.length) continue;
-      if ((tickerCounts[ticker] || 0) >= 3) break;
-
-      const checkKey = allKeys[offset];
-      const bars = getBarsUpTo(minuteBars, ticker, date, checkKey);
-      if (bars.length < 10) continue;
-
-      const currentPrice = bars[bars.length - 1].c;
-      const vwap = computeVWAP(bars);
-
-      // Find key levels
-      const levels = findKeyLevels(prevBar, bars, vwap, or);
-
-      // Check level convergence near current price
-      const convergence = levelsConverging(levels, currentPrice, 0.001);
-      if (!convergence.converging) continue;
-
-      // Determine direction based on whether price is bouncing off support or resistance
-      // If most converging levels are below price -> support -> CALL
-      // If most converging levels are above price -> resistance -> PUT
-      const belowCount = convergence.levels.filter(l => l.level <= currentPrice).length;
-      const aboveCount = convergence.levels.filter(l => l.level > currentPrice).length;
-      const direction = belowCount >= aboveCount ? 'CALL' : 'PUT';
-
-      // Reversal candle
-      const lastBar = bars[bars.length - 1];
-      const candleAnalysis = analyzeCandle(lastBar);
-      const isHammer = candleAnalysis.type === 'HAMMER' || candleAnalysis.type === 'INVERTED_HAMMER';
-      let engulfing = false;
-      if (bars.length >= 2) {
-        const engulfResult = direction === 'CALL'
-          ? detectBullishEngulfing(bars.slice(-2))
-          : detectBearishEngulfing(bars.slice(-2));
-        engulfing = engulfResult.detected;
-      }
-      if (!isHammer && !engulfing && candleAnalysis.bodyRatio < 0.50) continue;
-
-      // Volume rising
-      const recentVol = bars.slice(-5).reduce((s, b) => s + (b.v || 0), 0) / 5;
-      const priorVol = bars.slice(-10, -5).reduce((s, b) => s + (b.v || 0), 0) / 5;
-      const volRatio = priorVol > 0 ? recentVol / priorVol : 1;
-      if (volRatio < 1.2) continue;
-
-      // Confluence
-      const confluenceResult = checkConfluence(bars, direction, { vwap, currentPrice }, { minFactors: 3 });
-      if (!confluenceResult.pass) continue;
-
-      // SPY alignment
-      const spyChange = getETFChange(etfMinuteBars, 'SPY', date, checkKey);
-      const spyAligned = (direction === 'CALL' && spyChange > 0) || (direction === 'PUT' && spyChange < 0);
-
-      // Confidence
-      let confidence = 60;
-      if (candleAnalysis.type.includes('MARUBOZU')) confidence += 6;
-      else if (candleAnalysis.type.includes('STRONG')) confidence += 4;
-      else confidence += 2;
-      if (engulfing || isHammer) confidence += 4;
-      if (volRatio >= 1.5) confidence += 5;
-      else confidence += 3;
-      if (spyAligned) confidence += 3;
-      if (vwap > 0 && ((direction === 'CALL' && currentPrice >= vwap) || (direction === 'PUT' && currentPrice <= vwap))) confidence += 3;
-      confidence += Math.max(0, confluenceResult.confirming * 2);
-      confidence -= confluenceResult.opposing * 2;
-      // Bonus for extra converging levels
-      confidence += Math.max(0, (convergence.count - 2) * 3);
-      confidence = Math.max(60, Math.min(95, confidence));
-
-      // Stop: beyond the level cluster
-      const avgLevel = convergence.levels.reduce((s, l) => s + l.level, 0) / convergence.levels.length;
-      const stopPrice = direction === 'CALL'
-        ? +(avgLevel - 0.12).toFixed(2)
-        : +(avgLevel + 0.12).toFixed(2);
-
-      // Target: VWAP or next level, min 1.5:1 R:R
-      const risk = Math.abs(currentPrice - stopPrice);
-      let targetPrice;
-      if (direction === 'CALL') {
-        // Target: VWAP if above, or next resistance level
-        const candidateTargets = levels
-          .filter(l => l.level > currentPrice + risk)
-          .sort((a, b) => a.level - b.level);
-        targetPrice = candidateTargets.length > 0
-          ? +candidateTargets[0].level.toFixed(2)
-          : +(currentPrice + risk * 1.5).toFixed(2);
-      } else {
-        const candidateTargets = levels
-          .filter(l => l.level < currentPrice - risk)
-          .sort((a, b) => b.level - a.level);
-        targetPrice = candidateTargets.length > 0
-          ? +candidateTargets[0].level.toFixed(2)
-          : +(currentPrice - risk * 1.5).toFixed(2);
-      }
-      // Ensure min 1.5:1 R:R
-      const reward = Math.abs(targetPrice - currentPrice);
-      if (reward < risk * 1.5) {
-        targetPrice = direction === 'CALL'
-          ? +(currentPrice + risk * 1.5).toFixed(2)
-          : +(currentPrice - risk * 1.5).toFixed(2);
-      }
-
-      tickerCounts[ticker] = (tickerCounts[ticker] || 0) + 1;
-      signals.push(buildSignal('SR_BOUNCE', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
-        converging_levels: convergence.count,
-        level_sources: convergence.levels.map(l => l.source).join(','),
-        volume_ratio: +volRatio.toFixed(2),
-        candle_type: candleAnalysis.type,
-        engulfing,
-        is_hammer: isHammer,
-        spy_aligned: spyAligned,
-        confluence: confluenceResult.confirming,
-      }));
-    }
-  }
-
-  // Cap at top 5 global
-  signals.sort((a, b) => b.composite - a.composite);
-  return signals.slice(0, 5);
-}
+// SR_BOUNCE removed -- no academic citation, fixed $0.12 stop bug, simplistic direction logic.
 
 /**
  * MACRO_REACTION
@@ -1307,4 +1201,1037 @@ export function generateMacroReactionSignals(date, dayData, context) {
   // Cap at top 3
   signals.sort((a, b) => b.composite - a.composite);
   return signals.slice(0, 3);
+}
+
+// ── New Day Trade Strategies ────────────────────────────────────────────────
+
+/**
+ * EXTREME_REVERSAL
+ *
+ * Edge: Intraday overreaction mean reversion. Brogaard, Han & Kim 2024 (162.3% annualized).
+ * Stocks that move > 2 ATR intraday by midday tend to revert.
+ * Time: Check at offsets 120, 150, 180 (11:30 AM - 12:30 PM).
+ */
+export function generateExtremeReversalSignals(date, dayData, context) {
+  const { minuteBars, etfMinuteBars, dailyBars } = dayData;
+  const { profiles, tickers } = context;
+  const signals = [];
+  const seen = new Set();
+
+  const CHECK_OFFSETS = [120, 150, 180];
+
+  for (const ticker of tickers) {
+    if (seen.has(ticker)) continue;
+    const profile = profiles[ticker];
+    if (!profile) continue;
+
+    const allKeys = getMinuteKeys(minuteBars, ticker, date);
+    if (allKeys.length < 120) continue;
+
+    const tickerMinutes = minuteBars[ticker] || {};
+    const sessionOpen = tickerMinutes[allKeys[0]]?.o;
+    if (!sessionOpen) continue;
+
+    const atr = profile.atr_20d || 0.025;
+    const atrDollar = atr * sessionOpen;
+
+    for (const offset of CHECK_OFFSETS) {
+      if (offset >= allKeys.length) continue;
+      if (seen.has(ticker)) break;
+
+      const checkKey = allKeys[offset];
+      const bars = getBarsUpTo(minuteBars, ticker, date, checkKey);
+      if (bars.length < 30) continue;
+
+      const currentPrice = bars[bars.length - 1].c;
+      const moveFromOpen = currentPrice - sessionOpen;
+      const moveATRs = Math.abs(moveFromOpen) / atrDollar;
+
+      // Must have moved > 2 ATR from open (extreme move)
+      if (moveATRs < 2.0) continue;
+
+      // Reversal direction: if stock dropped 2+ ATR, buy CALL (mean reversion up)
+      const direction = moveFromOpen < 0 ? 'CALL' : 'PUT';
+
+      // Reversal candle confirmation
+      const candleAnalysis = analyzeCandle(bars[bars.length - 1]);
+      const barMove = bars[bars.length - 1].c - bars[bars.length - 1].o;
+      const isReversalBar = (direction === 'CALL' && barMove > 0) || (direction === 'PUT' && barMove < 0);
+      if (!isReversalBar) continue;
+
+      // Volume should still be elevated (liquidity provision opportunity)
+      const recentVol = bars.slice(-5).reduce((s, b) => s + (b.v || 0), 0) / 5;
+      const earlyVol = bars.slice(0, 10).reduce((s, b) => s + (b.v || 0), 0) / 10;
+      const volRatio = earlyVol > 0 ? recentVol / earlyVol : 1;
+
+      // Engulfing
+      let engulfing = false;
+      if (bars.length >= 2) {
+        const engulfResult = direction === 'CALL'
+          ? detectBullishEngulfing(bars.slice(-2))
+          : detectBearishEngulfing(bars.slice(-2));
+        engulfing = engulfResult.detected;
+      }
+
+      // VWAP -- for reversal, price should be on the extended side of VWAP
+      const vwap = computeVWAP(bars);
+
+      // Confluence (use minFactors: 2 for extreme reversal -- thesis is the extreme move itself)
+      const confluenceResult = checkConfluence(bars, direction, { vwap, currentPrice }, { minFactors: 2 });
+
+      // Confidence
+      let confidence = 60;
+      if (candleAnalysis.type.includes('MARUBOZU')) confidence += 6;
+      else if (candleAnalysis.type.includes('STRONG')) confidence += 4;
+      else confidence += 2;
+      if (engulfing) confidence += 4;
+      if (volRatio >= 0.8) confidence += 3; // still has volume
+      if (moveATRs >= 2.5) confidence += 5; // more extreme = stronger reversion
+      else confidence += 3;
+      if (confluenceResult.pass) confidence += confluenceResult.confirming * 2;
+      confidence -= (confluenceResult.opposing || 0) * 2;
+      confidence += 4; // extreme reversal bonus
+      confidence = Math.max(60, Math.min(95, confidence));
+
+      // Stop: 0.5 ATR beyond the extreme (let the move exhaust)
+      const extremePrice = direction === 'CALL'
+        ? Math.min(...bars.map(b => b.l))
+        : Math.max(...bars.map(b => b.h));
+      const stopPrice = direction === 'CALL'
+        ? +(extremePrice - 0.5 * atrDollar).toFixed(2)
+        : +(extremePrice + 0.5 * atrDollar).toFixed(2);
+
+      // Target: 50% retracement of the extreme move
+      const retracementTarget = sessionOpen + moveFromOpen * 0.5;
+      const targetPrice = +retracementTarget.toFixed(2);
+
+      seen.add(ticker);
+      signals.push(buildSignal('EXTREME_REVERSAL', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
+        move_from_open_atrs: +moveATRs.toFixed(2),
+        move_from_open_pct: +((moveFromOpen / sessionOpen) * 100).toFixed(2),
+        candle_type: candleAnalysis.type,
+        engulfing,
+        volume_ratio: +volRatio.toFixed(2),
+        confluence: confluenceResult.confirming || 0,
+      }));
+      break;
+    }
+  }
+
+  // Cap at top 5
+  signals.sort((a, b) => b.composite - a.composite);
+  return signals.slice(0, 5);
+}
+
+/**
+ * EOD_MEAN_REVERSION
+ *
+ * Edge: End-of-day reversal. Baltussen, Da & Soebhag 2024 (0.24%/day in last 30 min).
+ * Intraday losers bounce 3:30-4:00 PM due to retail attention + short covering.
+ * Time: Single check at offset 360 (3:30 PM).
+ */
+export function generateEODMeanReversionSignals(date, dayData, context) {
+  const { minuteBars, etfMinuteBars, dailyBars } = dayData;
+  const { profiles, tickers } = context;
+  const signals = [];
+
+  const CHECK_OFFSET = 360; // 3:30 PM
+
+  // Collect all tickers with their intraday returns
+  const candidates = [];
+
+  for (const ticker of tickers) {
+    const profile = profiles[ticker];
+    if (!profile) continue;
+
+    const allKeys = getMinuteKeys(minuteBars, ticker, date);
+    if (allKeys.length <= CHECK_OFFSET) continue;
+
+    const tickerMinutes = minuteBars[ticker] || {};
+    const sessionOpen = tickerMinutes[allKeys[0]]?.o;
+    if (!sessionOpen) continue;
+
+    const checkKey = allKeys[CHECK_OFFSET];
+    const currentPrice = tickerMinutes[checkKey]?.c;
+    if (!currentPrice) continue;
+
+    const intradayReturn = (currentPrice - sessionOpen) / sessionOpen;
+    const atr = profile.atr_20d || 0.025;
+    const atrDollar = atr * currentPrice;
+
+    candidates.push({ ticker, profile, intradayReturn, currentPrice, sessionOpen, checkKey, atr, atrDollar, allKeys });
+  }
+
+  // Sort by intraday return -- biggest losers first (these are the reversal candidates)
+  candidates.sort((a, b) => a.intradayReturn - b.intradayReturn);
+
+  // Take bottom decile (biggest losers) for CALL reversal
+  const bottomN = Math.max(1, Math.floor(candidates.length * 0.10));
+  const losers = candidates.slice(0, bottomN);
+
+  // Also take top decile (biggest winners) for PUT reversal
+  const topN = Math.max(1, Math.floor(candidates.length * 0.10));
+  const winners = candidates.slice(-topN);
+
+  const reversalCandidates = [
+    ...losers.map(c => ({ ...c, direction: 'CALL' })),
+    ...winners.map(c => ({ ...c, direction: 'PUT' })),
+  ];
+
+  for (const cand of reversalCandidates) {
+    const { ticker, profile, direction, currentPrice, checkKey, atr, atrDollar, allKeys, intradayReturn } = cand;
+
+    // Must have moved meaningfully (> 1% intraday) to be a reversal candidate
+    if (Math.abs(intradayReturn) < 0.01) continue;
+
+    const bars = getBarsUpTo(minuteBars, ticker, cand.checkKey.slice(0, 10), checkKey);
+    if (bars.length < 30) continue;
+
+    const vwap = computeVWAP(bars);
+    const candleAnalysis = analyzeCandle(bars[bars.length - 1]);
+
+    // Engulfing
+    let engulfing = false;
+    if (bars.length >= 2) {
+      const engulfResult = direction === 'CALL'
+        ? detectBullishEngulfing(bars.slice(-2))
+        : detectBearishEngulfing(bars.slice(-2));
+      engulfing = engulfResult.detected;
+    }
+
+    // Confidence
+    let confidence = 60;
+    if (candleAnalysis.type.includes('MARUBOZU')) confidence += 6;
+    else if (candleAnalysis.type.includes('STRONG')) confidence += 4;
+    else confidence += 2;
+    if (engulfing) confidence += 4;
+    // Bigger intraday move = stronger reversal signal
+    if (Math.abs(intradayReturn) >= 0.03) confidence += 5;
+    else if (Math.abs(intradayReturn) >= 0.02) confidence += 3;
+    else confidence += 2;
+    confidence += 4; // EOD reversal bonus (academic edge)
+    confidence = Math.max(60, Math.min(95, confidence));
+
+    // Stop: 0.3 ATR (tight -- only 25 min hold)
+    const stopPrice = direction === 'CALL'
+      ? +(currentPrice - 0.3 * atrDollar).toFixed(2)
+      : +(currentPrice + 0.3 * atrDollar).toFixed(2);
+
+    // Target: 0.5 ATR reversion (capturing the last-30-min bounce)
+    const targetPrice = direction === 'CALL'
+      ? +(currentPrice + 0.5 * atrDollar).toFixed(2)
+      : +(currentPrice - 0.5 * atrDollar).toFixed(2);
+
+    signals.push(buildSignal('EOD_MEAN_REVERSION', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
+      intraday_return_pct: +(intradayReturn * 100).toFixed(2),
+      candle_type: candleAnalysis.type,
+      engulfing,
+      confluence: 0,
+    }));
+  }
+
+  // Cap at top 5
+  signals.sort((a, b) => b.composite - a.composite);
+  return signals.slice(0, 5);
+}
+
+/**
+ * HIGH_RVOL_BREAKOUT
+ *
+ * Edge: High relative volume = attention premium + directional signal.
+ * Gervais, Kaniel & Mingelgrin 2001 (JoF) + Zarattini et al. 2024 "Stocks in Play".
+ * Time: Offsets 30-60 (10:00-10:30 AM). Requires 2x+ RVOL in first 30 min.
+ */
+export function generateHighRvolBreakoutSignals(date, dayData, context) {
+  const { minuteBars, etfMinuteBars, dailyBars } = dayData;
+  const { profiles, tickers } = context;
+  const signals = [];
+  const seen = new Set();
+
+  for (const ticker of tickers) {
+    if (seen.has(ticker)) continue;
+    const profile = profiles[ticker];
+    if (!profile) continue;
+
+    const allKeys = getMinuteKeys(minuteBars, ticker, date);
+    if (allKeys.length < 60) continue;
+
+    const tickerMinutes = minuteBars[ticker] || {};
+    const sessionOpen = tickerMinutes[allKeys[0]]?.o;
+    if (!sessionOpen) continue;
+
+    // Check relative volume in first 30 bars
+    let first30Vol = 0;
+    for (let i = 0; i < 30 && i < allKeys.length; i++) {
+      first30Vol += tickerMinutes[allKeys[i]]?.v || 0;
+    }
+    const avgDailyVol = profile.avg_volume_20d || profile.avg_volume || 0;
+    // First 30 min is ~25% of daily volume normally
+    const expectedFirst30Vol = avgDailyVol * 0.25;
+    if (expectedFirst30Vol <= 0) continue;
+    const rvol = first30Vol / expectedFirst30Vol;
+    if (rvol < 2.0) continue; // Must be 2x+ relative volume
+
+    const atr = profile.atr_20d || 0.025;
+    const atrDollar = atr * sessionOpen;
+
+    // Check for directional breakout at offset 30-60
+    for (let offset = 30; offset <= Math.min(60, allKeys.length - 1); offset += 5) {
+      if (seen.has(ticker)) break;
+
+      const checkKey = allKeys[offset];
+      const bars = getBarsUpTo(minuteBars, ticker, date, checkKey);
+      if (bars.length < 20) continue;
+
+      const currentPrice = bars[bars.length - 1].c;
+      const moveFromOpen = currentPrice - sessionOpen;
+      const moveATRs = Math.abs(moveFromOpen) / atrDollar;
+
+      // Need meaningful directional move (>= 0.5 ATR)
+      if (moveATRs < 0.5) continue;
+
+      const direction = moveFromOpen > 0 ? 'CALL' : 'PUT';
+
+      // VWAP alignment
+      const vwap = computeVWAP(bars);
+      if (direction === 'CALL' && currentPrice <= vwap) continue;
+      if (direction === 'PUT' && currentPrice >= vwap) continue;
+
+      // SPY alignment
+      const spyChange = getETFChange(etfMinuteBars, 'SPY', date, checkKey);
+      const spyAligned = (direction === 'CALL' && spyChange > 0) || (direction === 'PUT' && spyChange < 0);
+
+      // Candle quality
+      const candleAnalysis = analyzeCandle(bars[bars.length - 1]);
+
+      // Engulfing
+      let engulfing = false;
+      if (bars.length >= 2) {
+        const engulfResult = direction === 'CALL'
+          ? detectBullishEngulfing(bars.slice(-2))
+          : detectBearishEngulfing(bars.slice(-2));
+        engulfing = engulfResult.detected;
+      }
+
+      // Confluence
+      const confluenceResult = checkConfluence(bars, direction, { vwap, currentPrice }, { minFactors: 3 });
+      if (!confluenceResult.pass) continue;
+
+      // Confidence
+      let confidence = 60;
+      if (candleAnalysis.type.includes('MARUBOZU')) confidence += 6;
+      else if (candleAnalysis.type.includes('STRONG')) confidence += 4;
+      else confidence += 2;
+      if (engulfing) confidence += 4;
+      if (rvol >= 3.0) confidence += 5;
+      else confidence += 3;
+      if (spyAligned) confidence += 3;
+      confidence += 3; // VWAP aligned (passed gate)
+      confidence += Math.max(0, confluenceResult.confirming * 2);
+      confidence -= confluenceResult.opposing * 2;
+      confidence += 4; // high RVOL bonus
+      confidence = Math.max(60, Math.min(95, confidence));
+
+      // Stop: below first-30-min low/high
+      const first30Bars = bars.slice(0, 30);
+      const first30High = Math.max(...first30Bars.map(b => b.h));
+      const first30Low = Math.min(...first30Bars.map(b => b.l));
+      const stopPrice = direction === 'CALL'
+        ? +first30Low.toFixed(2)
+        : +first30High.toFixed(2);
+
+      // Target: 1.5x risk
+      const risk = Math.abs(currentPrice - stopPrice);
+      const targetPrice = direction === 'CALL'
+        ? +(currentPrice + risk * 1.5).toFixed(2)
+        : +(currentPrice - risk * 1.5).toFixed(2);
+
+      seen.add(ticker);
+      signals.push(buildSignal('HIGH_RVOL_BREAKOUT', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
+        rvol: +rvol.toFixed(2),
+        move_from_open_atrs: +moveATRs.toFixed(2),
+        candle_type: candleAnalysis.type,
+        engulfing,
+        spy_aligned: spyAligned,
+        confluence: confluenceResult.confirming,
+      }));
+      break;
+    }
+  }
+
+  // Cap at top 5
+  signals.sort((a, b) => b.composite - a.composite);
+  return signals.slice(0, 5);
+}
+
+// ── New Swing Trade Strategies ──────────────────────────────────────────────
+
+/**
+ * PEAD_DRIFT
+ *
+ * Edge: Post-earnings announcement drift. Battalio & Mendenhall 2007 (14%/yr after costs).
+ * Enter direction of earnings surprise 15-30 min after open on earnings day.
+ * Hold 1-3 days.
+ */
+export function generatePEADDriftSignals(date, dayData, context) {
+  const { minuteBars, etfMinuteBars, dailyBars } = dayData;
+  const { profiles, tickers } = context;
+  const signals = [];
+
+  // Check for earnings events
+  const earningsToday = context.earningsEvents?.[date] || {};
+
+  for (const ticker of tickers) {
+    const earnings = earningsToday[ticker];
+    if (!earnings) continue; // Only trade on earnings days
+
+    const profile = profiles[ticker];
+    if (!profile) continue;
+
+    const allKeys = getMinuteKeys(minuteBars, ticker, date);
+    if (allKeys.length < 45) continue;
+
+    const tickerMinutes = minuteBars[ticker] || {};
+    const sessionOpen = tickerMinutes[allKeys[0]]?.o;
+    if (!sessionOpen) continue;
+
+    const prevBar = findPrevDayBar(dailyBars, ticker, date);
+    if (!prevBar) continue;
+
+    // Gap from prev close reveals earnings surprise direction
+    const gapPct = (sessionOpen - prevBar.c) / prevBar.c;
+    if (Math.abs(gapPct) < 0.02) continue; // Need meaningful gap (2%+)
+
+    const direction = gapPct > 0 ? 'CALL' : 'PUT';
+
+    // Check at offset 30 (30 min after open -- let noise settle)
+    const checkOffset = Math.min(30, allKeys.length - 1);
+    const checkKey = allKeys[checkOffset];
+    const bars = getBarsUpTo(minuteBars, ticker, date, checkKey);
+    if (bars.length < 15) continue;
+
+    const currentPrice = bars[bars.length - 1].c;
+    const atr = profile.atr_20d || 0.025;
+    const atrDollar = atr * currentPrice;
+
+    // Drift confirmation: price should be continuing in gap direction
+    const driftFromOpen = (currentPrice - sessionOpen) / sessionOpen;
+    const driftAligned = (direction === 'CALL' && driftFromOpen > 0) || (direction === 'PUT' && driftFromOpen < 0);
+    if (!driftAligned) continue; // Gap reversal, not drift
+
+    const vwap = computeVWAP(bars);
+    const candleAnalysis = analyzeCandle(bars[bars.length - 1]);
+
+    // Engulfing
+    let engulfing = false;
+    if (bars.length >= 2) {
+      const engulfResult = direction === 'CALL'
+        ? detectBullishEngulfing(bars.slice(-2))
+        : detectBearishEngulfing(bars.slice(-2));
+      engulfing = engulfResult.detected;
+    }
+
+    // Volume should be elevated (earnings day)
+    let first30Vol = 0;
+    for (let i = 0; i < 30 && i < allKeys.length; i++) {
+      first30Vol += tickerMinutes[allKeys[i]]?.v || 0;
+    }
+    const avgDailyVol = profile.avg_volume_20d || profile.avg_volume || 0;
+    const volRatio = avgDailyVol > 0 ? first30Vol / (avgDailyVol * 0.25) : 1;
+
+    // Confidence
+    let confidence = 60;
+    if (candleAnalysis.type.includes('MARUBOZU')) confidence += 6;
+    else if (candleAnalysis.type.includes('STRONG')) confidence += 4;
+    else confidence += 2;
+    if (engulfing) confidence += 4;
+    if (volRatio >= 2.0) confidence += 5;
+    else if (volRatio >= 1.5) confidence += 3;
+    // Bigger gap = stronger surprise = more drift
+    if (Math.abs(gapPct) >= 0.05) confidence += 5;
+    else if (Math.abs(gapPct) >= 0.03) confidence += 3;
+    else confidence += 2;
+    confidence += 4; // PEAD academic bonus
+    confidence = Math.max(60, Math.min(95, confidence));
+
+    // Stop: 1.0 ATR (wider for multi-day hold)
+    const stopPrice = direction === 'CALL'
+      ? +(currentPrice - 1.0 * atrDollar).toFixed(2)
+      : +(currentPrice + 1.0 * atrDollar).toFixed(2);
+
+    // Target: 2.0 ATR (drift continues over days)
+    const targetPrice = direction === 'CALL'
+      ? +(currentPrice + 2.0 * atrDollar).toFixed(2)
+      : +(currentPrice - 2.0 * atrDollar).toFixed(2);
+
+    signals.push(buildSignal('PEAD_DRIFT', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
+      gap_pct: +(gapPct * 100).toFixed(2),
+      drift_from_open_pct: +(driftFromOpen * 100).toFixed(2),
+      volume_ratio: +volRatio.toFixed(2),
+      candle_type: candleAnalysis.type,
+      engulfing,
+      confluence: 0,
+    }));
+  }
+
+  // Cap at top 3
+  signals.sort((a, b) => b.composite - a.composite);
+  return signals.slice(0, 3);
+}
+
+/**
+ * SECTOR_LAGGARD
+ *
+ * Edge: Sector ETF → constituent price discovery lag. Ernst 2022; Gatev et al. 2006 RFS.
+ * Stub: activates when sector mapping data is available in context.sectorMap.
+ */
+export function generateSectorLaggardSignals(date, dayData, context) {
+  const { minuteBars, etfMinuteBars } = dayData;
+  const { profiles, tickers } = context;
+  const signals = [];
+
+  // Requires sector ETF mapping data
+  const sectorMap = context.sectorMap;
+  if (!sectorMap || Object.keys(sectorMap).length === 0) return signals;
+
+  const CHECK_OFFSET = 60; // 10:30 AM -- let sector move establish
+
+  for (const [sectorETF, constituents] of Object.entries(sectorMap)) {
+    const etfKeys = getMinuteKeys(etfMinuteBars, sectorETF, date);
+    if (etfKeys.length <= CHECK_OFFSET) continue;
+
+    const etfBars = getBarsUpTo(etfMinuteBars, sectorETF, date, etfKeys[CHECK_OFFSET]);
+    if (etfBars.length < 30) continue;
+
+    const etfOpen = etfBars[0].o;
+    const etfCurrent = etfBars[etfBars.length - 1].c;
+    const etfReturn = (etfCurrent - etfOpen) / etfOpen;
+
+    // Need meaningful sector move (>= 0.5%)
+    if (Math.abs(etfReturn) < 0.005) continue;
+
+    const sectorDirection = etfReturn > 0 ? 'CALL' : 'PUT';
+
+    for (const ticker of constituents) {
+      if (!tickers.includes(ticker)) continue;
+      const profile = profiles[ticker];
+      if (!profile) continue;
+
+      const allKeys = getMinuteKeys(minuteBars, ticker, date);
+      if (allKeys.length <= CHECK_OFFSET) continue;
+
+      const tickerMinutes = minuteBars[ticker] || {};
+      const tickerOpen = tickerMinutes[allKeys[0]]?.o;
+      if (!tickerOpen) continue;
+
+      const checkKey = allKeys[CHECK_OFFSET];
+      const tickerCurrent = tickerMinutes[checkKey]?.c;
+      if (!tickerCurrent) continue;
+
+      const tickerReturn = (tickerCurrent - tickerOpen) / tickerOpen;
+
+      // Laggard: ticker hasn't moved with sector (lag > 50% of sector move)
+      const lagRatio = Math.abs(etfReturn) > 0 ? tickerReturn / etfReturn : 0;
+      if (lagRatio > 0.5) continue; // Already moved with sector, not a laggard
+
+      const bars = getBarsUpTo(minuteBars, ticker, date, checkKey);
+      const vwap = computeVWAP(bars);
+      const atr = profile.atr_20d || 0.025;
+      const atrDollar = atr * tickerCurrent;
+      const candleAnalysis = analyzeCandle(bars[bars.length - 1]);
+
+      // Confidence
+      let confidence = 60;
+      if (candleAnalysis.type.includes('STRONG')) confidence += 4;
+      else confidence += 2;
+      if (Math.abs(etfReturn) >= 0.01) confidence += 5;
+      else confidence += 3;
+      if (lagRatio < 0.2) confidence += 4; // very lagged
+      else confidence += 2;
+      confidence += 3; // sector lag bonus
+      confidence = Math.max(60, Math.min(95, confidence));
+
+      // Stop: 0.75 ATR
+      const stopPrice = sectorDirection === 'CALL'
+        ? +(tickerCurrent - 0.75 * atrDollar).toFixed(2)
+        : +(tickerCurrent + 0.75 * atrDollar).toFixed(2);
+
+      // Target: 1.5 ATR
+      const targetPrice = sectorDirection === 'CALL'
+        ? +(tickerCurrent + 1.5 * atrDollar).toFixed(2)
+        : +(tickerCurrent - 1.5 * atrDollar).toFixed(2);
+
+      signals.push(buildSignal('SECTOR_LAGGARD', date, checkKey, ticker, sectorDirection, confidence, tickerCurrent, stopPrice, targetPrice, profile, {
+        sector_etf: sectorETF,
+        sector_return_pct: +(etfReturn * 100).toFixed(2),
+        ticker_return_pct: +(tickerReturn * 100).toFixed(2),
+        lag_ratio: +lagRatio.toFixed(2),
+        candle_type: candleAnalysis.type,
+        confluence: 0,
+      }));
+    }
+  }
+
+  signals.sort((a, b) => b.composite - a.composite);
+  return signals.slice(0, 5);
+}
+
+/**
+ * SHORT_SQUEEZE_MOMENTUM
+ *
+ * Edge: High short interest + catalyst = forced covering. Schultz 2024 JFQA.
+ * Stub: activates when short interest data is available in context.shortInterest.
+ */
+export function generateShortSqueezeSignals(date, dayData, context) {
+  const { minuteBars, etfMinuteBars, dailyBars } = dayData;
+  const { profiles, tickers } = context;
+  const signals = [];
+
+  // Requires short interest data
+  const shortInterest = context.shortInterest;
+  if (!shortInterest || Object.keys(shortInterest).length === 0) return signals;
+
+  const CHECK_OFFSET = 30;
+
+  for (const ticker of tickers) {
+    const si = shortInterest[ticker];
+    if (!si || si.short_pct < 0.15) continue; // Need 15%+ short interest
+
+    const profile = profiles[ticker];
+    if (!profile) continue;
+
+    const allKeys = getMinuteKeys(minuteBars, ticker, date);
+    if (allKeys.length <= CHECK_OFFSET) continue;
+
+    const tickerMinutes = minuteBars[ticker] || {};
+    const sessionOpen = tickerMinutes[allKeys[0]]?.o;
+    if (!sessionOpen) continue;
+
+    const checkKey = allKeys[CHECK_OFFSET];
+    const bars = getBarsUpTo(minuteBars, ticker, date, checkKey);
+    if (bars.length < 15) continue;
+
+    const currentPrice = bars[bars.length - 1].c;
+    const moveFromOpen = (currentPrice - sessionOpen) / sessionOpen;
+
+    // Squeeze = strong upward move on high SI stock
+    if (moveFromOpen < 0.02) continue; // Need 2%+ up move (squeeze initiation)
+
+    const atr = profile.atr_20d || 0.025;
+    const atrDollar = atr * currentPrice;
+    const vwap = computeVWAP(bars);
+    const candleAnalysis = analyzeCandle(bars[bars.length - 1]);
+
+    // Volume must be very elevated
+    let totalVol = bars.reduce((s, b) => s + (b.v || 0), 0);
+    const avgDailyVol = profile.avg_volume_20d || profile.avg_volume || 0;
+    const expectedVol = avgDailyVol * (CHECK_OFFSET / 390);
+    const volRatio = expectedVol > 0 ? totalVol / expectedVol : 1;
+    if (volRatio < 2.0) continue; // Need 2x+ volume
+
+    // Confidence
+    let confidence = 60;
+    if (candleAnalysis.type.includes('MARUBOZU')) confidence += 6;
+    else if (candleAnalysis.type.includes('STRONG')) confidence += 4;
+    else confidence += 2;
+    if (volRatio >= 3.0) confidence += 5;
+    else confidence += 3;
+    if (si.short_pct >= 0.25) confidence += 5; // very high SI
+    else confidence += 3;
+    confidence += 3; // squeeze bonus
+    confidence = Math.max(60, Math.min(95, confidence));
+
+    // Stop: 1.0 ATR (wide -- squeezes are volatile)
+    const stopPrice = +(currentPrice - 1.0 * atrDollar).toFixed(2);
+
+    // Target: 2.0 ATR
+    const targetPrice = +(currentPrice + 2.0 * atrDollar).toFixed(2);
+
+    signals.push(buildSignal('SHORT_SQUEEZE_MOMENTUM', date, checkKey, ticker, 'CALL', confidence, currentPrice, stopPrice, targetPrice, profile, {
+      short_pct: +(si.short_pct * 100).toFixed(1),
+      move_from_open_pct: +(moveFromOpen * 100).toFixed(2),
+      volume_ratio: +volRatio.toFixed(2),
+      candle_type: candleAnalysis.type,
+      confluence: 0,
+    }));
+  }
+
+  signals.sort((a, b) => b.composite - a.composite);
+  return signals.slice(0, 3);
+}
+
+/**
+ * OPTIONS_FLOW
+ *
+ * Edge: Unusual options activity predicts returns. Pan & Poteshman 2006 RFS (+40bp/day, +1%/week).
+ * Stub: activates when options flow data is available in context.optionsFlow.
+ */
+export function generateOptionsFlowSignals(date, dayData, context) {
+  const { minuteBars, dailyBars } = dayData;
+  const { profiles, tickers } = context;
+  const signals = [];
+
+  // Requires options flow data
+  const optionsFlow = context.optionsFlow?.[date];
+  if (!optionsFlow || Object.keys(optionsFlow).length === 0) return signals;
+
+  const CHECK_OFFSET = 60; // 10:30 AM -- flow data needs time to aggregate
+
+  for (const ticker of tickers) {
+    const flow = optionsFlow[ticker];
+    if (!flow) continue;
+
+    // Need significant unusual activity: volume >= 3x avg OI
+    if (!flow.unusual || flow.call_put_ratio == null) continue;
+
+    const profile = profiles[ticker];
+    if (!profile) continue;
+
+    const allKeys = getMinuteKeys(minuteBars, ticker, date);
+    if (allKeys.length <= CHECK_OFFSET) continue;
+
+    const tickerMinutes = minuteBars[ticker] || {};
+    const checkKey = allKeys[CHECK_OFFSET];
+    const currentPrice = tickerMinutes[checkKey]?.c;
+    if (!currentPrice) continue;
+
+    const atr = profile.atr_20d || 0.025;
+    const atrDollar = atr * currentPrice;
+
+    // Direction from options flow: high call/put ratio = CALL, low = PUT
+    const direction = flow.call_put_ratio > 1.5 ? 'CALL' : flow.call_put_ratio < 0.5 ? 'PUT' : null;
+    if (!direction) continue;
+
+    const candleAnalysis = analyzeCandle(tickerMinutes[checkKey]);
+
+    // Confidence
+    let confidence = 60;
+    if (candleAnalysis.type.includes('STRONG')) confidence += 4;
+    else confidence += 2;
+    if (flow.volume_vs_oi >= 5) confidence += 5;
+    else if (flow.volume_vs_oi >= 3) confidence += 3;
+    confidence += 4; // options flow academic bonus
+    confidence = Math.max(60, Math.min(95, confidence));
+
+    // Stop: 0.75 ATR
+    const stopPrice = direction === 'CALL'
+      ? +(currentPrice - 0.75 * atrDollar).toFixed(2)
+      : +(currentPrice + 0.75 * atrDollar).toFixed(2);
+
+    // Target: 1.5 ATR (multi-day hold captures the 1-week drift)
+    const targetPrice = direction === 'CALL'
+      ? +(currentPrice + 1.5 * atrDollar).toFixed(2)
+      : +(currentPrice - 1.5 * atrDollar).toFixed(2);
+
+    signals.push(buildSignal('OPTIONS_FLOW', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
+      call_put_ratio: +flow.call_put_ratio.toFixed(2),
+      volume_vs_oi: +(flow.volume_vs_oi || 0).toFixed(1),
+      candle_type: candleAnalysis.type,
+      confluence: 0,
+    }));
+  }
+
+  signals.sort((a, b) => b.composite - a.composite);
+  return signals.slice(0, 5);
+}
+
+/**
+ * ANALYST_DRIFT
+ *
+ * Edge: Post-downgrade drift -9.1% over 6 months, post-upgrade drift +2.4%.
+ * Womack 1996 JoF. Sells are 4x more informative than buys.
+ * Activates when analyst rating changes are available in context.analystChanges.
+ */
+export function generateAnalystDriftSignals(date, dayData, context) {
+  const { minuteBars, dailyBars } = dayData;
+  const { profiles, tickers } = context;
+  const signals = [];
+
+  // Check for analyst rating changes (from ticker_intelligence or external feed)
+  const analystChanges = context.analystChanges?.[date] || {};
+
+  for (const ticker of tickers) {
+    const change = analystChanges[ticker];
+    if (!change) continue;
+
+    // Only act on clear upgrades/downgrades
+    if (!change.direction) continue; // 'UPGRADE' or 'DOWNGRADE'
+
+    const profile = profiles[ticker];
+    if (!profile) continue;
+
+    const allKeys = getMinuteKeys(minuteBars, ticker, date);
+    if (allKeys.length < 30) continue;
+
+    const tickerMinutes = minuteBars[ticker] || {};
+    const checkOffset = Math.min(30, allKeys.length - 1);
+    const checkKey = allKeys[checkOffset];
+    const bars = getBarsUpTo(minuteBars, ticker, date, checkKey);
+    if (bars.length < 10) continue;
+
+    const currentPrice = bars[bars.length - 1].c;
+    const atr = profile.atr_20d || 0.025;
+    const atrDollar = atr * currentPrice;
+
+    // Direction: CALL for upgrade, PUT for downgrade
+    // Downgrades are 4x more informative (Womack 1996)
+    const direction = change.direction === 'UPGRADE' ? 'CALL' : 'PUT';
+
+    const candleAnalysis = analyzeCandle(bars[bars.length - 1]);
+
+    // Confidence -- downgrades get higher base confidence
+    let confidence = 60;
+    if (candleAnalysis.type.includes('STRONG')) confidence += 4;
+    else confidence += 2;
+    if (change.direction === 'DOWNGRADE') confidence += 5; // 4x more informative
+    else confidence += 3;
+    if (change.firm_tier === 'major') confidence += 3; // Goldman, Morgan Stanley, etc.
+    confidence += 3; // analyst drift bonus
+    confidence = Math.max(60, Math.min(95, confidence));
+
+    // Stop: 1.5 ATR (wider for multi-week hold)
+    const stopPrice = direction === 'CALL'
+      ? +(currentPrice - 1.5 * atrDollar).toFixed(2)
+      : +(currentPrice + 1.5 * atrDollar).toFixed(2);
+
+    // Target: 3.0 ATR for downgrades (bigger drift), 2.0 ATR for upgrades
+    const targetATR = change.direction === 'DOWNGRADE' ? 3.0 : 2.0;
+    const targetPrice = direction === 'CALL'
+      ? +(currentPrice + targetATR * atrDollar).toFixed(2)
+      : +(currentPrice - targetATR * atrDollar).toFixed(2);
+
+    signals.push(buildSignal('ANALYST_DRIFT', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
+      analyst_direction: change.direction,
+      firm: change.firm || 'unknown',
+      candle_type: candleAnalysis.type,
+      confluence: 0,
+    }));
+  }
+
+  signals.sort((a, b) => b.composite - a.composite);
+  return signals.slice(0, 3);
+}
+
+/**
+ * VIX_REVERSAL
+ *
+ * Edge: Extreme VIX → positive short-term returns. Giot 2005 JPM.
+ * When VIX spikes > 90th percentile, buy calls on high-beta stocks.
+ * Hold 5-20 days.
+ */
+export function generateVIXReversalSignals(date, dayData, context) {
+  const { minuteBars, dailyBars } = dayData;
+  const { profiles, tickers } = context;
+  const signals = [];
+
+  // Requires VIX data
+  const vixData = context.vixData?.[date];
+  if (!vixData) return signals;
+
+  // Only fire when VIX is extreme (> 90th percentile or absolute > 28)
+  const vixLevel = vixData.close || vixData.level || 0;
+  const vixPercentile = vixData.percentile_90d || 0;
+  if (vixLevel < 28 && vixPercentile < 90) return signals;
+
+  const CHECK_OFFSET = 30;
+
+  for (const ticker of tickers) {
+    const profile = profiles[ticker];
+    if (!profile) continue;
+
+    // High beta stocks amplify the VIX reversion (Savor & Wilson 2014)
+    const beta = Math.max(profile.beta_spy || 0, profile.beta_qqq || 0);
+    if (beta < 1.2) continue;
+
+    const allKeys = getMinuteKeys(minuteBars, ticker, date);
+    if (allKeys.length <= CHECK_OFFSET) continue;
+
+    const tickerMinutes = minuteBars[ticker] || {};
+    const checkKey = allKeys[CHECK_OFFSET];
+    const bars = getBarsUpTo(minuteBars, ticker, date, checkKey);
+    if (bars.length < 15) continue;
+
+    const currentPrice = bars[bars.length - 1].c;
+    const atr = profile.atr_20d || 0.025;
+    const atrDollar = atr * currentPrice;
+    const vwap = computeVWAP(bars);
+    const candleAnalysis = analyzeCandle(bars[bars.length - 1]);
+
+    // VIX extreme = buy calls (fear will revert, stocks will bounce)
+    const direction = 'CALL';
+
+    // Confidence
+    let confidence = 60;
+    if (candleAnalysis.type.includes('STRONG')) confidence += 4;
+    else confidence += 2;
+    if (vixLevel >= 35) confidence += 5; // very extreme
+    else confidence += 3;
+    if (beta >= 1.5) confidence += 4;
+    else confidence += 2;
+    confidence += 4; // VIX reversal academic bonus
+    confidence = Math.max(60, Math.min(95, confidence));
+
+    // Stop: 1.5 ATR (wider for multi-week hold in high-vol environment)
+    const stopPrice = +(currentPrice - 1.5 * atrDollar).toFixed(2);
+
+    // Target: 2.5 ATR (VIX reversion drives multi-day rally)
+    const targetPrice = +(currentPrice + 2.5 * atrDollar).toFixed(2);
+
+    // Half position size (high-vol environment)
+    const sig = buildSignal('VIX_REVERSAL', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
+      vix_level: +vixLevel.toFixed(1),
+      vix_percentile: +vixPercentile.toFixed(0),
+      beta: +beta.toFixed(2),
+      candle_type: candleAnalysis.type,
+      confluence: 0,
+    });
+    sig.sizePct = (sig.sizePct || 0.10) * 0.5; // HALF size in extreme vol
+    signals.push(sig);
+  }
+
+  signals.sort((a, b) => b.composite - a.composite);
+  return signals.slice(0, 5);
+}
+
+// ── Scalp Strategy ──────────────────────────────────────────────────────────
+
+/**
+ * ZERO_DTE_SCALP
+ *
+ * Edge: Gamma leverage on index ETFs + intraday momentum/VWAP patterns.
+ * SPY and IWM only. 0DTE ATM options. 5-15 min hold.
+ * Entry patterns: VWAP bounce, momentum burst, 30-min level break.
+ * Max 3 scalps/day/ticker.
+ */
+export function generateZeroDTEScalpSignals(date, dayData, context) {
+  const { minuteBars, etfMinuteBars } = dayData;
+  const { profiles } = context;
+  const signals = [];
+  const scalpCounts = { SPY: 0, IWM: 0 };
+  const MAX_SCALPS_PER_TICKER = 3;
+
+  const SCALP_TICKERS = ['SPY', 'IWM'];
+  // Check every 15 bars from offset 15 to 360 (9:45 AM to 3:30 PM)
+  const CHECK_OFFSETS = [];
+  for (let i = 15; i <= 360; i += 15) CHECK_OFFSETS.push(i);
+
+  for (const ticker of SCALP_TICKERS) {
+    const source = etfMinuteBars || minuteBars;
+    const allKeys = getMinuteKeys(source, ticker, date);
+    if (allKeys.length < 60) continue;
+
+    const tickerMinutes = source[ticker] || {};
+    const sessionOpen = tickerMinutes[allKeys[0]]?.o;
+    if (!sessionOpen) continue;
+
+    // Use SPY profile or construct minimal one
+    const profile = profiles[ticker] || { atr_20d: ticker === 'SPY' ? 0.012 : 0.015 };
+    const atr = profile.atr_20d || (ticker === 'SPY' ? 0.012 : 0.015);
+    const atrDollar = atr * sessionOpen;
+
+    for (const offset of CHECK_OFFSETS) {
+      if (offset >= allKeys.length) continue;
+      if (scalpCounts[ticker] >= MAX_SCALPS_PER_TICKER) break;
+
+      const checkKey = allKeys[offset];
+      const bars = getBarsUpTo(source, ticker, date, checkKey);
+      if (bars.length < 15) continue;
+
+      const currentPrice = bars[bars.length - 1].c;
+      const vwap = computeVWAP(bars);
+      let fired = false;
+      let direction = null;
+      let pattern = null;
+
+      // Pattern 1: VWAP Bounce -- price touches VWAP and reverses
+      if (!fired) {
+        const distPct = Math.abs(currentPrice - vwap) / vwap;
+        if (distPct <= 0.001 && bars.length >= 3) {
+          const prev2 = bars[bars.length - 3].c;
+          const prev1 = bars[bars.length - 2].c;
+          // Approaching from below and reversing up
+          if (prev2 < vwap && prev1 <= vwap && currentPrice > vwap) {
+            direction = 'CALL';
+            pattern = 'VWAP_TOUCH';
+            fired = true;
+          }
+          // Approaching from above and reversing down
+          if (prev2 > vwap && prev1 >= vwap && currentPrice < vwap) {
+            direction = 'PUT';
+            pattern = 'VWAP_TOUCH';
+            fired = true;
+          }
+        }
+      }
+
+      // Pattern 2: Momentum Burst -- 3+ consecutive bars same direction with expanding volume
+      if (!fired && bars.length >= 4) {
+        const last3 = bars.slice(-3);
+        const allUp = last3.every(b => b.c > b.o);
+        const allDown = last3.every(b => b.c < b.o);
+        const volExpanding = last3[2].v > last3[1].v && last3[1].v > last3[0].v;
+
+        if ((allUp || allDown) && volExpanding) {
+          direction = allUp ? 'CALL' : 'PUT';
+          pattern = 'MOMENTUM_BURST';
+          fired = true;
+        }
+      }
+
+      // Pattern 3: 30-min Level Break -- break of rolling 30-bar high/low
+      if (!fired && bars.length >= 31) {
+        const prior30 = bars.slice(-31, -1);
+        const rolling30High = Math.max(...prior30.map(b => b.h));
+        const rolling30Low = Math.min(...prior30.map(b => b.l));
+        const lastBar = bars[bars.length - 1];
+
+        if (lastBar.c > rolling30High && (lastBar.v || 0) > 0) {
+          direction = 'CALL';
+          pattern = 'LEVEL_BREAK';
+          fired = true;
+        } else if (lastBar.c < rolling30Low && (lastBar.v || 0) > 0) {
+          direction = 'PUT';
+          pattern = 'LEVEL_BREAK';
+          fired = true;
+        }
+      }
+
+      if (!fired || !direction) continue;
+
+      // Confidence
+      let confidence = 60;
+      const candleAnalysis = analyzeCandle(bars[bars.length - 1]);
+      if (candleAnalysis.type.includes('MARUBOZU')) confidence += 6;
+      else if (candleAnalysis.type.includes('STRONG')) confidence += 4;
+      else confidence += 2;
+      if (pattern === 'MOMENTUM_BURST') confidence += 4;
+      if (pattern === 'VWAP_TOUCH') confidence += 3;
+      if (pattern === 'LEVEL_BREAK') confidence += 5;
+      confidence += 3; // scalp gamma bonus
+      confidence = Math.max(60, Math.min(95, confidence));
+
+      // Tight scalp stops and targets
+      const stopPct = 0.0015; // 0.15% stop
+      const targetPct = 0.003; // 0.3% target
+      const stopPrice = direction === 'CALL'
+        ? +(currentPrice * (1 - stopPct)).toFixed(2)
+        : +(currentPrice * (1 + stopPct)).toFixed(2);
+      const targetPrice = direction === 'CALL'
+        ? +(currentPrice * (1 + targetPct)).toFixed(2)
+        : +(currentPrice * (1 - targetPct)).toFixed(2);
+
+      scalpCounts[ticker]++;
+
+      const sig = buildSignal('ZERO_DTE_SCALP', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
+        pattern,
+        vwap_price: +vwap.toFixed(2),
+        candle_type: candleAnalysis.type,
+        confluence: 0,
+      });
+      sig.sizePct = 0.05; // Fixed 5% position size for scalps
+      signals.push(sig);
+    }
+  }
+
+  return signals;
 }

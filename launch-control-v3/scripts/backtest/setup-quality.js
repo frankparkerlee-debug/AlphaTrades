@@ -172,27 +172,6 @@ export const SETUP_RUBRICS = {
     ],
   },
 
-  SR_BOUNCE: {
-    factors: [
-      { name: 'converging_levels', weight: 30, score: (m) => {
-        const levels = m.converging_levels || 0;
-        if (levels >= 4) return 100;
-        if (levels >= 3) return 80;
-        if (levels >= 2) return 60;
-        return 20;
-      }},
-      { name: 'volume_ratio', weight: 20, score: (m) => {
-        const vr = m.volume_ratio || 0;
-        if (vr >= 1.5) return 100;
-        if (vr >= 1.2) return 70;
-        return 30;
-      }},
-      { name: 'candle_type', weight: 15, score: (m) => scoreCandle(m.candle_type) },
-      { name: 'engulfing', weight: 10, score: (m) => scoreEngulfing(m.engulfing || m.is_hammer) },
-      { name: 'confluence', weight: 25, score: (m) => scoreConfluence(m.confluence) },
-    ],
-  },
-
   MACRO_REACTION: {
     factors: [
       { name: 'consensus_pct', weight: 25, score: (m) => {
@@ -211,6 +190,204 @@ export const SETUP_RUBRICS = {
       { name: 'candle_type', weight: 15, score: (m) => scoreCandle(m.candle_type) },
       { name: 'engulfing', weight: 10, score: (m) => scoreEngulfing(m.engulfing) },
       { name: 'confluence', weight: 30, score: (m) => scoreConfluence(m.confluence) },
+    ],
+  },
+
+  // ── New Day Trade Rubrics ───────────────────────────────────────────────
+
+  EXTREME_REVERSAL: {
+    factors: [
+      { name: 'move_from_open_atrs', weight: 35, score: (m) => {
+        const move = Math.abs(m.move_from_open_atrs || 0);
+        if (move >= 2.5) return 100;
+        if (move >= 2.0) return 75;
+        return 30;
+      }},
+      { name: 'volume_ratio', weight: 25, score: (m) => {
+        const vr = m.volume_ratio || 0;
+        if (vr >= 1.0) return 100;
+        if (vr >= 0.7) return 70;
+        return 30;
+      }},
+      { name: 'candle_type', weight: 15, score: (m) => scoreCandle(m.candle_type) },
+      { name: 'engulfing', weight: 10, score: (m) => scoreEngulfing(m.engulfing) },
+      { name: 'confluence', weight: 15, score: (m) => scoreConfluence(m.confluence) },
+    ],
+  },
+
+  EOD_MEAN_REVERSION: {
+    factors: [
+      { name: 'intraday_return_pct', weight: 40, score: (m) => {
+        const ret = Math.abs(m.intraday_return_pct || 0);
+        if (ret >= 3) return 100;
+        if (ret >= 2) return 80;
+        if (ret >= 1) return 60;
+        return 20;
+      }},
+      { name: 'candle_type', weight: 25, score: (m) => scoreCandle(m.candle_type) },
+      { name: 'engulfing', weight: 20, score: (m) => scoreEngulfing(m.engulfing) },
+      { name: 'confluence', weight: 15, score: (m) => scoreConfluence(m.confluence) },
+    ],
+  },
+
+  HIGH_RVOL_BREAKOUT: {
+    factors: [
+      { name: 'rvol', weight: 30, score: (m) => {
+        const rv = m.rvol || 0;
+        if (rv >= 3.0) return 100;
+        if (rv >= 2.5) return 80;
+        if (rv >= 2.0) return 60;
+        return 20;
+      }},
+      { name: 'move_from_open_atrs', weight: 20, score: (m) => {
+        const move = m.move_from_open_atrs || 0;
+        if (move >= 1.0) return 100;
+        if (move >= 0.7) return 75;
+        if (move >= 0.5) return 50;
+        return 25;
+      }},
+      { name: 'candle_type', weight: 15, score: (m) => scoreCandle(m.candle_type) },
+      { name: 'spy_aligned', weight: 10, score: (m) => m.spy_aligned ? 100 : 20 },
+      { name: 'confluence', weight: 25, score: (m) => scoreConfluence(m.confluence) },
+    ],
+  },
+
+  // ── Swing Trade Rubrics ─────────────────────────────────────────────────
+
+  PEAD_DRIFT: {
+    factors: [
+      { name: 'gap_pct', weight: 35, score: (m) => {
+        const gap = Math.abs(m.gap_pct || 0);
+        if (gap >= 5) return 100;
+        if (gap >= 3) return 80;
+        if (gap >= 2) return 60;
+        return 30;
+      }},
+      { name: 'volume_ratio', weight: 30, score: (m) => {
+        const vr = m.volume_ratio || 0;
+        if (vr >= 3.0) return 100;
+        if (vr >= 2.0) return 75;
+        if (vr >= 1.5) return 50;
+        return 25;
+      }},
+      { name: 'candle_type', weight: 15, score: (m) => scoreCandle(m.candle_type) },
+      { name: 'engulfing', weight: 20, score: (m) => scoreEngulfing(m.engulfing) },
+    ],
+  },
+
+  SECTOR_LAGGARD: {
+    factors: [
+      { name: 'lag_ratio', weight: 35, score: (m) => {
+        const lag = m.lag_ratio || 0;
+        if (lag < 0.1) return 100;
+        if (lag < 0.3) return 75;
+        if (lag < 0.5) return 50;
+        return 20;
+      }},
+      { name: 'sector_return_pct', weight: 30, score: (m) => {
+        const ret = Math.abs(m.sector_return_pct || 0);
+        if (ret >= 1.5) return 100;
+        if (ret >= 1.0) return 75;
+        if (ret >= 0.5) return 50;
+        return 20;
+      }},
+      { name: 'candle_type', weight: 20, score: (m) => scoreCandle(m.candle_type) },
+      { name: 'confluence', weight: 15, score: (m) => scoreConfluence(m.confluence) },
+    ],
+  },
+
+  SHORT_SQUEEZE_MOMENTUM: {
+    factors: [
+      { name: 'short_pct', weight: 30, score: (m) => {
+        const si = m.short_pct || 0;
+        if (si >= 30) return 100;
+        if (si >= 25) return 80;
+        if (si >= 20) return 60;
+        if (si >= 15) return 40;
+        return 20;
+      }},
+      { name: 'volume_ratio', weight: 30, score: (m) => {
+        const vr = m.volume_ratio || 0;
+        if (vr >= 3.0) return 100;
+        if (vr >= 2.5) return 80;
+        if (vr >= 2.0) return 60;
+        return 25;
+      }},
+      { name: 'move_from_open_pct', weight: 25, score: (m) => {
+        const move = m.move_from_open_pct || 0;
+        if (move >= 5) return 100;
+        if (move >= 3) return 75;
+        if (move >= 2) return 50;
+        return 25;
+      }},
+      { name: 'candle_type', weight: 15, score: (m) => scoreCandle(m.candle_type) },
+    ],
+  },
+
+  OPTIONS_FLOW: {
+    factors: [
+      { name: 'volume_vs_oi', weight: 40, score: (m) => {
+        const ratio = m.volume_vs_oi || 0;
+        if (ratio >= 5) return 100;
+        if (ratio >= 4) return 80;
+        if (ratio >= 3) return 60;
+        return 25;
+      }},
+      { name: 'call_put_ratio', weight: 35, score: (m) => {
+        const cpr = m.call_put_ratio || 1;
+        if (cpr >= 3.0 || cpr <= 0.33) return 100;
+        if (cpr >= 2.0 || cpr <= 0.5) return 75;
+        return 30;
+      }},
+      { name: 'candle_type', weight: 25, score: (m) => scoreCandle(m.candle_type) },
+    ],
+  },
+
+  ANALYST_DRIFT: {
+    factors: [
+      { name: 'analyst_direction', weight: 50, score: (m) => {
+        if (m.analyst_direction === 'DOWNGRADE') return 100; // 4x more informative
+        if (m.analyst_direction === 'UPGRADE') return 70;
+        return 30;
+      }},
+      { name: 'candle_type', weight: 25, score: (m) => scoreCandle(m.candle_type) },
+      { name: 'confluence', weight: 25, score: (m) => scoreConfluence(m.confluence) },
+    ],
+  },
+
+  VIX_REVERSAL: {
+    factors: [
+      { name: 'vix_level', weight: 35, score: (m) => {
+        const vix = m.vix_level || 0;
+        if (vix >= 35) return 100;
+        if (vix >= 30) return 80;
+        if (vix >= 28) return 60;
+        return 20;
+      }},
+      { name: 'beta', weight: 30, score: (m) => {
+        const beta = m.beta || 0;
+        if (beta >= 1.5) return 100;
+        if (beta >= 1.3) return 75;
+        if (beta >= 1.2) return 50;
+        return 20;
+      }},
+      { name: 'candle_type', weight: 20, score: (m) => scoreCandle(m.candle_type) },
+      { name: 'confluence', weight: 15, score: (m) => scoreConfluence(m.confluence) },
+    ],
+  },
+
+  // ── Scalp Rubric ────────────────────────────────────────────────────────
+
+  ZERO_DTE_SCALP: {
+    factors: [
+      { name: 'pattern', weight: 40, score: (m) => {
+        if (m.pattern === 'LEVEL_BREAK') return 100;
+        if (m.pattern === 'MOMENTUM_BURST') return 85;
+        if (m.pattern === 'VWAP_TOUCH') return 70;
+        return 30;
+      }},
+      { name: 'candle_type', weight: 35, score: (m) => scoreCandle(m.candle_type) },
+      { name: 'confluence', weight: 25, score: (m) => scoreConfluence(m.confluence) },
     ],
   },
 };
