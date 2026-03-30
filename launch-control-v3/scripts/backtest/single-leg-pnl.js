@@ -103,8 +103,9 @@ function estimateOptionValue(premium, favorableMove, atrDollar, decay) {
 /**
  * Simulate a single-leg (naked long) option trade.
  *
- * Models buying an ATM call or put and holding through one of four exit
- * conditions: underlying stop, underlying target, time limit, or end of data.
+ * Models buying an ATM call or put and holding through one of five exit
+ * conditions: underlying stop, momentum breakdown, underlying target,
+ * time limit, or end of data.
  *
  * @param {Object} signal - { direction, entryPrice, atr, time }
  *   direction: 'CALL' or 'PUT'
@@ -210,12 +211,20 @@ export function simulateSingleLeg(signal, bars, params) {
   let mfeOptionPnl = 0;  // best per-share P&L seen
   let maeOptionPnl = 0;  // worst per-share P&L seen
 
+  // Momentum tracking state
+  let consecutiveReversalBars = 0;
+  let consecutiveLowVolBars = 0;
+  let peakFavorableMove = 0; // best underlying move in favorable direction
+  const entryAreaVols = [];  // volumes of first 5 bars for baseline
+  let barsProcessed = 0;
+
   for (let i = 0; i < bars.length; i++) {
     const bar = bars[i];
     const barTime = new Date(bar.t);
     const minutesHeld = Math.round((barTime - entryTime) / 60000);
 
     if (minutesHeld < 0) continue; // bar before entry
+    barsProcessed++;
 
     // Current favorable move in the underlying
     const favorableMove = (bar.c - entryPrice) * mult;
@@ -227,16 +236,15 @@ export function simulateSingleLeg(signal, bars, params) {
     mfeOptionPnl = Math.max(mfeOptionPnl, currentPnl);
     maeOptionPnl = Math.min(maeOptionPnl, currentPnl);
 
-    // ── Exit: time limit ─────────────────────────────────────────────────────
-    if (minutesHeld > maxHoldMinutes) {
-      exitType = 'TIME';
-      exitBar = bar;
-      holdMinutes = minutesHeld;
-      break;
+    // Track peak favorable move on underlying
+    peakFavorableMove = Math.max(peakFavorableMove, favorableMove);
+
+    // Build entry-area volume baseline (first 5 bars)
+    if (entryAreaVols.length < 5) {
+      entryAreaVols.push(bar.v || 0);
     }
 
-    // ── Exit: underlying stop ────────────────────────────────────────────────
-    // Check if bar's adverse extreme breached the stop price
+    // ── Exit: protective stop (underlying price) ──────────────────────────
     const hitStop = direction === 'CALL'
       ? bar.l <= stopPrice
       : bar.h >= stopPrice;
@@ -248,14 +256,67 @@ export function simulateSingleLeg(signal, bars, params) {
       break;
     }
 
-    // ── Exit: underlying target ──────────────────────────────────────────────
-    // Check if bar's favorable extreme reached the target price
+    // ── Exit: momentum breakdown ──────────────────────────────────────────
+    // Only check after minimum bars held to avoid noise
+
+    // A. Reversal bars: 2+ consecutive bars closing against direction
+    if (barsProcessed >= 5) {
+      const barAgainstDirection = direction === 'CALL'
+        ? (bar.c < bar.o)
+        : (bar.c > bar.o);
+      if (barAgainstDirection) {
+        consecutiveReversalBars++;
+      } else {
+        consecutiveReversalBars = 0;
+      }
+      if (consecutiveReversalBars >= 2) {
+        exitType = 'MOMENTUM_EXIT';
+        exitBar = bar;
+        holdMinutes = minutesHeld;
+        break;
+      }
+    }
+
+    // B. Volume exhaustion: 3+ consecutive bars below 50% of entry-area volume
+    if (barsProcessed >= 8 && entryAreaVols.length >= 5) {
+      const baselineVol = entryAreaVols.reduce((s, v) => s + v, 0) / entryAreaVols.length;
+      if (baselineVol > 0 && (bar.v || 0) < baselineVol * 0.5) {
+        consecutiveLowVolBars++;
+      } else {
+        consecutiveLowVolBars = 0;
+      }
+      if (consecutiveLowVolBars >= 3) {
+        exitType = 'MOMENTUM_EXIT';
+        exitBar = bar;
+        holdMinutes = minutesHeld;
+        break;
+      }
+    }
+
+    // C. Favorable move reversal: price retraces 50%+ of peak move
+    //    (only after reaching meaningful move of 0.2 ATR)
+    if (peakFavorableMove >= 0.2 * atrDollar && favorableMove < peakFavorableMove * 0.5) {
+      exitType = 'MOMENTUM_EXIT';
+      exitBar = bar;
+      holdMinutes = minutesHeld;
+      break;
+    }
+
+    // ── Exit: target reached (secondary - lock in gains) ──────────────────
     const hitTarget = direction === 'CALL'
       ? bar.h >= targetPrice
       : bar.l <= targetPrice;
 
     if (hitTarget) {
       exitType = 'TARGET';
+      exitBar = bar;
+      holdMinutes = minutesHeld;
+      break;
+    }
+
+    // ── Exit: time limit (backstop) ───────────────────────────────────────
+    if (minutesHeld > maxHoldMinutes) {
+      exitType = 'TIME';
       exitBar = bar;
       holdMinutes = minutesHeld;
       break;

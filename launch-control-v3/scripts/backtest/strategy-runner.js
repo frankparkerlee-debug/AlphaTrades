@@ -24,20 +24,7 @@ import { calibrateGrades } from './grade-calibrator.js';
 import { buildReportCard, deriveDeploymentVerdict } from './strategy-report-card.js';
 import { query } from '../../src/data/db.js';
 
-// Spread-based strategy imports (legacy — margin account)
-import { generateA1Signals } from './strategies/a1-fresh-momentum.js';
-import { generateA2Signals } from './strategies/a2-cluster-lag.js';
-import { generateA3Signals } from './strategies/a3-overextension-reversal.js';
-import { generateA4Signals } from './strategies/a4-opening-range-breakout.js';
-import { generateA5Signals } from './strategies/a5-vwap-reversion.js';
-import { generateA6Signals } from './strategies/a6-gap-fade.js';
-import { generateA7Signals } from './strategies/a7-power-hour.js';
-import { generateA8Signals } from './strategies/a8-beta-thrust.js';
-import { generateA9Signals } from './strategies/a9-level-break.js';
-import { generateA10Signals } from './strategies/a10-relative-strength.js';
-import { generateA11Signals } from './strategies/a11-correlation-cascade.js';
-import { generateB1Signals } from './strategies/b1-iv-premium.js';
-import { generateB2Signals } from './strategies/b2-post-earnings-drift.js';
+// Spread-based strategies decommissioned — margin account, no documented edge
 
 // Live strategy imports (cash account — single-leg options with confluence)
 import {
@@ -66,22 +53,8 @@ const LIVE_STRATEGIES = [
   { name: 'MACRO_REACTION',        fn: generateMacroReactionSignals,     intraday: true },
 ];
 
-// Spread-based strategies (legacy — for comparison/margin account testing)
-const SPREAD_STRATEGIES = [
-  { name: 'A1_FRESH_MOMENTUM',          fn: generateA1Signals,  intraday: true },
-  { name: 'A2_CLUSTER_LAG',             fn: generateA2Signals,  intraday: true },
-  { name: 'A3_OVEREXTENSION_REVERSAL',  fn: generateA3Signals,  intraday: true },
-  { name: 'A4_OPENING_RANGE_BREAKOUT',  fn: generateA4Signals,  intraday: true },
-  { name: 'A5_VWAP_REVERSION',          fn: generateA5Signals,  intraday: true },
-  { name: 'A6_GAP_FADE',               fn: generateA6Signals,  intraday: true },
-  { name: 'A7_POWER_HOUR',             fn: generateA7Signals,  intraday: true },
-  { name: 'A8_BETA_THRUST',            fn: generateA8Signals,  intraday: true },
-  { name: 'A9_LEVEL_BREAK',            fn: generateA9Signals,  intraday: true },
-  { name: 'A10_RELATIVE_STRENGTH',     fn: generateA10Signals, intraday: true },
-  { name: 'A11_CORRELATION_CASCADE',   fn: generateA11Signals, intraday: true },
-  { name: 'B1_IV_PREMIUM',              fn: generateB1Signals,  intraday: false },
-  { name: 'B2_POST_EARNINGS_DRIFT',     fn: generateB2Signals,  intraday: false },
-];
+// SPREAD_STRATEGIES decommissioned — no documented edge, worse than coin flip
+const SPREAD_STRATEGIES = [];
 
 // Default: run live strategies (cash account)
 const STRATEGIES = LIVE_STRATEGIES;
@@ -187,14 +160,6 @@ export async function runMultiStrategyBacktest(startDate, endDate, accountSize =
   for (const [strat, count] of Object.entries(signalCounts)) {
     console.log(`[MULTI-STRAT]   ${strat}: ${count} signals`);
   }
-  // Log data dependency warnings
-  const contagionPairs = Object.values(stratData.contagionMap || {}).reduce((a, b) => a + b.length, 0);
-  const earningsDates = Object.keys(stratData.earningsCalendar || {}).length;
-  const ivEntries = Object.keys(stratData.ivHistory || {}).length;
-  if (contagionPairs === 0) console.warn('[MULTI-STRAT] WARNING: contagion_map is empty — A2 strategy will produce 0 signals');
-  if (earningsDates === 0) console.warn('[MULTI-STRAT] WARNING: earnings calendar is empty — B2 strategy will produce 0 signals');
-  if (ivEntries === 0) console.warn('[MULTI-STRAT] WARNING: iv_history is empty — B1 using static iv_rank (may default to 50)');
-
   // 5. Apply portfolio constraints
   const constrained = applyPortfolioConstraints(allSignals, accountSize);
   console.log(`[MULTI-STRAT] After constraints: ${constrained.length} signals`);
@@ -370,16 +335,26 @@ function validateEntries(signals, rawMinuteBars) {
     const signalDate = signal.date;
 
     // Get bars after entry, same day
-    const remaining = tickerBars.filter(b => {
+    const allRemaining = tickerBars.filter(b => {
       const bt = new Date(b.t).getTime();
       const bd = new Date(b.t).toISOString().split('T')[0];
       return bd === signalDate && bt > signalTimeMs;
     }).sort((a, b) => new Date(a.t) - new Date(b.t));
 
-    if (remaining.length === 0) {
-      results.push({ ...signal, barsAfter: 0, maxFav: 0, maxAdv: 0, eodMove: 0, dirCorrect: false });
+    if (allRemaining.length === 0) {
+      results.push({ ...signal, barsAfter: 0, maxFav: 0, maxAdv: 0, holdWindowMove: 0, dirCorrect: false });
       continue;
     }
+
+    // Filter to strategy's actual hold window (not EOD)
+    const holdMinutes = signal.maxHoldMinutes || 60;
+    const holdWindowMs = holdMinutes * 60000;
+    const holdWindowBars = allRemaining.filter(b => {
+      const bt = new Date(b.t).getTime();
+      return (bt - signalTimeMs) <= holdWindowMs;
+    });
+    // Use hold window bars if available, fall back to all remaining
+    const remaining = holdWindowBars.length > 0 ? holdWindowBars : allRemaining;
 
     const mult = signal.direction === 'CALL' ? 1 : -1;
     const entry = signal.entryPrice;
@@ -392,10 +367,11 @@ function validateEntries(signals, rawMinuteBars) {
       maxAdv = Math.min(maxAdv, advLow);
     }
 
-    const eodClose = remaining[remaining.length - 1].c;
-    const eodMove = (eodClose - entry) * mult;
+    // Measure direction at end of hold window, not EOD
+    const windowClose = remaining[remaining.length - 1].c;
+    const holdWindowMove = (windowClose - entry) * mult;
     const maxFavPct = (maxFav / entry) * 100;
-    const eodMovePct = (eodMove / entry) * 100;
+    const holdWindowMovePct = (holdWindowMove / entry) * 100;
 
     results.push({
       ticker: signal.ticker,
@@ -403,11 +379,12 @@ function validateEntries(signals, rawMinuteBars) {
       direction: signal.direction,
       date: signal.date,
       entry,
+      holdMinutes,
       barsAfter: remaining.length,
       maxFavPct: +maxFavPct.toFixed(2),
       maxAdvPct: +((maxAdv / entry) * 100).toFixed(2),
-      eodMovePct: +eodMovePct.toFixed(2),
-      dirCorrect: eodMove > 0,
+      holdWindowMovePct: +holdWindowMovePct.toFixed(2),
+      dirCorrect: holdWindowMove > 0,
       everFavorable: maxFav > 0,
     });
   }
@@ -418,7 +395,7 @@ function validateEntries(signals, rawMinuteBars) {
   const everFav = results.filter(r => r.everFavorable).length;
   const noBars = results.filter(r => r.barsAfter === 0).length;
   const avgMaxFav = total > 0 ? results.reduce((a, b) => a + b.maxFavPct, 0) / total : 0;
-  const avgEodMove = total > 0 ? results.reduce((a, b) => a + b.eodMovePct, 0) / total : 0;
+  const avgHoldWindowMove = total > 0 ? results.reduce((a, b) => a + b.holdWindowMovePct, 0) / total : 0;
 
   // By strategy
   const byStrategy = {};
@@ -430,7 +407,7 @@ function validateEntries(signals, rawMinuteBars) {
       dirCorrectPct: s.length > 0 ? +(s.filter(r => r.dirCorrect).length / s.length * 100).toFixed(1) : 0,
       everFavPct: s.length > 0 ? +(s.filter(r => r.everFavorable).length / s.length * 100).toFixed(1) : 0,
       avgMaxFavPct: s.length > 0 ? +(s.reduce((a, b) => a + b.maxFavPct, 0) / s.length).toFixed(2) : 0,
-      avgEodMovePct: s.length > 0 ? +(s.reduce((a, b) => a + b.eodMovePct, 0) / s.length).toFixed(2) : 0,
+      avgHoldWindowMovePct: s.length > 0 ? +(s.reduce((a, b) => a + b.holdWindowMovePct, 0) / s.length).toFixed(2) : 0,
       noBars: s.filter(r => r.barsAfter === 0).length,
     };
   }
@@ -445,7 +422,7 @@ function validateEntries(signals, rawMinuteBars) {
     dirCorrectPct: total > 0 ? +(dirCorrect / total * 100).toFixed(1) : 0,
     everFavorablePct: total > 0 ? +(everFav / total * 100).toFixed(1) : 0,
     avgMaxFavPct: +avgMaxFav.toFixed(2),
-    avgEodMovePct: +avgEodMove.toFixed(2),
+    avgHoldWindowMovePct: +avgHoldWindowMove.toFixed(2),
     calls: {
       count: calls.length,
       dirCorrectPct: calls.length > 0 ? +(calls.filter(r => r.dirCorrect).length / calls.length * 100).toFixed(1) : 0,
@@ -459,12 +436,12 @@ function validateEntries(signals, rawMinuteBars) {
   };
 
   console.log(`[ENTRY-CHECK] ${total} signals | ${noBars} had 0 bars after entry`);
-  console.log(`[ENTRY-CHECK] Direction correct at EOD: ${dirCorrect}/${total} (${summary.dirCorrectPct}%)`);
+  console.log(`[ENTRY-CHECK] Direction correct at hold window end: ${dirCorrect}/${total} (${summary.dirCorrectPct}%)`);
   console.log(`[ENTRY-CHECK] Ever moved favorably: ${everFav}/${total} (${summary.everFavorablePct}%)`);
-  console.log(`[ENTRY-CHECK] Avg max favorable move: ${avgMaxFav.toFixed(2)}% | Avg EOD move: ${avgEodMove.toFixed(2)}%`);
+  console.log(`[ENTRY-CHECK] Avg max favorable move: ${avgMaxFav.toFixed(2)}% | Avg hold window move: ${avgHoldWindowMove.toFixed(2)}%`);
   console.log(`[ENTRY-CHECK] CALLs: ${summary.calls.count} (${summary.calls.dirCorrectPct}% correct) | PUTs: ${summary.puts.count} (${summary.puts.dirCorrectPct}% correct)`);
   for (const [strat, s] of Object.entries(byStrategy)) {
-    console.log(`[ENTRY-CHECK]   ${strat}: ${s.count} sigs | dir_correct=${s.dirCorrectPct}% | ever_fav=${s.everFavPct}% | avg_max_fav=${s.avgMaxFavPct}% | avg_eod=${s.avgEodMovePct}%${s.noBars ? ` | ${s.noBars} NO BARS` : ''}`);
+    console.log(`[ENTRY-CHECK]   ${strat}: ${s.count} sigs | dir_correct=${s.dirCorrectPct}% | ever_fav=${s.everFavPct}% | avg_max_fav=${s.avgMaxFavPct}% | avg_hold_window=${s.avgHoldWindowMovePct}%${s.noBars ? ` | ${s.noBars} NO BARS` : ''}`);
   }
 
   return { summary, byStrategy, signals: results };
