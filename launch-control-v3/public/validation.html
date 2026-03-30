@@ -67,6 +67,39 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;b
 .verdict-fragile{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:var(--red)}
 .empty{text-align:center;padding:60px 20px;color:var(--text3)}
 .empty-text{font-family:var(--mono);font-size:12px;letter-spacing:1px;margin-bottom:8px}
+
+/* Strategy Cards */
+.sc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px;margin-bottom:16px}
+.sc-card{background:var(--bg1);border:1px solid var(--border);border-radius:6px;padding:16px;position:relative;overflow:hidden}
+.sc-card.sc-deploy{border-left:3px solid var(--green)}
+.sc-card.sc-refine{border-left:3px solid var(--amber)}
+.sc-card.sc-shelve{border-left:3px solid var(--red)}
+.sc-card.sc-insufficient{border-left:3px solid var(--text4)}
+.sc-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px}
+.sc-name{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text1);letter-spacing:.5px}
+.sc-verdict-badge{font-family:var(--mono);font-size:10px;font-weight:700;padding:3px 10px;border-radius:3px;letter-spacing:1px}
+.sc-verdict-deploy{background:rgba(16,185,129,.15);color:var(--green);border:1px solid rgba(16,185,129,.3)}
+.sc-verdict-refine{background:rgba(245,158,11,.15);color:var(--amber);border:1px solid rgba(245,158,11,.3)}
+.sc-verdict-shelve{background:rgba(239,68,68,.15);color:var(--red);border:1px solid rgba(239,68,68,.3)}
+.sc-verdict-insufficient{background:var(--bg3);color:var(--text4);border:1px solid var(--border)}
+.sc-phases{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px}
+.sc-phase{background:var(--bg3);border-radius:4px;padding:8px;text-align:center}
+.sc-phase-score{font-family:var(--mono);font-size:18px;font-weight:700;color:var(--text1)}
+.sc-phase-label{font-size:7px;font-weight:700;letter-spacing:1px;color:var(--text3);text-transform:uppercase;margin-top:2px}
+.sc-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-bottom:10px}
+.sc-metric{background:var(--bg2);border-radius:3px;padding:5px 6px;text-align:center}
+.sc-metric-val{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--text1)}
+.sc-metric-label{font-size:7px;letter-spacing:.5px;color:var(--text3);text-transform:uppercase;margin-top:1px}
+.sc-flags{margin-top:8px}
+.sc-flag{font-family:var(--mono);font-size:9px;padding:2px 6px;border-radius:2px;display:inline-block;margin:1px 2px}
+.sc-flag-good{background:rgba(16,185,129,.1);color:var(--green)}
+.sc-flag-bad{background:rgba(239,68,68,.1);color:var(--red)}
+.sc-score-bar{display:flex;align-items:center;gap:6px;margin-bottom:8px}
+.sc-score-track{flex:1;height:6px;background:var(--bg3);border-radius:3px;overflow:hidden}
+.sc-score-fill{height:100%;border-radius:3px}
+.sc-score-text{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--text2);min-width:28px;text-align:right}
+.sc-summary-row{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.sc-summary-stat{background:var(--bg2);border:1px solid var(--border);border-radius:5px;padding:10px 16px;min-width:120px;flex:1}
 </style>
 </head>
 <body>
@@ -88,6 +121,7 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;b
   <div class="tab" data-tab="regime">REGIME STRESS</div>
   <div class="tab" data-tab="sensitivity">SENSITIVITY</div>
   <div class="tab" data-tab="paper">PAPER P&L</div>
+  <div class="tab" data-tab="strategy-cards">STRATEGY CARDS</div>
 </div>
 
 <div class="container">
@@ -97,6 +131,7 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;b
   <div class="tab-content" id="tc-regime"></div>
   <div class="tab-content" id="tc-sensitivity"></div>
   <div class="tab-content" id="tc-paper"></div>
+  <div class="tab-content" id="tc-strategy-cards"><div class="empty"><div class="empty-text">LOADING...</div></div></div>
 </div>
 
 <script>
@@ -596,7 +631,176 @@ function renderOOSCurve(curve){
 
 function noData(msg){return`<div class="empty"><div class="empty-text">${msg||'NO DATA'}</div><div style="font-size:11px;color:var(--text3);margin-top:8px">Run a backtest from <a href="/backtest" style="color:var(--amber)">/backtest</a> to generate validation data.</div></div>`}
 
+// ── STRATEGY CARDS TAB ───────────────────────────────────────────────────────
+async function loadStrategyCards(){
+  try{
+    const res=await fetch('/api/backtest/strategy-cards').then(r=>r.json());
+    if(!res||(!res.strategyReportCards&&!res.strategyValidation)){
+      $('tc-strategy-cards').innerHTML=noData('No per-strategy validation data');return;
+    }
+    renderStrategyCards(res);
+  }catch{
+    $('tc-strategy-cards').innerHTML=noData('Failed to load strategy cards');
+  }
+}
+
+function renderStrategyCards(d){
+  const rc=d.strategyReportCards||{};
+  const sv=d.strategyValidation||{};
+  const gc=d.gradeCalibrations||{};
+  const bs=d.byStrategy||{};
+  const strategies=Object.keys({...rc,...sv}).sort();
+
+  if(strategies.length===0){$('tc-strategy-cards').innerHTML=noData('No strategies found');return}
+
+  // Summary counters
+  let deploy=0,refine=0,shelve=0,insuf=0;
+  strategies.forEach(s=>{
+    const v=rc[s]?.verdict?.decision||sv[s]?.verdict||'';
+    if(v==='DEPLOY')deploy++;else if(v==='REFINE')refine++;else if(v==='SHELVE')shelve++;else insuf++;
+  });
+
+  let h=`<div class="sc-summary-row">
+    <div class="sc-summary-stat"><div class="stat-label">TOTAL STRATEGIES</div><div class="stat-value">${strategies.length}</div></div>
+    <div class="sc-summary-stat"><div class="stat-label">DEPLOY</div><div class="stat-value" style="color:var(--green)">${deploy}</div></div>
+    <div class="sc-summary-stat"><div class="stat-label">REFINE</div><div class="stat-value" style="color:var(--amber)">${refine}</div></div>
+    <div class="sc-summary-stat"><div class="stat-label">SHELVE</div><div class="stat-value" style="color:var(--red)">${shelve}</div></div>
+    <div class="sc-summary-stat"><div class="stat-label">INSUFFICIENT DATA</div><div class="stat-value" style="color:var(--text3)">${insuf}</div></div>
+  </div>`;
+
+  h+=`<div class="sc-grid">`;
+  // Sort: DEPLOY first, then REFINE, SHELVE, INSUFFICIENT
+  const order={'DEPLOY':0,'REFINE':1,'SHELVE':2};
+  strategies.sort((a,b)=>{
+    const va=rc[a]?.verdict?.decision||sv[a]?.verdict||'INSUFFICIENT_DATA';
+    const vb=rc[b]?.verdict?.decision||sv[b]?.verdict||'INSUFFICIENT_DATA';
+    return(order[va]??3)-(order[vb]??3);
+  });
+
+  for(const strat of strategies){
+    const card=rc[strat]||{};
+    const val=sv[strat]||{};
+    const cal=gc[strat]||{};
+    const verdict=card.verdict?.decision||val.verdict||'INSUFFICIENT_DATA';
+    const vLower=verdict.toLowerCase().replace('_','-');
+    const cls=verdict==='DEPLOY'?'sc-deploy':verdict==='REFINE'?'sc-refine':verdict==='SHELVE'?'sc-shelve':'sc-insufficient';
+    const vBadge=verdict==='DEPLOY'?'sc-verdict-deploy':verdict==='REFINE'?'sc-verdict-refine':verdict==='SHELVE'?'sc-verdict-shelve':'sc-verdict-insufficient';
+
+    h+=`<div class="sc-card ${cls}">`;
+    // Header
+    h+=`<div class="sc-header">
+      <div>
+        <div class="sc-name">${strat.replace(/_/g,' ')}</div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-top:2px">${card.signalCount||val.signalCount||0} signals</div>
+      </div>
+      <div class="sc-verdict-badge ${vBadge}">${verdict.replace('_',' ')}</div>
+    </div>`;
+
+    // Three-phase scores
+    if(card.phases){
+      const p=card.phases;
+      h+=`<div class="sc-phases">
+        <div class="sc-phase">
+          <div class="sc-phase-score" style="color:${phaseColor(p.setup?.avgScore)}">${p.setup?.avgScore!=null?Math.round(p.setup.avgScore):'--'}</div>
+          <div class="sc-phase-label">SETUP</div>
+        </div>
+        <div class="sc-phase">
+          <div class="sc-phase-score" style="color:${phaseColor(p.direction?.avgScore)}">${p.direction?.avgScore!=null?Math.round(p.direction.avgScore):'--'}</div>
+          <div class="sc-phase-label">DIRECTION</div>
+        </div>
+        <div class="sc-phase">
+          <div class="sc-phase-score" style="color:${phaseColor(p.exit?.avgScore)}">${p.exit?.avgScore!=null?Math.round(p.exit.avgScore):'--'}</div>
+          <div class="sc-phase-label">EXIT</div>
+        </div>
+      </div>`;
+    }
+
+    // Net score bar
+    if(card.verdict?.netScore!=null){
+      const ns=card.verdict.netScore;
+      const pct=Math.max(0,Math.min(100,(ns+10)/20*100));
+      const barColor=ns>=3?'var(--green)':ns>=0?'var(--amber)':'var(--red)';
+      h+=`<div class="sc-score-bar">
+        <div style="font-size:7px;color:var(--text3);letter-spacing:.5px;text-transform:uppercase;min-width:50px">NET SCORE</div>
+        <div class="sc-score-track"><div class="sc-score-fill" style="width:${pct}%;background:${barColor}"></div></div>
+        <div class="sc-score-text" style="color:${barColor}">${ns>=0?'+':''}${ns}</div>
+      </div>`;
+    }
+
+    // Key metrics grid
+    const summary=val.summary||card.validation||{};
+    const mcProfit=val.monteCarlo?.base?.probability?.profit??card.validation?.monteCarlo??null;
+    const wfVerdict=val.walkForward?.verdict??card.validation?.walkForward??null;
+    const oos=val.outOfSample?.verdict??card.validation?.outOfSample??null;
+    const pVal=val.statisticalTests?.tTest?.pValue??card.validation?.statisticalTests?.pValue??null;
+
+    h+=`<div class="sc-metrics">
+      <div class="sc-metric"><div class="sc-metric-val" style="color:${(summary.winRate||0)>=50?'var(--green)':'var(--red)'}">${summary.winRate!=null?summary.winRate+'%':'--'}</div><div class="sc-metric-label">WIN RATE</div></div>
+      <div class="sc-metric"><div class="sc-metric-val" style="color:${(summary.profitFactor||0)>=1?'var(--green)':'var(--red)'}">${summary.profitFactor!=null?summary.profitFactor:'--'}</div><div class="sc-metric-label">PROFIT FACTOR</div></div>
+      <div class="sc-metric"><div class="sc-metric-val" style="color:${mcProfit!=null&&mcProfit>=50?'var(--green)':mcProfit!=null?'var(--red)':'var(--text3)'}">${mcProfit!=null?mcProfit+'%':'--'}</div><div class="sc-metric-label">MC P(PROFIT)</div></div>
+      <div class="sc-metric"><div class="sc-metric-val" style="color:${wfVerdict==='ROBUST'?'var(--green)':wfVerdict==='OVERFIT'?'var(--red)':'var(--text3)'}">${wfVerdict||'--'}</div><div class="sc-metric-label">WALK-FWD</div></div>
+    </div>`;
+
+    // Second metrics row
+    h+=`<div class="sc-metrics">
+      <div class="sc-metric"><div class="sc-metric-val ${(summary.totalPnlDollars||0)>=0?'pos':'neg'}" style="color:${(summary.totalPnlDollars||0)>=0?'var(--green)':'var(--red)'}">${summary.totalPnlDollars!=null?fmt(summary.totalPnlDollars):'--'}</div><div class="sc-metric-label">TOTAL P&L</div></div>
+      <div class="sc-metric"><div class="sc-metric-val" style="color:${oos==='ROBUST'||oos==='PASS'?'var(--green)':oos==='OVERFIT'||oos==='FAIL'?'var(--red)':'var(--text3)'}">${oos||'--'}</div><div class="sc-metric-label">OOS TEST</div></div>
+      <div class="sc-metric"><div class="sc-metric-val" style="color:${pVal!=null&&pVal<0.05?'var(--green)':pVal!=null?'var(--red)':'var(--text3)'}">${pVal!=null?'p='+pVal.toFixed(3):'--'}</div><div class="sc-metric-label">STAT SIG</div></div>
+      <div class="sc-metric"><div class="sc-metric-val">${cal.calibrationQuality||'--'}</div><div class="sc-metric-label">CALIBRATION</div></div>
+    </div>`;
+
+    // Direction accuracy (if available)
+    if(card.phases?.direction?.dirCorrectPct!=null){
+      const dir=card.phases.direction.dirCorrectPct;
+      h+=`<div class="sc-score-bar">
+        <div style="font-size:7px;color:var(--text3);letter-spacing:.5px;text-transform:uppercase;min-width:50px">DIR ACC</div>
+        <div class="sc-score-track"><div class="sc-score-fill" style="width:${dir}%;background:${dir>=50?'var(--green)':'var(--red)'}"></div></div>
+        <div class="sc-score-text" style="color:${dir>=50?'var(--green)':'var(--red)'}">${dir.toFixed(0)}%</div>
+      </div>`;
+    }
+
+    // Exit efficiency (if available)
+    if(card.phases?.exit?.avgEfficiency!=null){
+      const eff=card.phases.exit.avgEfficiency*100;
+      h+=`<div class="sc-score-bar">
+        <div style="font-size:7px;color:var(--text3);letter-spacing:.5px;text-transform:uppercase;min-width:50px">EXIT EFF</div>
+        <div class="sc-score-track"><div class="sc-score-fill" style="width:${eff}%;background:${eff>=40?'var(--green)':eff>=25?'var(--amber)':'var(--red)'}"></div></div>
+        <div class="sc-score-text">${eff.toFixed(0)}%</div>
+      </div>`;
+    }
+
+    // Strengths & weaknesses
+    if(card.verdict?.strengths?.length>0||card.verdict?.weaknesses?.length>0){
+      h+=`<div class="sc-flags">`;
+      (card.verdict.strengths||[]).forEach(s=>h+=`<span class="sc-flag sc-flag-good">+ ${s}</span>`);
+      (card.verdict.weaknesses||[]).forEach(w=>h+=`<span class="sc-flag sc-flag-bad">- ${w}</span>`);
+      h+=`</div>`;
+    }
+
+    // Validation flags from strategyValidation
+    if(val.flags?.length>0&&!card.verdict?.weaknesses?.length){
+      h+=`<div class="sc-flags">`;
+      val.flags.forEach(f=>h+=`<span class="sc-flag sc-flag-bad">${f}</span>`);
+      h+=`</div>`;
+    }
+
+    h+=`</div>`;
+  }
+  h+=`</div>`;
+
+  h+=`<div style="font-family:var(--mono);font-size:9px;color:var(--text4);margin-top:8px">Last run: ${d.lastRun?new Date(d.lastRun).toLocaleString():'unknown'}</div>`;
+  $('tc-strategy-cards').innerHTML=h;
+}
+
+function phaseColor(score){
+  if(score==null)return'var(--text3)';
+  if(score>=70)return'var(--green)';
+  if(score>=50)return'var(--amber)';
+  return'var(--red)';
+}
+
 load();
+loadStrategyCards();
 </script>
 </body>
 </html>

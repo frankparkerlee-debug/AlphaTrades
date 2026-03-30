@@ -226,8 +226,17 @@ body::after {
 .strat-pullback{ background: rgba(139,92,246,0.08); color: var(--purple); border-bottom: 3px solid var(--purple); }
 .strat-gap{ background: rgba(245,158,11,0.08); color: var(--amber); border-bottom: 3px solid var(--amber); }
 .strat-power{ background: rgba(239,68,68,0.08); color: var(--red); border-bottom: 3px solid var(--red); }
-.strat-sr{ background: rgba(20,184,166,0.08); color: #14b8a6; border-bottom: 3px solid #14b8a6; }
 .strat-macro{ background: rgba(251,146,60,0.08); color: #fb923c; border-bottom: 3px solid #fb923c; }
+.strat-extreme{ background: rgba(239,68,68,0.08); color: var(--red); border-bottom: 3px solid var(--red); }
+.strat-eod{ background: rgba(20,184,166,0.08); color: #14b8a6; border-bottom: 3px solid #14b8a6; }
+.strat-rvol{ background: rgba(59,130,246,0.08); color: var(--blue); border-bottom: 3px solid var(--blue); }
+.strat-pead{ background: rgba(245,158,11,0.08); color: var(--amber); border-bottom: 3px solid var(--amber); }
+.strat-analyst{ background: rgba(139,92,246,0.08); color: var(--purple); border-bottom: 3px solid var(--purple); }
+.strat-vix{ background: rgba(6,182,212,0.08); color: #06b6d4; border-bottom: 3px solid #06b6d4; }
+.strat-scalp{ background: rgba(251,191,36,0.08); color: var(--amber2); border-bottom: 3px solid var(--amber2); }
+.strat-laggard{ background: rgba(16,185,129,0.08); color: var(--green); border-bottom: 3px solid var(--green); }
+.strat-squeeze{ background: rgba(239,68,68,0.08); color: var(--red); border-bottom: 3px solid var(--red); }
+.strat-flow{ background: rgba(6,182,212,0.08); color: #06b6d4; border-bottom: 3px solid #06b6d4; }
 .paper-only-banner {
   background: rgba(139,92,246,0.12); border: 1px solid var(--purple); border-radius: 3px;
   padding: 5px 10px; margin-bottom: 8px; font-family: var(--mono); font-size: 10px;
@@ -566,14 +575,19 @@ body::after {
       <button class="filter-btn"        onclick="grade('B',this)">B</button>
       <div class="filter-divider"></div>
       <button class="filter-btn on-blue" onclick="strat('all',this)">ALL</button>
-      <button class="filter-btn"         onclick="strat('GAP_REVERSAL',this)">GAP REV</button>
-      <button class="filter-btn"         onclick="strat('GAP_UP_REVERSAL',this)">GAP UP</button>
-      <button class="filter-btn"         onclick="strat('CAPITULATION_BOUNCE',this)">CAPIT</button>
-      <button class="filter-btn"         onclick="strat('VOL_DROP_PUT',this)">VOL PUT</button>
-      <button class="filter-btn"         onclick="strat('CONSEC_BOUNCE',this)">CONSEC</button>
-      <button class="filter-btn"         onclick="strat('SECTOR_ROTATION_BOUNCE',this)">SECTOR</button>
-      <button class="filter-btn"         onclick="strat('OVERNIGHT_CALENDAR',this)">CALENDAR</button>
-      <button class="filter-btn"         onclick="strat('PRE_EARNINGS_PUT',this)">ER PUT</button>
+      <button class="filter-btn"         onclick="strat('ORB_BREAKOUT',this)">ORB</button>
+      <button class="filter-btn"         onclick="strat('VWAP_BOUNCE',this)">VWAP</button>
+      <button class="filter-btn"         onclick="strat('FIRST_PULLBACK',this)">PULLBACK</button>
+      <button class="filter-btn"         onclick="strat('GAP_FILL_REVERSION',this)">GAP</button>
+      <button class="filter-btn"         onclick="strat('POWER_HOUR_MOMENTUM',this)">POWER HR</button>
+      <button class="filter-btn"         onclick="strat('MACRO_REACTION',this)">MACRO</button>
+      <button class="filter-btn"         onclick="strat('EXTREME_REVERSAL',this)">EXTREME</button>
+      <button class="filter-btn"         onclick="strat('EOD_MEAN_REVERSION',this)">EOD</button>
+      <button class="filter-btn"         onclick="strat('HIGH_RVOL_BREAKOUT',this)">RVOL</button>
+      <button class="filter-btn"         onclick="strat('PEAD_DRIFT',this)">PEAD</button>
+      <button class="filter-btn"         onclick="strat('ANALYST_DRIFT',this)">ANALYST</button>
+      <button class="filter-btn"         onclick="strat('VIX_REVERSAL',this)">VIX</button>
+      <button class="filter-btn"         onclick="strat('ZERO_DTE_SCALP',this)">0DTE</button>
       <div class="filter-divider"></div>
       <button class="filter-btn" id="histBtn" onclick="toggleHist(this)" style="margin-left:auto">+ HISTORY</button>
     </div>
@@ -850,7 +864,7 @@ function grade(v, btn) {
 function strat(v, btn) {
   stratF = v;
   document.querySelectorAll('#filterBar .filter-btn').forEach(b => {
-    if (['ALL','GAP REV','GAP UP','CAPIT','VOL PUT','CONSEC','SECTOR','CALENDAR','ER PUT'].includes(b.textContent)) b.classList.remove('on-blue');
+    if (['ALL','ORB','VWAP','PULLBACK','GAP','POWER HR','MACRO','EXTREME','EOD','RVOL','PEAD','ANALYST','VIX','0DTE'].includes(b.textContent)) b.classList.remove('on-blue');
   });
   btn.classList.add('on-blue');
   render();
@@ -928,13 +942,25 @@ function parseStrategy(s) {
 
 function buildStratBanner(strategy) {
   const map = {
-    ORB_BREAKOUT:          { cls: 'strat-orb',    label: 'ORB BREAKOUT',   hold: 'INTRADAY · 60M MAX' },
-    VWAP_BOUNCE:           { cls: 'strat-vwap',   label: 'VWAP BOUNCE',    hold: 'INTRADAY · 90M MAX' },
-    FIRST_PULLBACK:        { cls: 'strat-pullback',label: 'FIRST PULLBACK', hold: 'INTRADAY · 90M MAX' },
-    GAP_FILL_REVERSION:    { cls: 'strat-gap',    label: 'GAP FILL',       hold: 'INTRADAY · 120M MAX' },
-    POWER_HOUR_MOMENTUM:   { cls: 'strat-power',  label: 'POWER HOUR',     hold: 'INTRADAY · 45M MAX' },
-    SR_BOUNCE:             { cls: 'strat-sr',     label: 'S/R BOUNCE',     hold: 'INTRADAY · 90M MAX' },
-    MACRO_REACTION:        { cls: 'strat-macro',  label: 'MACRO REACTION', hold: 'INTRADAY · 180M MAX · HALF SIZE' },
+    // Day trades
+    ORB_BREAKOUT:          { cls: 'strat-orb',     label: 'ORB BREAKOUT',       hold: 'DAY · 60M MAX' },
+    VWAP_BOUNCE:           { cls: 'strat-vwap',    label: 'VWAP BOUNCE',        hold: 'DAY · 90M MAX' },
+    FIRST_PULLBACK:        { cls: 'strat-pullback', label: 'FIRST PULLBACK',    hold: 'DAY · 90M MAX' },
+    GAP_FILL_REVERSION:    { cls: 'strat-gap',     label: 'GAP FILL',           hold: 'DAY · 120M MAX' },
+    POWER_HOUR_MOMENTUM:   { cls: 'strat-power',   label: 'POWER HOUR',         hold: 'DAY · 45M MAX' },
+    MACRO_REACTION:        { cls: 'strat-macro',   label: 'MACRO REACTION',     hold: 'DAY · 180M MAX · HALF SIZE' },
+    EXTREME_REVERSAL:      { cls: 'strat-extreme', label: 'EXTREME REVERSAL',   hold: 'DAY · 120M MAX' },
+    EOD_MEAN_REVERSION:    { cls: 'strat-eod',     label: 'EOD REVERSION',      hold: 'DAY · 30M MAX' },
+    HIGH_RVOL_BREAKOUT:    { cls: 'strat-rvol',    label: 'HIGH RVOL BREAKOUT', hold: 'DAY · 90M MAX' },
+    // Swing trades
+    PEAD_DRIFT:            { cls: 'strat-pead',    label: 'PEAD DRIFT',         hold: 'SWING · 5D MAX' },
+    SECTOR_LAGGARD:        { cls: 'strat-laggard', label: 'SECTOR LAGGARD',     hold: 'SWING · 3D MAX' },
+    SHORT_SQUEEZE_MOMENTUM:{ cls: 'strat-squeeze', label: 'SHORT SQUEEZE',      hold: 'SWING · 3D MAX' },
+    OPTIONS_FLOW:          { cls: 'strat-flow',    label: 'OPTIONS FLOW',       hold: 'SWING · 5D MAX' },
+    ANALYST_DRIFT:         { cls: 'strat-analyst', label: 'ANALYST DRIFT',      hold: 'SWING · 20D MAX' },
+    VIX_REVERSAL:          { cls: 'strat-vix',     label: 'VIX REVERSAL',       hold: 'SWING · 10D MAX' },
+    // Scalp
+    ZERO_DTE_SCALP:        { cls: 'strat-scalp',   label: '0DTE SCALP',         hold: 'SCALP · 15M MAX' },
   };
   const info = map[strategy];
   if (!info) return '';

@@ -925,6 +925,36 @@ app.get('/api/paper/summary', async (req, res) => {
   }
 });
 
+// Get per-strategy validation cards (report cards, MC, walk-forward, verdicts)
+app.get('/api/backtest/strategy-cards', async (req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT results->'strategyValidation' as validation,
+              results->'strategyReportCards' as report_cards,
+              results->'gradeCalibrations' as calibrations,
+              results->'byStrategy' as by_strategy,
+              results->'config' as config,
+              run_date, created_at
+       FROM lc_v3.backtest_results ORDER BY created_at DESC LIMIT 1`
+    );
+    if (result.rows.length === 0) {
+      return res.json({ data: null, lastRun: null });
+    }
+    const row = result.rows[0];
+    res.json({
+      strategyValidation: row.validation,
+      strategyReportCards: row.report_cards,
+      gradeCalibrations:  row.calibrations,
+      byStrategy:         row.by_strategy,
+      config:             row.config,
+      lastRun:            row.created_at?.toISOString(),
+      runDate:            row.run_date,
+    });
+  } catch (err) {
+    res.json({ data: null, error: err.message });
+  }
+});
+
 // Get latest backtest results
 app.get('/api/backtest', async (req, res) => {
   try {
