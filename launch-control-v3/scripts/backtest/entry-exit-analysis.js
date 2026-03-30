@@ -29,6 +29,35 @@ function percentile(sorted, p) {
 }
 
 /**
+ * Score exit quality for a single signal (0-100).
+ *
+ * Efficiency >= 75%: 90-100
+ * Efficiency 50-75%: 65-89
+ * Efficiency 25-50%: 35-64
+ * Efficiency < 25%:  0-34
+ * Alpha leakage penalty: -20 if MFE > 5% but trade lost
+ *
+ * @param {Object} signal - Signal with exitEfficiency, mfePct, pnlDollars
+ * @returns {number|null} Score 0-100 or null if no efficiency data
+ */
+export function scoreExitQualityForSignal(signal) {
+  const eff = signal.exitEfficiency;
+  if (eff == null) return null;
+
+  let score;
+  if (eff >= 0.75) score = 90 + Math.round((eff - 0.75) * 40);
+  else if (eff >= 0.50) score = 65 + Math.round((eff - 0.50) * 96);
+  else if (eff >= 0.25) score = 35 + Math.round((eff - 0.25) * 120);
+  else score = Math.round(eff * 140);
+
+  if ((signal.mfePct || 0) > 5 && (signal.pnlDollars || 0) <= 0) {
+    score -= 20;
+  }
+
+  return Math.max(0, Math.min(100, score));
+}
+
+/**
  * Comprehensive entry/exit quality analysis.
  * @param {Object} backtestResults - Full results with signals containing mfePct, maePct, exitEfficiency
  * @returns {Object} Entry/exit quality report

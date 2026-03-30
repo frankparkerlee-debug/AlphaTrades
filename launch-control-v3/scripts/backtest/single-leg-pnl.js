@@ -186,6 +186,20 @@ export function simulateSingleLeg(signal, bars, params) {
     signal.time.length <= 16 ? signal.time + ':00Z' : signal.time
   );
 
+  // Debug: log first trade's time alignment
+  if (!simulateSingleLeg._logged) {
+    simulateSingleLeg._logged = true;
+    const firstBar = bars[0];
+    const lastBar = bars[bars.length - 1];
+    const firstBarTime = firstBar ? new Date(firstBar.t) : null;
+    const firstMinHeld = firstBarTime ? Math.round((firstBarTime - entryTime) / 60000) : null;
+    console.log(`[SIM-DEBUG] signal.time=${signal.time} entryTime=${entryTime.toISOString()} bars=${bars.length}`);
+    console.log(`[SIM-DEBUG] firstBar.t=${firstBar?.t} firstMinHeld=${firstMinHeld} lastBar.t=${lastBar?.t}`);
+    console.log(`[SIM-DEBUG] stopCond=${JSON.stringify(stopCondition)} stopPrice=${stopPrice} targetPrice=${targetPrice}`);
+    console.log(`[SIM-DEBUG] entry=${entryPrice} direction=${direction} atrDollar=${atrDollar.toFixed(2)} premium=${premium.toFixed(2)} maxHold=${maxHoldMinutes}min`);
+    if (firstBar) console.log(`[SIM-DEBUG] firstBar: o=${firstBar.o} h=${firstBar.h} l=${firstBar.l} c=${firstBar.c}`);
+  }
+
   // ── Scan bars for exit conditions ──────────────────────────────────────────
   let exitType = 'EOD';
   let exitBar = bars[bars.length - 1] || null;

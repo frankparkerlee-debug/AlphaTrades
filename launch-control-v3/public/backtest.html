@@ -177,6 +177,12 @@ body::after {
     </div>
   </div>
 
+  <!-- Strategy Report Cards -->
+  <div class="section" id="reportCardsSection" style="display:none">
+    <div class="section-title">STRATEGY REPORT CARDS</div>
+    <div id="reportCardsGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px;margin-top:8px"></div>
+  </div>
+
   <!-- Signals Table -->
   <div class="section" id="signalsSection">
     <div class="section-title">ALL SIGNALS</div>
@@ -310,6 +316,71 @@ function renderResults(data, lastRun) {
     <td class="${pnlClass(s.pnlDollars)}">${dollarFmt(s.pnlDollars)}</td>
     <td>${s.holdMinutes}m</td>
   </tr>`).join('');
+
+  // Report cards
+  renderReportCards(data);
+}
+
+function renderReportCards(data) {
+  const cards = data.strategyReportCards;
+  if (!cards || Object.keys(cards).length === 0) {
+    $('reportCardsSection').style.display = 'none';
+    return;
+  }
+  $('reportCardsSection').style.display = '';
+  const grid = $('reportCardsGrid');
+
+  const verdictColor = { DEPLOY: 'var(--green)', REFINE: 'var(--amber)', SHELVE: 'var(--red)', INSUFFICIENT_DATA: 'var(--text4)' };
+  const verdictBg = { DEPLOY: 'rgba(16,185,129,0.12)', REFINE: 'rgba(245,158,11,0.12)', SHELVE: 'rgba(239,68,68,0.12)', INSUFFICIENT_DATA: 'rgba(61,80,104,0.12)' };
+
+  function phaseBar(score, label) {
+    if (score == null) return `<div style="display:flex;justify-content:space-between;align-items:center;margin:2px 0"><span style="color:var(--text3);font-size:11px">${label}</span><span style="color:var(--text4);font-size:11px">N/A</span></div>`;
+    const c = score >= 70 ? 'var(--green)' : score >= 50 ? 'var(--amber)' : 'var(--red)';
+    return `<div style="display:flex;justify-content:space-between;align-items:center;margin:2px 0">
+      <span style="color:var(--text3);font-size:11px">${label}</span>
+      <div style="display:flex;align-items:center;gap:6px">
+        <div style="width:60px;height:4px;background:var(--bg0);border-radius:2px;overflow:hidden"><div style="width:${score}%;height:100%;background:${c};border-radius:2px"></div></div>
+        <span style="color:${c};font-size:11px;font-weight:600;width:24px;text-align:right">${score}</span>
+      </div>
+    </div>`;
+  }
+
+  const sorted = Object.values(cards).sort((a, b) => {
+    const order = { DEPLOY: 0, REFINE: 1, SHELVE: 2, INSUFFICIENT_DATA: 3 };
+    return (order[a.verdict?.decision] ?? 4) - (order[b.verdict?.decision] ?? 4);
+  });
+
+  grid.innerHTML = sorted.map(card => {
+    const v = card.verdict || {};
+    const dec = v.decision || 'INSUFFICIENT_DATA';
+    const p = card.phases || {};
+    const val = card.validation || {};
+    const cal = card.calibration || {};
+    return `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:12px;border-left:3px solid ${verdictColor[dec]}">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span style="color:var(--text1);font-weight:600;font-size:12px;font-family:var(--mono)">${card.strategy}</span>
+        <span style="background:${verdictBg[dec]};color:${verdictColor[dec]};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;font-family:var(--mono)">${dec}</span>
+      </div>
+      <div style="display:flex;gap:16px;margin-bottom:8px;font-size:11px;color:var(--text2)">
+        <span>${card.signalCount} sigs</span>
+        <span>WR ${val.winRate ?? '—'}%</span>
+        <span>PF ${val.profitFactor ?? '—'}</span>
+        <span>MC ${val.monteCarlo ?? '—'}%</span>
+      </div>
+      <div style="margin-bottom:6px">
+        ${phaseBar(p.setup?.avgScore, 'Setup')}
+        ${phaseBar(p.direction?.avgScore, 'Direction')}
+        ${phaseBar(p.exit?.avgScore, 'Exit')}
+      </div>
+      <div style="font-size:10px;color:var(--text3);border-top:1px solid var(--border);padding-top:6px;margin-top:4px">
+        ${cal.quality ? `Cal: ${cal.quality}${cal.monotonic ? '' : ' (non-monotonic)'}` : ''}
+        ${v.netScore != null ? ` | Net: ${v.netScore >= 0 ? '+' : ''}${v.netScore} (+${v.merits}/-${v.demerits})` : ''}
+      </div>
+      ${v.strengths?.length ? `<div style="font-size:10px;color:var(--green);margin-top:3px">+ ${v.strengths.slice(0,3).join(', ')}</div>` : ''}
+      ${v.weaknesses?.length ? `<div style="font-size:10px;color:var(--red);margin-top:2px">- ${v.weaknesses.slice(0,3).join(', ')}</div>` : ''}
+      ${v.recommendations?.length ? `<div style="font-size:10px;color:var(--amber);margin-top:2px">${v.recommendations[0]}</div>` : ''}
+    </div>`;
+  }).join('');
 }
 
 function renderEquityCurve(curve) {

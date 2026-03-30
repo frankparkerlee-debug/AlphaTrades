@@ -21,13 +21,29 @@ import { checkConfluence } from '../../../src/indicators/confluence.js';
 import { analyzeCandle, detectBullishEngulfing, detectBearishEngulfing } from '../../../src/indicators/candle-patterns.js';
 import { checkBounceStructure, detectFlushAndHold } from '../../../src/strategies/support-check.js';
 import { POSITION_SIZES } from '../execution-model.js';
+import { applyCalibration } from '../grade-calibrator.js';
 
 // ── Shared Helpers ───────────────────────────────────────────────────────────
 
+// Per-strategy grade calibrations loaded from DB at startup (live mode).
+// In backtest mode, these are computed after the run and stored for next time.
+let _gradeCalibrations = {};
+
+/**
+ * Set grade calibrations for live usage (loaded from DB at startup).
+ */
+export function setGradeCalibrations(calibrations) {
+  _gradeCalibrations = calibrations || {};
+}
+
 /**
  * Convert confidence score to letter grade.
+ * Uses per-strategy calibration if available, otherwise universal thresholds.
  */
-function confidenceToGrade(confidence) {
+function confidenceToGrade(confidence, strategy) {
+  if (_gradeCalibrations[strategy]) {
+    return applyCalibration(confidence, _gradeCalibrations[strategy]);
+  }
   if (confidence >= 95) return 'A+';
   if (confidence >= 90) return 'A';
   if (confidence >= 84) return 'A-';
@@ -144,7 +160,7 @@ function cumulativeVolume(bars) {
  * Build a standardized backtest signal from live-style signal data.
  */
 function buildSignal(strategy, date, timeKey, ticker, direction, confidence, entryPrice, stopPrice, targetPrice, profile, liveSignal = {}) {
-  const grade = confidenceToGrade(confidence);
+  const grade = confidenceToGrade(confidence, strategy);
   const hold = HOLD_CONFIG[strategy] || { maxHoldMinutes: 120, holdDays: 0 };
   const atr = profile.atr_5d || profile.atr_20d || 0.025;
 

@@ -19,6 +19,9 @@ import { runRegimeStress } from './regime-stress.js';
 import { runSensitivity } from './sensitivity.js';
 import { analyzeEntryExitQuality } from './entry-exit-analysis.js';
 import { runStatisticalTests } from './statistical-tests.js';
+import { scoreSetupQuality } from './setup-quality.js';
+import { calibrateGrades } from './grade-calibrator.js';
+import { buildReportCard, deriveDeploymentVerdict } from './strategy-report-card.js';
 import { query } from '../../src/data/db.js';
 
 // Spread-based strategy imports (legacy — margin account)
@@ -210,13 +213,27 @@ export async function runMultiStrategyBacktest(startDate, endDate, accountSize =
     return buildEmptyResults(config);
   }
 
+  // 5b. Validate entries — does the underlying actually move in the right direction?
+  console.log('[MULTI-STRAT] Validating entry quality (underlying price action)...');
+  const entryValidation = validateEntries(constrained, data.rawMinuteBars);
+
   // 6. Simulate spread P&L
   console.log('[MULTI-STRAT] Simulating spread P&L...');
   const results = simulateAllSpreads(constrained, data.rawMinuteBars, { accountSize });
   console.log(`[MULTI-STRAT] ${results.length} trades simulated`);
 
+  // Exit type diagnostics
+  const exitCounts = {};
+  for (const r of results) exitCounts[r.exitType] = (exitCounts[r.exitType] || 0) + 1;
+  console.log(`[MULTI-STRAT] Exit types: ${JSON.stringify(exitCounts)}`);
+  // Sample first 3 trades for debugging
+  for (const r of results.slice(0, 3)) {
+    console.log(`[MULTI-STRAT] SAMPLE: ${r.ticker} ${r.direction} ${r.strategy} entry=$${r.entryPrice} exit=$${r.exitPrice} type=${r.exitType} hold=${r.holdMinutes}m pnl=$${r.pnlDollars} contracts=${r.contracts} spread=${r.spreadDetails?.type} stopCond=${JSON.stringify(r.stopCondition)} premium=${r.spreadDetails?.premium?.toFixed(2)}`);
+  }
+
   // 7. Build results
   const output = buildMultiStratResults(results, config, data.tradingDays);
+  output.entryValidation = entryValidation;
 
   // ── 8-14: AGGREGATE validation (full portfolio) ──────────────────────────
   console.log('[MULTI-STRAT] Running aggregate validation pipeline...');
@@ -245,12 +262,14 @@ export async function runMultiStrategyBacktest(startDate, endDate, accountSize =
   console.log('[MULTI-STRAT]   Statistical tests...');
   output.statisticalTests = runStatisticalTests(output);
 
-  // ── 15: PER-STRATEGY validation ─────────────────────────────────────────
+  // ── 15: PER-STRATEGY validation + report cards ─────────────────────────
   // Each strategy gets its own full validation suite so weak strategies
   // can't hide behind strong ones. Strategies that fail validation
   // individually should be removed or reworked.
-  console.log('[MULTI-STRAT] Running per-strategy validation...');
+  console.log('[MULTI-STRAT] Running per-strategy validation + report cards...');
   output.strategyValidation = {};
+  output.strategyReportCards = {};
+  output.gradeCalibrations = {};
 
   const stratNames = [...new Set(results.map(r => r.strategy))];
   for (const stratName of stratNames) {
@@ -261,8 +280,20 @@ export async function runMultiStrategyBacktest(startDate, endDate, accountSize =
         verdict: 'INSUFFICIENT_DATA',
         note: `Only ${stratSignals.length} signals — need 5+ for validation`,
       };
+      output.strategyReportCards[stratName] = {
+        strategy: stratName,
+        signalCount: stratSignals.length,
+        verdict: { decision: 'INSUFFICIENT_DATA' },
+      };
       console.log(`[MULTI-STRAT]   ${stratName}: ${stratSignals.length} signals — skipped (insufficient)`);
       continue;
+    }
+
+    // Score setup quality for each signal
+    for (const sig of stratSignals) {
+      const sq = scoreSetupQuality(sig);
+      sig.setupQuality = sq.score;
+      sig.setupFactors = sq.factors;
     }
 
     // Build a mini-output object for this strategy only
@@ -304,22 +335,149 @@ export async function runMultiStrategyBacktest(startDate, endDate, accountSize =
       validation.outOfSample = reportSideBySide(stratSplit, accountSize);
     }
 
-    // Verdict: pass/fail/marginal based on key metrics
-    const verdictResult = deriveStrategyVerdict(validation);
-    validation.verdict = verdictResult.verdict;
-    validation.demerits = verdictResult.demerits;
-    validation.flags = verdictResult.flags;
+    // Calibrate grades for this strategy
+    const calibration = calibrateGrades(stratName, stratSignals);
+    output.gradeCalibrations[stratName] = calibration;
 
+    // Build report card with three-phase scores
+    const reportCard = buildReportCard(stratName, stratSignals, validation, entryValidation, calibration);
+
+    // Derive verdict (DEPLOY/REFINE/SHELVE) — replaces old deriveStrategyVerdict
+    const verdict = deriveDeploymentVerdict(reportCard);
+    reportCard.verdict = verdict;
+    output.strategyReportCards[stratName] = reportCard;
+
+    // Also store legacy validation for backward compatibility
+    validation.verdict = verdict.decision;
+    validation.demerits = verdict.demerits;
+    validation.flags = verdict.weaknesses;
     output.strategyValidation[stratName] = validation;
 
     const mc = validation.monteCarlo?.base?.probability?.profit;
     const wr = validation.summary?.winRate;
     const pf = validation.summary?.profitFactor;
-    console.log(`[MULTI-STRAT]   ${stratName}: ${stratSignals.length} sigs | WR=${wr}% PF=${pf} MC_P(profit)=${mc || 'N/A'}% → ${validation.verdict} (${verdictResult.demerits} demerits${verdictResult.flags.length ? ': ' + verdictResult.flags.join('; ') : ''})`);
+    const setupAvg = reportCard.phases?.setup?.avgScore ?? 'N/A';
+    const dirPct = reportCard.phases?.direction?.dirCorrectPct ?? 'N/A';
+    const exitAvg = reportCard.phases?.exit?.avgScore ?? 'N/A';
+    console.log(`[MULTI-STRAT]   ${stratName}: ${stratSignals.length} sigs | WR=${wr}% PF=${pf} MC=${mc || 'N/A'}% | Setup=${setupAvg} Dir=${dirPct}% Exit=${exitAvg} | Cal=${calibration.calibrationQuality} → ${verdict.decision} (net=${verdict.netScore}: +${verdict.merits}/-${verdict.demerits})`);
   }
 
   console.log(`[MULTI-STRAT] Backtest complete.\n`);
   return output;
+}
+
+// ── Entry Validation ─────────────────────────────────────────────────────────
+// Check if the underlying price action after entry supports the signal direction.
+// This is independent of option pricing — pure directional edge check.
+
+function validateEntries(signals, rawMinuteBars) {
+  const results = [];
+
+  for (const signal of signals) {
+    const tickerBars = rawMinuteBars[signal.ticker] || [];
+    const rawTime = signal.time.length <= 16 ? signal.time + ':00Z' : signal.time;
+    const signalTimeMs = new Date(rawTime).getTime();
+    const signalDate = signal.date;
+
+    // Get bars after entry, same day
+    const remaining = tickerBars.filter(b => {
+      const bt = new Date(b.t).getTime();
+      const bd = new Date(b.t).toISOString().split('T')[0];
+      return bd === signalDate && bt > signalTimeMs;
+    }).sort((a, b) => new Date(a.t) - new Date(b.t));
+
+    if (remaining.length === 0) {
+      results.push({ ...signal, barsAfter: 0, maxFav: 0, maxAdv: 0, eodMove: 0, dirCorrect: false });
+      continue;
+    }
+
+    const mult = signal.direction === 'CALL' ? 1 : -1;
+    const entry = signal.entryPrice;
+    let maxFav = 0, maxAdv = 0;
+
+    for (const bar of remaining) {
+      const favHigh = ((signal.direction === 'CALL' ? bar.h : bar.l) - entry) * mult;
+      const advLow = ((signal.direction === 'CALL' ? bar.l : bar.h) - entry) * mult;
+      maxFav = Math.max(maxFav, favHigh);
+      maxAdv = Math.min(maxAdv, advLow);
+    }
+
+    const eodClose = remaining[remaining.length - 1].c;
+    const eodMove = (eodClose - entry) * mult;
+    const maxFavPct = (maxFav / entry) * 100;
+    const eodMovePct = (eodMove / entry) * 100;
+
+    results.push({
+      ticker: signal.ticker,
+      strategy: signal.strategy,
+      direction: signal.direction,
+      date: signal.date,
+      entry,
+      barsAfter: remaining.length,
+      maxFavPct: +maxFavPct.toFixed(2),
+      maxAdvPct: +((maxAdv / entry) * 100).toFixed(2),
+      eodMovePct: +eodMovePct.toFixed(2),
+      dirCorrect: eodMove > 0,
+      everFavorable: maxFav > 0,
+    });
+  }
+
+  // Summarize
+  const total = results.length;
+  const dirCorrect = results.filter(r => r.dirCorrect).length;
+  const everFav = results.filter(r => r.everFavorable).length;
+  const noBars = results.filter(r => r.barsAfter === 0).length;
+  const avgMaxFav = total > 0 ? results.reduce((a, b) => a + b.maxFavPct, 0) / total : 0;
+  const avgEodMove = total > 0 ? results.reduce((a, b) => a + b.eodMovePct, 0) / total : 0;
+
+  // By strategy
+  const byStrategy = {};
+  const stratNames = [...new Set(results.map(r => r.strategy))];
+  for (const strat of stratNames) {
+    const s = results.filter(r => r.strategy === strat);
+    byStrategy[strat] = {
+      count: s.length,
+      dirCorrectPct: s.length > 0 ? +(s.filter(r => r.dirCorrect).length / s.length * 100).toFixed(1) : 0,
+      everFavPct: s.length > 0 ? +(s.filter(r => r.everFavorable).length / s.length * 100).toFixed(1) : 0,
+      avgMaxFavPct: s.length > 0 ? +(s.reduce((a, b) => a + b.maxFavPct, 0) / s.length).toFixed(2) : 0,
+      avgEodMovePct: s.length > 0 ? +(s.reduce((a, b) => a + b.eodMovePct, 0) / s.length).toFixed(2) : 0,
+      noBars: s.filter(r => r.barsAfter === 0).length,
+    };
+  }
+
+  // By direction
+  const calls = results.filter(r => r.direction === 'CALL');
+  const puts = results.filter(r => r.direction === 'PUT');
+
+  const summary = {
+    total,
+    noBars,
+    dirCorrectPct: total > 0 ? +(dirCorrect / total * 100).toFixed(1) : 0,
+    everFavorablePct: total > 0 ? +(everFav / total * 100).toFixed(1) : 0,
+    avgMaxFavPct: +avgMaxFav.toFixed(2),
+    avgEodMovePct: +avgEodMove.toFixed(2),
+    calls: {
+      count: calls.length,
+      dirCorrectPct: calls.length > 0 ? +(calls.filter(r => r.dirCorrect).length / calls.length * 100).toFixed(1) : 0,
+      everFavPct: calls.length > 0 ? +(calls.filter(r => r.everFavorable).length / calls.length * 100).toFixed(1) : 0,
+    },
+    puts: {
+      count: puts.length,
+      dirCorrectPct: puts.length > 0 ? +(puts.filter(r => r.dirCorrect).length / puts.length * 100).toFixed(1) : 0,
+      everFavPct: puts.length > 0 ? +(puts.filter(r => r.everFavorable).length / puts.length * 100).toFixed(1) : 0,
+    },
+  };
+
+  console.log(`[ENTRY-CHECK] ${total} signals | ${noBars} had 0 bars after entry`);
+  console.log(`[ENTRY-CHECK] Direction correct at EOD: ${dirCorrect}/${total} (${summary.dirCorrectPct}%)`);
+  console.log(`[ENTRY-CHECK] Ever moved favorably: ${everFav}/${total} (${summary.everFavorablePct}%)`);
+  console.log(`[ENTRY-CHECK] Avg max favorable move: ${avgMaxFav.toFixed(2)}% | Avg EOD move: ${avgEodMove.toFixed(2)}%`);
+  console.log(`[ENTRY-CHECK] CALLs: ${summary.calls.count} (${summary.calls.dirCorrectPct}% correct) | PUTs: ${summary.puts.count} (${summary.puts.dirCorrectPct}% correct)`);
+  for (const [strat, s] of Object.entries(byStrategy)) {
+    console.log(`[ENTRY-CHECK]   ${strat}: ${s.count} sigs | dir_correct=${s.dirCorrectPct}% | ever_fav=${s.everFavPct}% | avg_max_fav=${s.avgMaxFavPct}% | avg_eod=${s.avgEodMovePct}%${s.noBars ? ` | ${s.noBars} NO BARS` : ''}`);
+  }
+
+  return { summary, byStrategy, signals: results };
 }
 
 // ── Portfolio Constraints ──────────────────────────────────────────────────────
@@ -518,6 +676,9 @@ function buildMultiStratResults(results, config, tradingDays) {
       commissions: r.commissions,
       mfePct: r.mfePct, maePct: r.maePct,
       exitEfficiency: r.exitEfficiency,
+      setupQuality: r.setupQuality || null,
+      setupFactors: r.setupFactors || null,
+      metadata: r.metadata || null,
     })),
   };
 }

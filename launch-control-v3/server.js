@@ -2052,6 +2052,27 @@ app.post('/api/multi-strategy/run', async (req, res) => {
       )
     `);
 
+    // Store per-strategy grade calibrations
+    if (results.gradeCalibrations) {
+      for (const [strategy, cal] of Object.entries(results.gradeCalibrations)) {
+        try {
+          await db.query(`
+            INSERT INTO lc_v3.grade_calibrations (strategy, thresholds, performance_at_grade, sample_size, calibration_quality, monotonic, calibrated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, NOW())
+            ON CONFLICT (strategy) DO UPDATE SET
+              thresholds = $2, performance_at_grade = $3, sample_size = $4,
+              calibration_quality = $5, monotonic = $6, calibrated_at = NOW()
+          `, [strategy, JSON.stringify(cal.thresholds), JSON.stringify(cal.performanceAtGrade),
+              cal.sampleSize, cal.calibrationQuality, cal.monotonic]);
+        } catch (calErr) {
+          // Non-fatal — table may not exist yet
+          if (!calErr.message.includes('does not exist')) {
+            console.error(`[MULTI-STRAT] Grade calibration store error for ${strategy}:`, calErr.message);
+          }
+        }
+      }
+    }
+
     multiStratRun = { status: 'complete', completed_at: new Date().toISOString(), summary: results.summary };
   } catch (err) {
     console.error('[MULTI-STRAT] Run failed:', err.message);
@@ -2963,13 +2984,24 @@ async function startRestPoller() {
             // VOL_DROP_PUT fires as PAPER_ONLY — track but don't prompt for live entry
             const signalStatus = sig.strategy === 'VOL_DROP_PUT' ? 'PAPER_ONLY' : 'ACTIVE';
 
-            // Strategy sub-scores: distribute composite across pillars
-            // PA gets the bulk (strategy = price-action driven), rest split evenly
-            const stratPA  = Math.round(compositeRaw * 0.40);
-            const stratVOL = Math.round(compositeRaw * 0.20);
-            const stratNEWS = Math.round(compositeRaw * 0.10);
-            const stratMKT = Math.round(compositeRaw * 0.15);
-            const stratTIM = Math.round(compositeRaw * 0.15);
+            // Strategy sub-scores: use real setup factors if available, else distribute
+            const setupFactors = sig.setup_factors || {};
+            const hasRealFactors = Object.keys(setupFactors).length > 0;
+            let stratPA, stratVOL, stratNEWS, stratMKT, stratTIM;
+            if (hasRealFactors) {
+              // Map real factors to pillar scores (0-100 each)
+              stratPA  = setupFactors.candle_type?.scored ?? setupFactors.trap_quality?.scored ?? Math.round(compositeRaw * 0.40);
+              stratVOL = setupFactors.volume_ratio?.scored ?? setupFactors.vwap_tests?.scored ?? Math.round(compositeRaw * 0.20);
+              stratNEWS = setupFactors.market_move?.scored ?? setupFactors.market_strength?.scored ?? Math.round(compositeRaw * 0.10);
+              stratMKT = setupFactors.confluence?.scored ?? Math.round(compositeRaw * 0.15);
+              stratTIM = setupFactors.trend_quality?.scored ?? setupFactors.trend?.scored ?? Math.round(compositeRaw * 0.15);
+            } else {
+              stratPA  = Math.round(compositeRaw * 0.40);
+              stratVOL = Math.round(compositeRaw * 0.20);
+              stratNEWS = Math.round(compositeRaw * 0.10);
+              stratMKT = Math.round(compositeRaw * 0.15);
+              stratTIM = Math.round(compositeRaw * 0.15);
+            }
 
             const grade = toGrade(compositeRaw) || 'B';
             const insertRes = await db.query(`
