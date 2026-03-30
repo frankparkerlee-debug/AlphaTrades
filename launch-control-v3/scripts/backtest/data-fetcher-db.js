@@ -161,18 +161,33 @@ export async function fetchAllDataFromDB(config, tickers) {
     console.log(`[DATA-DB] SPY bars: ${Object.keys(etfMinuteBars.SPY).length}, QQQ bars: ${Object.keys(etfMinuteBars.QQQ).length}`);
   }
 
-  // VIX — fetch from API for accurate volatility regime detection
+  // VIX — try VIXY ETF as proxy (VIX index not available via /v2/stocks)
+  // VIXY tracks VIX short-term futures; we convert its price to approximate VIX level
   const vixByTime = {};
   if (API_HEADERS['APCA-API-KEY-ID']) {
-    try {
-      const vixBars = await fetchBarsFromAPI('VIX', '15Min', startDate, endDate, 'iex');
-      for (const bar of vixBars) {
-        const key = new Date(bar.t).toISOString().slice(0, 16);
-        vixByTime[key] = bar.c;
+    // Try VIXY (ProShares VIX Short-Term Futures ETF) as VIX proxy
+    const vixProxies = ['VIXY', 'UVXY'];
+    let loaded = false;
+    for (const proxy of vixProxies) {
+      if (loaded) break;
+      try {
+        const proxyBars = await fetchBarsFromAPI(proxy, '15Min', startDate, endDate, 'sip');
+        if (proxyBars.length > 0) {
+          // Use VIXY price as relative VIX proxy: VIXY ~$15-25 when VIX ~15-25
+          // Not exact but captures regime changes (spikes/calms)
+          for (const bar of proxyBars) {
+            const key = new Date(bar.t).toISOString().slice(0, 16);
+            vixByTime[key] = bar.c; // VIXY price roughly tracks VIX level
+          }
+          console.log(`[DATA-DB] VIX proxy (${proxy}): ${Object.keys(vixByTime).length} data points loaded`);
+          loaded = true;
+        }
+      } catch (err) {
+        console.warn(`[DATA-DB] ${proxy} fetch failed: ${err.message}`);
       }
-      console.log(`[DATA-DB] VIX: ${Object.keys(vixByTime).length} data points loaded`);
-    } catch (err) {
-      console.warn(`[DATA-DB] VIX fetch failed — using default 18: ${err.message}`);
+    }
+    if (!loaded) {
+      console.log('[DATA-DB] No VIX proxy data — defaults to 18');
     }
   } else {
     console.log('[DATA-DB] No Alpaca keys — VIX defaults to 18');

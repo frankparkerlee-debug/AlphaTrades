@@ -1,4 +1,6 @@
 import { checkBounceStructure } from './support-check.js';
+import { checkConfluence } from '../indicators/confluence.js';
+import { analyzeCandle } from '../indicators/candle-patterns.js';
 
 /**
  * Consecutive Drop Bounce Strategy
@@ -60,13 +62,47 @@ export function scanConsecutiveDrop(tickers, dailyBars, levelData = {}) {
       }
     }
 
+    // ── Confluence check (daily bars, relaxed threshold) ─────────────
+    let confluenceResult = null;
+    if (bars.length >= 15) {
+      confluenceResult = checkConfluence(bars, 'CALL', { currentPrice: price }, { minFactors: 2 });
+      if (confluenceResult.opposing > 2) continue;
+    }
+
+    // ── Candle quality on latest daily bar ──────────────────────────
+    const candleResult = analyzeCandle(bars[bars.length - 1]);
+
+    // ── Dynamic confidence scoring ──────────────────────────────────
+    let confidence = consecutiveDays >= 3 ? 78 : 68;
+
+    // Candle quality bonus
+    if (candleResult) {
+      if (candleResult.pattern === 'HAMMER') confidence += 6;
+      else if (candleResult.strength === 'STRONG' && candleResult.direction === 'BULL') confidence += 4;
+      else if (candleResult.pattern === 'DOJI') confidence += 2;
+    }
+
+    // Confluence scoring
+    if (confluenceResult) {
+      confidence += (confluenceResult.confirming || 0) * 2;
+      confidence -= (confluenceResult.opposing || 0) * 2;
+    }
+
+    // Structure bonus/penalty
+    if (structure.trend === 'UPTREND' || structure.trend === 'RANGE') confidence += 2;
+    else if (structure.trend === 'DOWNTREND') confidence -= 3;
+
+    // Clamp
+    confidence = Math.max(60, Math.min(95, confidence));
+
     signals.push({
       ticker,
       direction: 'CALL',
       strategy: 'CONSEC_BOUNCE',
+      entry_price: price || c2,
       consecutive_days: consecutiveDays,
       total_drop_pct: +(totalDrop * 100).toFixed(2),
-      confidence: consecutiveDays >= 3 ? 85.0 : 64.0,
+      confidence,
       hold: 'MULTIDAY',
       exit_within_days: 3,
       dedup_key: `${ticker}-W${weekNum}`,
@@ -75,6 +111,8 @@ export function scanConsecutiveDrop(tickers, dailyBars, levelData = {}) {
       support_at: structure.nearestSupport,
       resistance_at: structure.nearestResistance,
       resistance_room: structure.resistanceRoom,
+      candle_type: candleResult ? candleResult.pattern : null,
+      confluence: confluenceResult ? { confirming: confluenceResult.confirming, opposing: confluenceResult.opposing, factors: confluenceResult.factors } : null,
     });
   }
 

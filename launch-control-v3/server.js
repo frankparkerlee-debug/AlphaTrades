@@ -10,7 +10,6 @@ import { createServer } from 'http';
 import { selectOptionsContract, getOptionsVolume, fetchContractQuote } from './src/options/contract-selector.js';
 import { getNewsEvents, getTickerState } from './src/data/state.js';
 import { computeNewsScore } from './src/scoring/news.js';
-import { runBacktest } from './scripts/backtest/run.js';
 import { runMultiStrategyBacktest } from './scripts/backtest/strategy-runner.js';
 import { computeCorrelationMatrix, portfolioMetrics, diversificationBenefit, optimalWeights } from './scripts/backtest/cross-strategy.js';
 import { kellyPerStrategy, targetSizing } from './scripts/backtest/position-sizing.js';
@@ -26,6 +25,13 @@ import { scanRelativeWeaknessPut } from './src/strategies/relative-weakness-put.
 import { scoreConvictionSetup } from './src/strategies/conviction-scorer.js';
 import { scanOvernightCalendar } from './src/strategies/overnight-calendar.js';
 import { scanPreEarningsPut } from './src/strategies/pre-earnings-put.js';
+import { scanCreditSpread } from './src/strategies/credit-spread.js';
+import { scanOpeningRangeBreakout } from './src/strategies/opening-range-breakout.js';
+import { scanVwapReclaim } from './src/strategies/vwap-reclaim.js';
+import { scanPowerHour } from './src/strategies/power-hour.js';
+import { scanCorrelationCascade } from './src/strategies/correlation-cascade.js';
+import { scanPostMacro } from './src/strategies/post-macro.js';
+import { scanFailedBreakdown } from './src/strategies/failed-breakdown.js';
 import { getRecentFlow } from './src/data/alpaca-streams.js';
 import { monitorOpenPositions } from './src/jobs/options-monitor.js';
 import { scoreContinuation } from './src/jobs/continuation-scorer.js';
@@ -801,12 +807,6 @@ app.get('/api/debug/scoring/:ticker', async (req, res) => {
 app.get('/backtest', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'backtest.html'));
 });
-
-// Serve Monte Carlo dashboard (legacy URL, redirects)
-app.get('/monte-carlo', (req, res) => {
-  res.redirect('/validation#monte-carlo');
-});
-
 // Serve consolidated validation dashboard
 app.get('/validation', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'validation.html'));
@@ -1482,8 +1482,9 @@ async function executeBacktest() {
     const startDate = start.toISOString().split('T')[0];
     const endDate   = end.toISOString().split('T')[0];
 
-    console.log(`[BACKTEST] Starting: ${startDate} → ${endDate}`);
-    const results = await runBacktest(startDate, endDate, parseFloat(process.env.ACCOUNT_SIZE || '7500'));
+    console.log(`[BACKTEST] Starting multi-strategy: ${startDate} → ${endDate}`);
+    const accountSize = parseFloat(process.env.ACCOUNT_SIZE || '7500');
+    const results = await runMultiStrategyBacktest(startDate, endDate, accountSize);
     console.log(`[BACKTEST] Results: ${results?.summary?.totalSignals || 0} signals, ${results?.config?.tradingDays || 0} days`);
 
     // Store in DB
@@ -1805,9 +1806,6 @@ app.get('/api/analysis/iv-expansion', async (req, res) => {
 });
 
 // ── CONVICTION SCANNER ───────────────────────────────────────────────────────
-app.get('/conviction', (req, res) => {
-  res.sendFile(join(__dirname, 'public', 'conviction.html'));
-});
 
 // In-memory latest prices from poller (ticker → price)
 let latestPrices = {};
@@ -2129,7 +2127,7 @@ async function startWorker() {
 }
 
 // ── REST POLLING SCORER (guaranteed fallback) ─────────────────────────────────
-const GRADE_SCALE  = [[92,'A+'],[85,'A'],[78,'A-'],[70,'B+'],[60,'B']];
+const GRADE_SCALE  = [[95,'A+'],[90,'A'],[84,'A-'],[74,'B+'],[60,'B']];
 const POSITION_SZ  = {'A+':0.20,'A':0.15,'A-':0.10,'B+':0.075,'B':0.05};
 const ACCOUNT_SIZE = parseFloat(process.env.ACCOUNT_SIZE || '7500');
 const ALPACA_FEED  = process.env.ALPACA_FEED || 'sip';
@@ -2677,15 +2675,29 @@ async function startRestPoller() {
           // Run all strategy scanners
           const gapSignals = scanGapReversal(stratSnapshots, prevCloses, firstCandles, levelData);
           const capSignals = scanCapitulationBounce(stratSnapshots, prevCloses, volumeBaselines, levelData);
-          const putSignals = scanVolumeDropPut(stratSnapshots, prevCloses, volumeBaselines);
+          const putSignals = scanVolumeDropPut(stratSnapshots, prevCloses, volumeBaselines, levelData);
           const consecSignals = scanConsecutiveDrop(Object.keys(allSnaps), dailyBars, { currentPrices, prevCloses, prevDayLows, prevDayHighs, todayLows, todayHighs });
           const sectorSignals = scanSectorRotationBounce(stratSnapshots, prevCloses, spyPct, firstCandles, qqqPct);
           const gapUpSignals = scanGapUpReversal(stratSnapshots, prevCloses, firstCandles, levelData);
-          const calendarSignals = scanOvernightCalendar(stratSnapshots, mkt.SPY, vix, macroEvent);
+          // DISABLED: requires spreads (calendar = two legs) — shelved until $25K margin account
+          // const calendarSignals = scanOvernightCalendar(stratSnapshots, mkt.SPY, vix, macroEvent);
+          const calendarSignals = [];
           const breakdownSignals = scanBreakdownPut(stratSnapshots, prevCloses, spyPct, qqqPct, volumeBaselines, levelData);
           const relWeaknessSignals = scanRelativeWeaknessPut(stratSnapshots, prevCloses, spyPct, qqqPct, volumeBaselines, levelData);
+          // DISABLED: requires spreads — shelved until $25K margin account
+          // const creditSignals = scanCreditSpread(stratSnapshots, prevCloses, spyPct, qqqPct, volumeBaselines, levelData, profiles);
+          const creditSignals = [];
+          // Income strategies
+          const orbSignals = scanOpeningRangeBreakout(stratSnapshots, prevCloses, spyPct, qqqPct, volumeBaselines, levelData, profiles);
+          const vwapSignals = scanVwapReclaim(stratSnapshots, prevCloses, spyPct, qqqPct, volumeBaselines, levelData, profiles);
+          // Alpha strategies
+          const powerHourSignals = scanPowerHour(stratSnapshots, prevCloses, spyPct, qqqPct, volumeBaselines, levelData, profiles);
+          const cascadeSignals = scanCorrelationCascade(stratSnapshots, prevCloses, spyPct, qqqPct, volumeBaselines, levelData, profiles);
+          const postMacroSignals = scanPostMacro(stratSnapshots, prevCloses, spyPct, qqqPct, volumeBaselines, levelData, profiles, macroEvent);
+          const failedBreakSignals = scanFailedBreakdown(stratSnapshots, prevCloses, spyPct, qqqPct, volumeBaselines, levelData, profiles);
           const allStratSignals = [...gapSignals, ...capSignals, ...putSignals, ...consecSignals,
-            ...(macroEvent ? [] : sectorSignals), ...gapUpSignals, ...calendarSignals, ...breakdownSignals, ...relWeaknessSignals];
+            ...(macroEvent ? [] : sectorSignals), ...gapUpSignals, ...calendarSignals, ...breakdownSignals, ...relWeaknessSignals, ...creditSignals,
+            ...orbSignals, ...vwapSignals, ...powerHourSignals, ...cascadeSignals, ...postMacroSignals, ...failedBreakSignals];
 
           // Diagnostic: log scanner inputs + outputs every 5th cycle
           if (continuationCycle % 5 === 0) {
@@ -2747,6 +2759,8 @@ async function startRestPoller() {
             const INTRADAY_STRATEGIES = [
               'GAP_REVERSAL', 'GAP_UP_REVERSAL', 'SECTOR_ROTATION_BOUNCE',
               'CAPITULATION_BOUNCE', 'BREAKDOWN_PUT', 'RELATIVE_WEAKNESS_PUT',
+              'OPENING_RANGE_BREAKOUT', 'VWAP_RECLAIM', 'POWER_HOUR',
+              'CORRELATION_CASCADE', 'POST_MACRO', 'FAILED_BREAKDOWN',
             ];
             if (INTRADAY_STRATEGIES.includes(sig.strategy)) {
               const bars = intradayBarsMap[sig.ticker];
@@ -2927,6 +2941,11 @@ async function startRestPoller() {
               sig.trend_flags?.length > 0 ? `flags=${sig.trend_flags.join(',')}` : null,
               sig.vwap_support ? 'VWAP_SUPPORT' : null,
               sig.vwap_bearish ? 'VWAP_BEARISH' : null,
+              sig.spread_type ? `spreadType=${sig.spread_type}` : null,
+              sig.defended_level != null ? `defendedLevel=$${sig.defended_level}` : null,
+              sig.level_source ? `levelSource=${sig.level_source}` : null,
+              sig.credit_target_pct != null ? `creditTarget=${sig.credit_target_pct}%` : null,
+              sig.level_defended_count != null ? `defended=${sig.level_defended_count}x` : null,
               sig.stabilized ? `STABILIZED(${sig.bars_held}bars)` : null,
               sig.stabilized === false && sig.bars_held !== undefined ? 'NO_STABILIZATION' : null,
               sig.note || null,
@@ -2935,6 +2954,10 @@ async function startRestPoller() {
             const expiryInterval = sig.strategy === 'CONSEC_BOUNCE' ? '2 days'
               : sig.strategy === 'OVERNIGHT_CALENDAR' ? '18 hours'
               : sig.strategy === 'PRE_EARNINGS_PUT' ? `${(sig.exit_within_days || 22)} days`
+              : sig.strategy === 'CREDIT_SPREAD' ? '3 days'
+              : sig.strategy === 'CORRELATION_CASCADE' ? '6 hours'
+              : sig.strategy === 'POST_MACRO' ? '6 hours'
+              : sig.strategy === 'POWER_HOUR' ? '2 hours'
               : '4 hours';
 
             // VOL_DROP_PUT fires as PAPER_ONLY — track but don't prompt for live entry
@@ -3050,7 +3073,7 @@ async function startRestPoller() {
           // Debug summary — always log so we know scanners ran
           console.log(`[POLL SUMMARY] checked=${Object.keys(stratSnapshots).length} prevCloses=${Object.keys(prevCloses).length} firstCandles=${Object.keys(firstCandles).length} GAP_DOWN=${gapSignals.length} GAP_UP=${gapUpSignals.length} SECTOR=${sectorSignals.length} CAPIT=${capSignals.length} VOL_DROP=${putSignals.length} CONSEC=${consecSignals.length} CAL=${calendarSignals.length}`);
           if (gapSignals.length > 0 || capSignals.length > 0 || gapUpSignals.length > 0 || sectorSignals.length > 0) {
-            console.log(`[STRATEGY FIRED] ${[...gapSignals, ...capSignals, ...gapUpSignals, ...sectorSignals].map(s => `${s.ticker}:${s.strategy}`).join(', ')}`);
+            console.log(`[STRATEGY FIRED] ${allStratSignals.map(s => `${s.ticker}:${s.strategy}`).join(', ')}`);
           }
         } catch (stratErr) {
           console.error('[STRATEGY] Scanner error:', stratErr.message);
@@ -3336,16 +3359,26 @@ async function startRestPoller() {
 
 // Strategy → minimum DTE for options contract selection
 const STRATEGY_MIN_DTE = {
+  // Income playbook (0DTE preferred)
   GAP_REVERSAL: 0,
+  GAP_UP_REVERSAL: 0,
   SECTOR_ROTATION_BOUNCE: 0,
-  GAP_UP_REVERSAL: 1,
-  CAPITULATION_BOUNCE: 1,
-  VOL_DROP_PUT: 2,
-  CONSEC_BOUNCE: 3,
-  OVERNIGHT_CALENDAR: 1,
-  PRE_EARNINGS_PUT: 7,
   BREAKDOWN_PUT: 0,
   RELATIVE_WEAKNESS_PUT: 0,
+  OPENING_RANGE_BREAKOUT: 0,
+  VWAP_RECLAIM: 0,
+  // Alpha playbook
+  CAPITULATION_BOUNCE: 1,
+  CONSEC_BOUNCE: 3,
+  PRE_EARNINGS_PUT: 7,
+  POWER_HOUR: 0,             // 0DTE, expiring today
+  CORRELATION_CASCADE: 1,    // cascade may take hours
+  POST_MACRO: 1,             // post-macro trend runs all day
+  FAILED_BREAKDOWN: 0,       // traps resolve fast
+  // Disabled (spreads)
+  VOL_DROP_PUT: 2,
+  OVERNIGHT_CALENDAR: 1,
+  CREDIT_SPREAD: 2,
 };
 
 // ── POST-SIGNAL MONITORING ────────────────────────────────────────────────────

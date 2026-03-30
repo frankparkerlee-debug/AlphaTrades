@@ -19,6 +19,7 @@ import {
   getSpreadWidth,
   allInCost,
 } from './execution-model.js';
+import { simulateSingleLeg } from './single-leg-pnl.js';
 
 // ── Simplified Greeks Approximation ────────────────────────────────────────────
 // We don't have live Greeks for historical bars. Use a simplified model:
@@ -37,11 +38,16 @@ function estimateDelta(underlyingPrice, strike, isCall) {
 }
 
 /**
- * Estimate spread value at a given underlying price.
- * For a debit call spread (long lower strike, short higher strike):
- *   - Below both strikes: worth ~0
- *   - Between strikes: worth (underlying - longStrike) * 100
- *   - Above both strikes: worth spreadWidth * 100
+ * Estimate spread value at a given underlying price using a sigmoid model.
+ *
+ * The old intrinsic+extrinsic model (maxExtrinsic = 15% of width) valued ATM
+ * spreads at $1.50 when we paid $4.50 — triggering SPREAD_STOP on the first bar.
+ *
+ * This sigmoid model is calibrated so that:
+ *   - ATM entry value ≈ 45% of width (matches typical debit paid)
+ *   - Net delta ≈ 0.25 at ATM (realistic for vertical spreads)
+ *   - Deep OTM → 0, deep ITM → width
+ *   - Theta decay: blends toward expiration payoff as DTE decreases
  *
  * @param {number} underlyingPrice - current underlying price
  * @param {number} longStrike - long leg strike
@@ -53,44 +59,36 @@ function estimateDelta(underlyingPrice, strike, isCall) {
  */
 function spreadIntrinsicValue(underlyingPrice, longStrike, shortStrike, spreadType, dte, entryDTE) {
   const width = Math.abs(shortStrike - longStrike);
-  let intrinsic;
 
+  // Normalized position: 0 = at long strike (ATM at entry), 1 = at short strike
+  let normalizedPos;
   if (spreadType === 'DEBIT_CALL' || spreadType === 'CREDIT_CALL') {
-    // Call spread: long lower strike, short higher strike
     const lowerStrike = Math.min(longStrike, shortStrike);
-    const upperStrike = Math.max(longStrike, shortStrike);
-
-    if (underlyingPrice <= lowerStrike) {
-      intrinsic = 0;
-    } else if (underlyingPrice >= upperStrike) {
-      intrinsic = width;
-    } else {
-      intrinsic = underlyingPrice - lowerStrike;
-    }
+    normalizedPos = (underlyingPrice - lowerStrike) / width;
   } else {
-    // Put spread: long higher strike, short lower strike
-    const lowerStrike = Math.min(longStrike, shortStrike);
     const upperStrike = Math.max(longStrike, shortStrike);
-
-    if (underlyingPrice >= upperStrike) {
-      intrinsic = 0;
-    } else if (underlyingPrice <= lowerStrike) {
-      intrinsic = width;
-    } else {
-      intrinsic = upperStrike - underlyingPrice;
-    }
+    normalizedPos = (upperStrike - underlyingPrice) / width;
   }
 
-  // Add extrinsic value estimate (decays with time)
-  // At entry, extrinsic is roughly 15-25% of spread width for ATM spreads
-  // Decays proportionally to sqrt(dte/entryDTE)
-  const timeRatio = entryDTE > 0 ? Math.sqrt(Math.max(0, dte) / entryDTE) : 0;
-  const maxExtrinsic = width * 0.15; // conservative extrinsic estimate
-  const extrinsic = maxExtrinsic * timeRatio;
+  // At-expiration payoff (hockey stick)
+  const expirationValue = width * Math.max(0, Math.min(1, normalizedPos));
 
-  // For debit spreads, value = intrinsic + extrinsic (capped at width)
-  // For credit spreads, the "value" represents what it would cost to close
-  return Math.min(width, intrinsic + extrinsic);
+  // Pre-expiration "live" value: sigmoid centered at 0.2
+  // Calibrated: sigmoid(0) = 0.45 → ATM spread worth 45% of width at entry
+  // Net delta at ATM = k * 0.45 * 0.55 = 0.248 (realistic for ATM vertical spread)
+  const k = 1.0;      // steepness — gives net delta ~0.25 at ATM
+  const center = 0.2;  // sigmoid center — calibrated so sigmoid(0) = 0.45
+  const smoothValue = width / (1 + Math.exp(-k * (normalizedPos - center)));
+
+  // Time blend: transition from smooth (live) value to expiration payoff as DTE decays
+  // At entry (full DTE): 100% live value
+  // Near expiration: approaches hockey-stick payoff
+  const timeRatio = entryDTE > 0 ? Math.max(0, dte) / entryDTE : 0;
+  const expirationWeight = Math.pow(1 - timeRatio, 1.5);
+
+  const value = smoothValue * (1 - expirationWeight) + expirationValue * expirationWeight;
+
+  return Math.max(0, Math.min(width, value));
 }
 
 // ── Debit Vertical Spread Simulator ────────────────────────────────────────────
@@ -153,15 +151,15 @@ export function simulateDebitSpread(signal, bars, params) {
   const targetPrice = entryPrice + (targetATR * atrDollar * mult);
 
   // P&L thresholds on the spread value
-  const stopLossThreshold = debitPerShare * 0.30;    // close if spread loses 70% of debit
-  const profitTarget = debitPerShare + (maxGain * 0.65); // take profit at 65% of max gain
+  const stopLossThreshold = debitPerShare * 0.50;    // close if spread loses 50% of debit (was 70% — too deep)
+  const profitTarget = debitPerShare + (maxGain * 0.25); // take profit at 25% of max gain (was 65% — unreachable intraday)
 
-  // Scan bars — track MFE/MAE for entry/exit quality analysis
+  // Scan bars — track MFE/MAE as spread value excursions (not underlying price)
   let exitType = 'EOD';
   let exitBar = bars[bars.length - 1] || null;
   let holdMinutes = 0;
-  let mfePrice = entryPrice;  // max favorable excursion price
-  let maePrice = entryPrice;  // max adverse excursion price
+  let mfeSpreadPnl = 0;  // best spread P&L per share (favorable)
+  let maeSpreadPnl = 0;  // worst spread P&L per share (adverse)
   const entryTime = new Date(signal.time.length <= 16 ? signal.time + ':00Z' : signal.time);
 
   for (let i = 0; i < bars.length; i++) {
@@ -171,14 +169,13 @@ export function simulateDebitSpread(signal, bars, params) {
 
     if (minutesHeld < 0) continue; // bar before entry
 
-    // Track MFE/MAE
-    if (direction === 'CALL') {
-      mfePrice = Math.max(mfePrice, bar.h);
-      maePrice = Math.min(maePrice, bar.l);
-    } else {
-      mfePrice = Math.min(mfePrice, bar.l);
-      maePrice = Math.max(maePrice, bar.h);
-    }
+    // Track MFE/MAE using spread value (the metric that matters for options)
+    const barDaysHeld = minutesHeld / (6.5 * 60);
+    const barDTE = Math.max(0, entryDTE - barDaysHeld);
+    const barSpreadValue = spreadIntrinsicValue(bar.c, longStrike, shortStrike, spreadType, barDTE, entryDTE);
+    const barSpreadPnl = barSpreadValue - debitPerShare;
+    mfeSpreadPnl = Math.max(mfeSpreadPnl, barSpreadPnl);
+    maeSpreadPnl = Math.min(maeSpreadPnl, barSpreadPnl);
 
     // Check max hold time
     if (holdDays === 0 && minutesHeld > maxHoldMinutes) {
@@ -192,28 +189,33 @@ export function simulateDebitSpread(signal, bars, params) {
     const daysHeld = minutesHeld / (6.5 * 60); // trading hours per day
     const currentDTE = Math.max(0, entryDTE - daysHeld);
 
-    // Check underlying stop (adverse move)
-    const hitStop = direction === 'CALL'
-      ? bar.l <= stopPrice
-      : bar.h >= stopPrice;
+    // For multi-day holds, check underlying stop/target
+    // For intraday (holdDays === 0), skip — debit paid IS the defined risk,
+    // and spread-value thresholds below handle exits properly.
+    // Underlying stops on intraday debit spreads crystallize losses at the
+    // worst moment due to high gamma near ATM.
+    if (holdDays > 0) {
+      const hitStop = direction === 'CALL'
+        ? bar.l <= stopPrice
+        : bar.h >= stopPrice;
 
-    if (hitStop) {
-      exitType = 'STOP';
-      exitBar = bar;
-      holdMinutes = minutesHeld;
-      break;
-    }
+      if (hitStop) {
+        exitType = 'STOP';
+        exitBar = bar;
+        holdMinutes = minutesHeld;
+        break;
+      }
 
-    // Check underlying target (favorable move)
-    const hitTarget = direction === 'CALL'
-      ? bar.h >= targetPrice
-      : bar.l <= targetPrice;
+      const hitTarget = direction === 'CALL'
+        ? bar.h >= targetPrice
+        : bar.l <= targetPrice;
 
-    if (hitTarget) {
-      exitType = 'TARGET';
-      exitBar = bar;
-      holdMinutes = minutesHeld;
-      break;
+      if (hitTarget) {
+        exitType = 'TARGET';
+        exitBar = bar;
+        holdMinutes = minutesHeld;
+        break;
+      }
     }
 
     // Check spread value thresholds
@@ -268,6 +270,10 @@ export function simulateDebitSpread(signal, bars, params) {
   const netPnl = grossPnl - costs.totalCost;
   const pnlPct = debitPerShare > 0 ? (pnlPerShare / debitPerShare) * 100 : 0;
 
+  // MFE/MAE as % of debit paid (same scale as pnlPct)
+  const mfePctCalc = debitPerShare > 0 ? (mfeSpreadPnl / debitPerShare) * 100 : 0;
+  const maePctCalc = debitPerShare > 0 ? (maeSpreadPnl / debitPerShare) * 100 : 0;
+
   return {
     exitType,
     exitPrice,
@@ -280,16 +286,12 @@ export function simulateDebitSpread(signal, bars, params) {
     slippage:    costs.slippage,
     totalCosts:  costs.totalCost,
     grossPnl:    Math.round(grossPnl),
-    // MFE/MAE as percentage of entry price
-    mfePct: parseFloat((Math.abs(mfePrice - entryPrice) / entryPrice * 100 * mult).toFixed(2)),
-    maePct: parseFloat((Math.abs(maePrice - entryPrice) / entryPrice * 100 * (direction === 'CALL' ? -1 : 1) * (maePrice < entryPrice && direction === 'CALL' ? 1 : maePrice > entryPrice && direction === 'PUT' ? 1 : -1)).toFixed(2)),
-    mfePrice,
-    maePrice,
-    exitEfficiency: (() => {
-      const mfePnl = Math.abs(mfePrice - entryPrice) / entryPrice * 100;
-      const actualPnl = Math.abs(pnlPct);
-      return mfePnl > 0 ? parseFloat(Math.min(1, actualPnl / mfePnl).toFixed(3)) : 0;
-    })(),
+    // MFE/MAE as % of debit paid (comparable to pnlPct)
+    mfePct: parseFloat(mfePctCalc.toFixed(2)),
+    maePct: parseFloat(maePctCalc.toFixed(2)),
+    exitEfficiency: mfeSpreadPnl > 0
+      ? parseFloat(Math.min(1, pnlPerShare / mfeSpreadPnl).toFixed(3))
+      : 0,
     spreadDetails: {
       type: spreadType,
       width: spreadWidth,
@@ -397,16 +399,19 @@ export function simulateCreditSpread(signal, bars, params) {
     const daysHeld = minutesHeld / (6.5 * 60);
     const currentDTE = Math.max(0, entryDTE - daysHeld);
 
-    // Check underlying stop (move continues against us)
-    const hitStop = sellingCalls
-      ? bar.h >= stopPriceUnderlying
-      : bar.l <= stopPriceUnderlying;
+    // Underlying stop: only for multi-day holds
+    // Intraday credit spreads rely on spread-value P&L thresholds
+    if (holdDays > 0) {
+      const hitStop = sellingCalls
+        ? bar.h >= stopPriceUnderlying
+        : bar.l <= stopPriceUnderlying;
 
-    if (hitStop) {
-      exitType = 'STOP';
-      exitBar = bar;
-      holdMinutes = minutesHeld;
-      break;
+      if (hitStop) {
+        exitType = 'STOP';
+        exitBar = bar;
+        holdMinutes = minutesHeld;
+        break;
+      }
     }
 
     // Check spread value for P&L thresholds
@@ -704,6 +709,10 @@ export function simulateAllSpreads(signals, rawMinuteBars, opts = {}) {
         break;
       case 'IRON_CONDOR':
         result = simulateIronCondor(signal, remaining, params);
+        break;
+      case 'SINGLE_LEG':
+        params.premium = signal.premium || null;
+        result = simulateSingleLeg(signal, remaining, params);
         break;
       default:
         result = simulateDebitSpread(signal, remaining, params);

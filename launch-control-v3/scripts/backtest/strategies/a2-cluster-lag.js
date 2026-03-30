@@ -150,8 +150,8 @@ export function generateA2Signals(date, dayData, context) {
         spreadWidth,
         entryDebit: spreadWidth * 0.45,
         stopCondition:   { type: 'ATR', value: 0.5 },
-        targetCondition: { type: 'ATR', value: (followerAtr > 0 && followerBar.c > 0) ? Math.max(0.3, Math.min(2.0, expectedMag / followerAtr / followerBar.c)) : 0.8 },
-        maxHoldMinutes: Math.max(15, holdMinutes * 2), // allow 2x the avg lag
+        targetCondition: { type: 'ATR', value: (followerAtr > 0 && followerBar.c > 0) ? Math.max(0.3, Math.min(0.8, expectedMag / followerAtr / followerBar.c)) : 0.5 },
+        maxHoldMinutes: Math.max(30, holdMinutes * 2), // 2x avg lag; if follower hasn't moved by then, thesis is dead
         holdDays: 0,
         sizePct,
         oiEstimate: Math.round((followerProfile.options_liquidity_score || 0.5) * 500),

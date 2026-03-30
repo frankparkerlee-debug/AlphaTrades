@@ -21,7 +21,7 @@ const STRATEGY = 'A3_OVEREXTENSION_REVERSAL';
 const MIN_ATR_OVEREXTENSION = 1.5;    // must be >= 1.5 ATR from open (was 2.0 — too restrictive intraday)
 const MIN_REVERSION_SPEED   = 0.4;    // profile.mean_reversion_speed minimum
 const MIN_EARNINGS_DAYS     = 3;      // no entries within 3 days of earnings
-const MAX_HOLD_MINUTES      = 30;
+const MAX_HOLD_MINUTES      = 120; // credit spreads profit from time decay; let theta work for us
 
 /**
  * Generate A3 signals for a single trading day.
@@ -141,9 +141,9 @@ export function generateA3Signals(date, dayData, context) {
         spreadType: 'CREDIT_VERTICAL',
         spreadWidth,
         entryCredit: spreadWidth * creditRatio,
-        stopCondition:   { type: 'ATR', value: 0.5 }, // another 0.5 ATR extension = stop
-        targetCondition: { type: 'REVERSION', value: 0.5 }, // close at 50% credit
-        maxHoldMinutes: MAX_HOLD_MINUTES,
+        stopCondition:   { type: 'ATR', value: 0.75 }, // credit spreads need room; 0.75 ATR further extension = stop
+        targetCondition: { type: 'REVERSION', value: 0.5 }, // close at 50% credit captured
+        maxHoldMinutes: 120, // credit spreads profit from time; let theta work
         holdDays: 0,
         sizePct,
         oiEstimate: Math.round((profile.options_liquidity_score || 0.5) * 500),

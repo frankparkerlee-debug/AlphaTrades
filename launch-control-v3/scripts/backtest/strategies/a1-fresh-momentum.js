@@ -135,8 +135,8 @@ export function generateA1Signals(date, dayData, context) {
         spreadWidth,
         entryDebit: spreadWidth * 0.45, // pay ~45% of width
         stopCondition:   { type: 'ATR', value: 0.5 },
-        targetCondition: { type: 'ATR', value: 1.0 },
-        maxHoldMinutes: 45,
+        targetCondition: { type: 'ATR', value: 0.75 },
+        maxHoldMinutes: 60, // fresh momentum thesis expires fast; if not working in 60 min, exit
         holdDays: 0,
         sizePct,
         oiEstimate: Math.round((profile.options_liquidity_score || 0.5) * 500),
@@ -194,10 +194,11 @@ function scoreToGrade(momentumScore, trend, regime) {
   if (trend.trendAligned) score += 10;
   if (trend.volExpanding) score += 5;
   if (regime.regime === 'RISK_ON') score += 5;
+  else if (regime.regime !== 'MARKET_BREAKDOWN') score += 2; // partial credit for non-breakdown regimes
 
-  if (score >= 40) return 'A+';
-  if (score >= 33) return 'A';
-  if (score >= 26) return 'A-';
-  if (score >= 20) return 'B+';
+  if (score >= 38) return 'A+';
+  if (score >= 30) return 'A';
+  if (score >= 23) return 'A-';
+  if (score >= 16) return 'B+';
   return 'B';
 }

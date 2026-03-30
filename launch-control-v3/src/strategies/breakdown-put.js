@@ -1,20 +1,21 @@
 import { checkBounceStructure } from './support-check.js';
 import { detectFlushAndHold } from './support-check.js';
+import { checkConfluence } from '../indicators/confluence.js';
+import { analyzeCandle, detectBearishEngulfing } from '../indicators/candle-patterns.js';
 
 /**
- * Breakdown PUT Strategy
+ * Breakdown PUT Strategy — MULTI-FACTOR CONFLUENCE
  *
- * Mirror of Sector Rotation Bounce: on red market days (SPY AND QQQ both
- * down 0.3%+), stocks breaking below key support continue down.
- *
- * Entry criteria:
+ * Red market day is the TRIGGER, not the trade. The trade requires:
  *   1. Market bearish: SPY <= -0.3% AND QQQ <= -0.3%
- *   2. Stock breaking down: price below VWAP AND below prior day low
- *   3. Volume confirming: >= 1.2x window baseline (selling with conviction)
- *   4. Trend structure: not in confirmed uptrend (avoids buying-the-dip pullbacks)
+ *   2. Stock breaking down: price below VWAP AND at/below prior day low
+ *   3. Candle confirmation: recent bar must show bearish conviction — strong red,
+ *      bearish engulfing, or bearish marubozu (not weak/indecisive)
+ *   4. Volume surge: >= 1.2x baseline (selling with conviction)
+ *   5. EMA/MACD/RSI confluence: at least 3 of 6 technical factors confirming PUT
+ *   6. Structure: not in confirmed strong uptrend
  *
- * Targets: next support level (swing low or today's low)
- * Exit: 13:00 (same-day) or next open (overnight if late entry)
+ * Horizon: STRUCTURAL — exit when thesis breaks (price reclaims VWAP)
  *
  * @param {Object} snapshots      - { ticker: { open, price, volume, windowKey } }
  * @param {Object} prevCloses     - { ticker: number }
@@ -74,18 +75,62 @@ export function scanBreakdownPut(snapshots, prevCloses, spyChange, qqqChange, vo
       if (volumeRatio < 1.2) continue;
     }
 
-    // Trend structure: flag if stock is in confirmed uptrend (fighting the trend)
+    // ── Candle Quality: recent bar must show bearish conviction ────────
+    const bars = intradayBars[ticker] || [];
+    let candleAnalysis = null;
+    let engulfing = false;
+
+    if (bars.length >= 1) {
+      const recentBar = bars[bars.length - 1];
+      candleAnalysis = analyzeCandle(recentBar);
+
+      // Reject weak/indecisive candles — need body > 50% of range (strong conviction selling)
+      if (candleAnalysis.bodyRatio < 0.50) {
+        console.log(`[BREAKDOWN SKIP] ${ticker} — weak candle (body=${(candleAnalysis.bodyRatio * 100).toFixed(0)}%)`);
+        continue;
+      }
+
+      // Reject candles with large lower wicks (buyers defending the level)
+      if (candleAnalysis.lowerWickRatio > 0.30) {
+        console.log(`[BREAKDOWN SKIP] ${ticker} — buying pressure (lowerWick=${(candleAnalysis.lowerWickRatio * 100).toFixed(0)}%)`);
+        continue;
+      }
+    }
+
+    // ── Bearish Engulfing Pattern ─────────────────────────────────────
+    if (bars.length >= 2) {
+      const engulfResult = detectBearishEngulfing(bars.slice(-2));
+      engulfing = engulfResult.detected;
+    }
+
+    // ── Multi-Factor Confluence ───────────────────────────────────────
+    // Require at least 3 of 6 factors confirming the PUT direction
+    let confluenceResult = null;
+    if (bars.length >= 10) {
+      confluenceResult = checkConfluence(bars, 'PUT', {
+        vwap,
+        volumeRatio,
+        currentPrice,
+      }, { minFactors: 3 });
+
+      if (!confluenceResult.pass) {
+        console.log(`[BREAKDOWN SKIP] ${ticker} — confluence fail: ${confluenceResult.summary} [${confluenceResult.details.join(', ')}]`);
+        continue;
+      }
+    }
+
+    // ── Trend Structure ───────────────────────────────────────────────
     const structure = checkBounceStructure(currentPrice, dailyBars[ticker], {
       todayLow: todayLows[ticker], todayHigh: todayHighs[ticker], todayOpen,
       vwap,
-      intradayBars: intradayBars[ticker] || [],
+      intradayBars: bars,
     }, 'intraday');
 
     // Skip if strong uptrend — this is a pullback in a bull trend, not a breakdown
     if (structure.trend === 'UPTREND' && structure.trendConfidence >= 0.8) continue;
 
+    // ── Stabilization Check ───────────────────────────────────────────
     // Flush+hold for PUT direction: sellers holding price below resistance
-    const bars = intradayBars[ticker] || [];
     const stabilization = bars.length >= 5 ? detectFlushAndHold(bars, 'PUT') : { stabilized: false, barsHeld: 0 };
 
     // Build flags
@@ -93,22 +138,57 @@ export function scanBreakdownPut(snapshots, prevCloses, spyChange, qqqChange, vo
     if (!stabilization.stabilized && bars.length >= 5) trend_flags.push('no_stabilization');
     if (structure.trend === 'UPTREND') trend_flags.push('uptrend_pullback');
 
-    // Targets: next support below (swing low or today's low)
+    // ── Targets ───────────────────────────────────────────────────────
     const todayLow = todayLows[ticker] || currentPrice * 0.97;
     const swingLow = structure.nearestSupport;
     const t1Level = swingLow && swingLow < currentPrice ? swingLow : todayLow;
     const t2Level = t1Level * 0.99; // 1% beyond T1
 
-    // Confidence: base 82, boost for confirmed downtrend + stabilization
-    let confidence = 82;
-    if (structure.trend === 'DOWNTREND' && structure.trendConfidence >= 0.7) confidence += 5;
-    if (stabilization.stabilized) confidence += 3;
-    if (volumeRatio && volumeRatio >= 2.0) confidence += 3;
-    if (belowPrevLow) confidence += 2; // clean break, not just near
-    confidence = Math.min(95, confidence);
+    // ── Dynamic Confidence ────────────────────────────────────────────
+    let confidence = 72; // base — must earn it through confluence
 
-    // Stop: above VWAP (if price reclaims VWAP, thesis is broken)
+    // Below prev day low (clean break vs. just near)
+    if (belowPrevLow) confidence += 3;
+
+    // Volume conviction
+    if (volumeRatio && volumeRatio >= 2.0) confidence += 5;
+    else if (volumeRatio && volumeRatio >= 1.5) confidence += 3;
+    else if (volumeRatio && volumeRatio >= 1.2) confidence += 1;
+
+    // Bearish candle pattern
+    if (candleAnalysis) {
+      if (candleAnalysis.type === 'BEARISH_MARUBOZU') confidence += 4;
+      else if (engulfing) confidence += 4;
+      else if (candleAnalysis.type === 'STRONG_BEARISH') confidence += 2;
+    }
+
+    // Stabilization (sellers holding)
+    if (stabilization.stabilized) confidence += 3;
+
+    // Confluence confirming factors
+    if (confluenceResult) {
+      confidence += Math.max(0, confluenceResult.confirming * 2);
+      confidence -= confluenceResult.opposing * 2;
+    }
+
+    // Downtrend confirmed
+    if (structure.trend === 'DOWNTREND' && structure.trendConfidence >= 0.7) confidence += 3;
+
+    // VWAP distance > 0.5% below
+    if (Math.abs(vwapDistance) > 0.005) confidence += 2;
+
+    // Relative weakness > 1%
+    if (relativeWeakness > 0.01) confidence += 2;
+
+    confidence = Math.min(95, Math.max(60, confidence));
+
+    // ── Structural Stop ───────────────────────────────────────────────
+    // Stop = above VWAP (if price reclaims VWAP, thesis is broken)
     const stopPrice = +(vwap * 1.003).toFixed(2); // VWAP + 0.3% buffer
+
+    const confluenceNote = confluenceResult
+      ? `confluence=${confluenceResult.confirming}/${Object.keys(confluenceResult.factors).length}`
+      : 'no bars';
 
     signals.push({
       ticker,
@@ -119,8 +199,10 @@ export function scanBreakdownPut(snapshots, prevCloses, spyChange, qqqChange, vo
       t1_target: +t1Level.toFixed(2),
       t2_target: +t2Level.toFixed(2),
       confidence,
-      exit_by: '13:00',
-      hold: 'SAME_DAY',
+      exit_by: null,  // structural exit, not time-based
+      hold: 'STRUCTURAL',
+      candle_type: candleAnalysis ? candleAnalysis.type : null,
+      engulfing,
       gap_pct: +(intradayChange * 100).toFixed(2),
       volume_ratio: volumeRatio ? +volumeRatio.toFixed(2) : null,
       spy_change_pct: +(spyChange * 100).toFixed(2),
@@ -133,10 +215,17 @@ export function scanBreakdownPut(snapshots, prevCloses, spyChange, qqqChange, vo
       resistance_at: structure.nearestResistance,
       stabilized: stabilization.stabilized,
       bars_held: stabilization.barsHeld,
-      note: `below VWAP ${(vwapDistance * 100).toFixed(1)}%${belowPrevLow ? ' + broke prev day low' : ' near prev day low'} on red market SPY${(spyChange * 100).toFixed(1)}% QQQ${(qqqChange * 100).toFixed(1)}%`,
+      confluence: confluenceResult ? {
+        confirming: confluenceResult.confirming,
+        opposing: confluenceResult.opposing,
+        factors: Object.fromEntries(
+          Object.entries(confluenceResult.factors).map(([k, v]) => [k, v.confirm])
+        ),
+      } : null,
+      note: `below VWAP ${(vwapDistance * 100).toFixed(1)}%${belowPrevLow ? ' + broke prev day low' : ' near prev day low'} | ${candleAnalysis ? candleAnalysis.type : 'N/A'} | ${confluenceNote}${engulfing ? ' | ENGULFING' : ''}${stabilization.stabilized ? ` | stabilized ${stabilization.barsHeld}bars` : ''} | SPY${(spyChange * 100).toFixed(1)}% QQQ${(qqqChange * 100).toFixed(1)}%`,
     });
 
-    console.log(`[BREAKDOWN] ${ticker} ${(intradayChange * 100).toFixed(1)}% below VWAP ${(vwapDistance * 100).toFixed(1)}% vol=${volumeRatio?.toFixed(1)}x trend=${structure.trend} → PUT`);
+    console.log(`[BREAKDOWN] ${ticker} ${(intradayChange * 100).toFixed(1)}% below VWAP ${(vwapDistance * 100).toFixed(1)}% | ${candleAnalysis ? candleAnalysis.type : 'N/A'} | ${confluenceNote} | vol=${volumeRatio ? volumeRatio.toFixed(1) : 'N/A'}x | conf=${confidence}`);
   }
 
   // Cap at top 5 strongest signals — broad selloffs shouldn't flood the dashboard

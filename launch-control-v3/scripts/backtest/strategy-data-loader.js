@@ -1,6 +1,6 @@
 /**
  * Strategy Data Loader
- * Loads intelligence data from DB tables needed by the 5 strategies.
+ * Loads intelligence data from DB tables needed by all strategies.
  * Extends the bar data from data-fetcher-db.js with:
  *   - ticker_intelligence (IV rank, earnings, insider signals)
  *   - contagion_map (leader/follower relationships)

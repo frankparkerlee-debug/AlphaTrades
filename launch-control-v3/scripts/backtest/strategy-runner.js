@@ -1,7 +1,7 @@
 /**
  * Multi-Strategy Backtest Runner
  *
- * Orchestrates all 5 strategies, applies portfolio constraints,
+ * Orchestrates all 13 strategies, applies portfolio constraints,
  * simulates spread P&L, and feeds validation pipeline.
  *
  * Returns a unified results object for frontend consumption.
@@ -11,6 +11,7 @@ import { fetchAllDataFromDB } from './data-fetcher-db.js';
 import { fetchAllData } from './data-fetcher.js';
 import { loadStrategyData } from './strategy-data-loader.js';
 import { simulateAllSpreads } from './spread-pnl.js';
+import { clearCorrelationCache } from './correlation-engine.js';
 import { splitTrainTest, reportSideBySide } from './oos-split.js';
 import { runMonteCarlo } from './monte-carlo.js';
 import { runWalkForward } from './walk-forward.js';
@@ -20,24 +21,77 @@ import { analyzeEntryExitQuality } from './entry-exit-analysis.js';
 import { runStatisticalTests } from './statistical-tests.js';
 import { query } from '../../src/data/db.js';
 
-// Strategy imports
+// Spread-based strategy imports (legacy — margin account)
 import { generateA1Signals } from './strategies/a1-fresh-momentum.js';
 import { generateA2Signals } from './strategies/a2-cluster-lag.js';
 import { generateA3Signals } from './strategies/a3-overextension-reversal.js';
+import { generateA4Signals } from './strategies/a4-opening-range-breakout.js';
+import { generateA5Signals } from './strategies/a5-vwap-reversion.js';
+import { generateA6Signals } from './strategies/a6-gap-fade.js';
+import { generateA7Signals } from './strategies/a7-power-hour.js';
+import { generateA8Signals } from './strategies/a8-beta-thrust.js';
+import { generateA9Signals } from './strategies/a9-level-break.js';
+import { generateA10Signals } from './strategies/a10-relative-strength.js';
+import { generateA11Signals } from './strategies/a11-correlation-cascade.js';
 import { generateB1Signals } from './strategies/b1-iv-premium.js';
 import { generateB2Signals } from './strategies/b2-post-earnings-drift.js';
+
+// Live strategy imports (cash account — single-leg options with confluence)
+import {
+  generateGapSignals,
+  generateORBSignals,
+  generateVWAPSignals,
+  generatePowerHourSignals,
+  generateCascadeSignals,
+  generatePostMacroSignals,
+  generateTrapSignals,
+  generateBounceSignals,
+  generateBreakdownSignals,
+  generateConsecSignals,
+  generateVolDropSignals,
+  generatePreEarningsSignals,
+} from './strategies/live-adapter.js';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
 const MAX_CONCURRENT_POSITIONS = 5;    // max open positions at once
-const MAX_DAILY_RISK_PCT       = 0.10; // max 10% of account at risk per day
-const STRATEGIES = [
+const MAX_DAILY_RISK_PCT       = 0.40; // max 40% of account at risk per day
+
+// Live strategies (cash account, single-leg options, confluence-validated)
+const LIVE_STRATEGIES = [
+  { name: 'GAP_REVERSAL',            fn: generateGapSignals,         intraday: true },
+  { name: 'OPENING_RANGE_BREAKOUT',  fn: generateORBSignals,         intraday: true },
+  { name: 'VWAP_RECLAIM',            fn: generateVWAPSignals,        intraday: true },
+  { name: 'POWER_HOUR',              fn: generatePowerHourSignals,   intraday: true },
+  { name: 'CORRELATION_CASCADE',     fn: generateCascadeSignals,     intraday: true },
+  { name: 'POST_MACRO',              fn: generatePostMacroSignals,   intraday: true },
+  { name: 'FAILED_BREAKDOWN',        fn: generateTrapSignals,        intraday: true },
+  { name: 'BOUNCE_STRATEGIES',       fn: generateBounceSignals,      intraday: true },
+  { name: 'BREAKDOWN_STRATEGIES',    fn: generateBreakdownSignals,   intraday: true },
+  { name: 'CONSEC_BOUNCE',           fn: generateConsecSignals,      intraday: false },
+  { name: 'VOL_DROP_PUT',            fn: generateVolDropSignals,       intraday: false },
+  { name: 'PRE_EARNINGS_PUT',        fn: generatePreEarningsSignals,   intraday: false },
+];
+
+// Spread-based strategies (legacy — for comparison/margin account testing)
+const SPREAD_STRATEGIES = [
   { name: 'A1_FRESH_MOMENTUM',          fn: generateA1Signals,  intraday: true },
   { name: 'A2_CLUSTER_LAG',             fn: generateA2Signals,  intraday: true },
   { name: 'A3_OVEREXTENSION_REVERSAL',  fn: generateA3Signals,  intraday: true },
+  { name: 'A4_OPENING_RANGE_BREAKOUT',  fn: generateA4Signals,  intraday: true },
+  { name: 'A5_VWAP_REVERSION',          fn: generateA5Signals,  intraday: true },
+  { name: 'A6_GAP_FADE',               fn: generateA6Signals,  intraday: true },
+  { name: 'A7_POWER_HOUR',             fn: generateA7Signals,  intraday: true },
+  { name: 'A8_BETA_THRUST',            fn: generateA8Signals,  intraday: true },
+  { name: 'A9_LEVEL_BREAK',            fn: generateA9Signals,  intraday: true },
+  { name: 'A10_RELATIVE_STRENGTH',     fn: generateA10Signals, intraday: true },
+  { name: 'A11_CORRELATION_CASCADE',   fn: generateA11Signals, intraday: true },
   { name: 'B1_IV_PREMIUM',              fn: generateB1Signals,  intraday: false },
   { name: 'B2_POST_EARNINGS_DRIFT',     fn: generateB2Signals,  intraday: false },
 ];
+
+// Default: run live strategies (cash account)
+const STRATEGIES = LIVE_STRATEGIES;
 
 /**
  * Run multi-strategy backtest.
@@ -51,6 +105,9 @@ const STRATEGIES = [
 export async function runMultiStrategyBacktest(startDate, endDate, accountSize = 7500, tickerFilter = null) {
   console.log(`\n[MULTI-STRAT] Running ${startDate} -> ${endDate}, account $${accountSize}`);
   console.log(`[MULTI-STRAT] Strategies: ${STRATEGIES.map(s => s.name).join(', ')}`);
+
+  // Clear correlation engine cache between runs
+  clearCorrelationCache();
 
   // 1. Load equity profiles
   const profileRes = await query('SELECT * FROM lc_v3.equity_profiles');
@@ -161,36 +218,105 @@ export async function runMultiStrategyBacktest(startDate, endDate, accountSize =
   // 7. Build results
   const output = buildMultiStratResults(results, config, data.tradingDays);
 
-  // 8. Out-of-sample split
-  console.log('[MULTI-STRAT] Running out-of-sample validation...');
+  // ── 8-14: AGGREGATE validation (full portfolio) ──────────────────────────
+  console.log('[MULTI-STRAT] Running aggregate validation pipeline...');
+
+  console.log('[MULTI-STRAT]   Out-of-sample split...');
   const split = splitTrainTest(results, data.tradingDays);
   output.outOfSample = reportSideBySide(split, accountSize);
-  console.log(`[MULTI-STRAT] OOS verdict: ${output.outOfSample.verdict}`);
+  console.log(`[MULTI-STRAT]   OOS verdict: ${output.outOfSample.verdict}`);
 
-  // 9. Monte Carlo (on full set, then on OOS only)
-  console.log('[MULTI-STRAT] Running Monte Carlo...');
+  console.log('[MULTI-STRAT]   Monte Carlo...');
   output.monteCarlo = runMonteCarlo(output);
-  console.log(`[MULTI-STRAT] MC P(profit): ${output.monteCarlo.base?.probability?.profit}%`);
+  console.log(`[MULTI-STRAT]   MC P(profit): ${output.monteCarlo.base?.probability?.profit}%`);
 
-  // 10. Walk-forward
-  console.log('[MULTI-STRAT] Running walk-forward validation...');
+  console.log('[MULTI-STRAT]   Walk-forward...');
   output.walkForward = runWalkForward(output);
 
-  // 11. Regime stress
-  console.log('[MULTI-STRAT] Running regime stress...');
+  console.log('[MULTI-STRAT]   Regime stress...');
   output.regimeStress = runRegimeStress(output);
 
-  // 12. Sensitivity
-  console.log('[MULTI-STRAT] Running sensitivity analysis...');
+  console.log('[MULTI-STRAT]   Sensitivity...');
   output.sensitivity = runSensitivity(output);
 
-  // 13. Entry/exit quality (MFE/MAE analysis)
-  console.log('[MULTI-STRAT] Running entry/exit quality analysis...');
+  console.log('[MULTI-STRAT]   Entry/exit quality...');
   output.entryExitQuality = analyzeEntryExitQuality(output);
 
-  // 14. Institutional statistical tests (DSR, t-test, block bootstrap, CVaR, benchmark)
-  console.log('[MULTI-STRAT] Running statistical significance tests...');
+  console.log('[MULTI-STRAT]   Statistical tests...');
   output.statisticalTests = runStatisticalTests(output);
+
+  // ── 15: PER-STRATEGY validation ─────────────────────────────────────────
+  // Each strategy gets its own full validation suite so weak strategies
+  // can't hide behind strong ones. Strategies that fail validation
+  // individually should be removed or reworked.
+  console.log('[MULTI-STRAT] Running per-strategy validation...');
+  output.strategyValidation = {};
+
+  const stratNames = [...new Set(results.map(r => r.strategy))];
+  for (const stratName of stratNames) {
+    const stratSignals = results.filter(r => r.strategy === stratName);
+    if (stratSignals.length < 5) {
+      output.strategyValidation[stratName] = {
+        signalCount: stratSignals.length,
+        verdict: 'INSUFFICIENT_DATA',
+        note: `Only ${stratSignals.length} signals — need 5+ for validation`,
+      };
+      console.log(`[MULTI-STRAT]   ${stratName}: ${stratSignals.length} signals — skipped (insufficient)`);
+      continue;
+    }
+
+    // Build a mini-output object for this strategy only
+    const stratOutput = buildMultiStratResults(stratSignals, config, data.tradingDays);
+
+    const validation = {
+      signalCount: stratSignals.length,
+      summary: stratOutput.summary,
+    };
+
+    // Monte Carlo — does this strategy have an edge on its own?
+    if (stratSignals.length >= 10) {
+      validation.monteCarlo = runMonteCarlo(stratOutput);
+    }
+
+    // Walk-forward — is it overfit?
+    if (stratSignals.length >= 20) {
+      validation.walkForward = runWalkForward(stratOutput);
+    }
+
+    // Regime stress — does it survive all conditions?
+    if (stratSignals.length >= 10) {
+      validation.regimeStress = runRegimeStress(stratOutput);
+    }
+
+    // Entry/exit quality — are entries well-timed?
+    if (stratSignals.length >= 5) {
+      validation.entryExitQuality = analyzeEntryExitQuality(stratOutput);
+    }
+
+    // Statistical significance — is the edge real or noise?
+    if (stratSignals.length >= 10) {
+      validation.statisticalTests = runStatisticalTests(stratOutput);
+    }
+
+    // Out-of-sample — train/test consistency
+    if (stratSignals.length >= 15) {
+      const stratSplit = splitTrainTest(stratSignals, data.tradingDays);
+      validation.outOfSample = reportSideBySide(stratSplit, accountSize);
+    }
+
+    // Verdict: pass/fail/marginal based on key metrics
+    const verdictResult = deriveStrategyVerdict(validation);
+    validation.verdict = verdictResult.verdict;
+    validation.demerits = verdictResult.demerits;
+    validation.flags = verdictResult.flags;
+
+    output.strategyValidation[stratName] = validation;
+
+    const mc = validation.monteCarlo?.base?.probability?.profit;
+    const wr = validation.summary?.winRate;
+    const pf = validation.summary?.profitFactor;
+    console.log(`[MULTI-STRAT]   ${stratName}: ${stratSignals.length} sigs | WR=${wr}% PF=${pf} MC_P(profit)=${mc || 'N/A'}% → ${validation.verdict} (${verdictResult.demerits} demerits${verdictResult.flags.length ? ': ' + verdictResult.flags.join('; ') : ''})`);
+  }
 
   console.log(`[MULTI-STRAT] Backtest complete.\n`);
   return output;
@@ -199,9 +325,13 @@ export async function runMultiStrategyBacktest(startDate, endDate, accountSize =
 // ── Portfolio Constraints ──────────────────────────────────────────────────────
 
 function applyPortfolioConstraints(signals, accountSize) {
-  // Sort by date/time, then apply concurrent position limits
+  // Sort by date first, then by grade quality (best first), then by time
+  const gradeOrder = { 'A+': 0, 'A': 1, 'A-': 2, 'B+': 3, 'B': 4 };
   const sorted = [...signals].sort((a, b) => {
     if (a.date !== b.date) return a.date.localeCompare(b.date);
+    const ga = gradeOrder[a.grade] ?? 5;
+    const gb = gradeOrder[b.grade] ?? 5;
+    if (ga !== gb) return ga - gb; // higher grade first
     return (a.time || '').localeCompare(b.time || '');
   });
 
@@ -451,6 +581,122 @@ function computeWeeklyPnls(equityCurve, accountSize = 7500) {
 
   return weeks.map(w => ({
     ...w,
-    pnlPct: parseFloat((w.pnl / 7500 * 100).toFixed(2)),
+    pnlPct: parseFloat((w.pnl / accountSize * 100).toFixed(2)),
   }));
+}
+
+// ── Per-Strategy Verdict ──────────────────────────────────────────────────────
+
+/**
+ * Evaluate a single strategy's validation results and return a verdict.
+ *
+ * PASS     — strategy has a demonstrable edge across multiple tests
+ * MARGINAL — strategy shows promise but has weaknesses; keep testing
+ * FAIL     — strategy lacks edge or is statistically indistinguishable from noise
+ *
+ * Criteria (scored as demerits):
+ *   - Monte Carlo P(profit) < 55%             → +2 demerits
+ *   - Win rate < 40%                           → +1 demerit
+ *   - Profit factor < 1.0                      → +2 demerits (negative expectancy)
+ *   - Profit factor < 1.2                      → +1 demerit
+ *   - OOS verdict FAIL                         → +2 demerits
+ *   - OOS win rate degrades > 15pp             → +1 demerit
+ *   - Walk-forward: worst fold negative         → +1 demerit
+ *   - Statistical t-test p > 0.10              → +1 demerit
+ *   - Regime stress: any regime avg P&L < -3%  → +1 demerit
+ *
+ * Verdict thresholds:
+ *   0-1 demerits → PASS
+ *   2-3 demerits → MARGINAL
+ *   4+  demerits → FAIL
+ */
+function deriveStrategyVerdict(validation) {
+  let demerits = 0;
+  const flags = [];
+
+  // ── Monte Carlo ──
+  const mcProfit = validation.monteCarlo?.base?.probability?.profit;
+  if (mcProfit != null) {
+    if (mcProfit < 55) {
+      demerits += 2;
+      flags.push(`MC P(profit)=${mcProfit}% < 55%`);
+    }
+  }
+
+  // ── Win Rate ──
+  const winRate = validation.summary?.winRate;
+  if (winRate != null && winRate < 40) {
+    demerits += 1;
+    flags.push(`WR=${winRate}% < 40%`);
+  }
+
+  // ── Profit Factor ──
+  const pf = validation.summary?.profitFactor;
+  if (pf != null) {
+    if (pf < 1.0) {
+      demerits += 2;
+      flags.push(`PF=${pf} < 1.0 (negative expectancy)`);
+    } else if (pf < 1.2) {
+      demerits += 1;
+      flags.push(`PF=${pf} < 1.2 (thin edge)`);
+    }
+  }
+
+  // ── Out-of-Sample ──
+  if (validation.outOfSample) {
+    if (validation.outOfSample.verdict === 'FAIL') {
+      demerits += 2;
+      flags.push('OOS verdict FAIL');
+    }
+    // Check for win rate degradation train → test
+    const trainWR = validation.outOfSample.train?.winRate;
+    const testWR = validation.outOfSample.test?.winRate;
+    if (trainWR != null && testWR != null && (trainWR - testWR) > 15) {
+      demerits += 1;
+      flags.push(`OOS WR degradation: ${trainWR}% → ${testWR}%`);
+    }
+  }
+
+  // ── Walk-Forward ──
+  if (validation.walkForward?.folds) {
+    const worstFold = Math.min(...validation.walkForward.folds.map(f => f.pnl || f.pnlPct || 0));
+    if (worstFold < 0) {
+      demerits += 1;
+      flags.push(`Walk-forward worst fold negative (${worstFold})`);
+    }
+  }
+
+  // ── Statistical Tests ──
+  if (validation.statisticalTests) {
+    const pValue = validation.statisticalTests.tTest?.pValue
+      ?? validation.statisticalTests.pValue;
+    if (pValue != null && pValue > 0.10) {
+      demerits += 1;
+      flags.push(`t-test p=${pValue.toFixed(3)} > 0.10`);
+    }
+  }
+
+  // ── Regime Stress ──
+  if (validation.regimeStress?.regimes) {
+    for (const [regime, stats] of Object.entries(validation.regimeStress.regimes)) {
+      const avgPnl = stats.avgPnlPct ?? stats.avgPnl;
+      if (avgPnl != null && avgPnl < -3) {
+        demerits += 1;
+        flags.push(`Regime ${regime} avg P&L=${avgPnl}%`);
+        break; // count at most 1 demerit for regime stress
+      }
+    }
+  }
+
+  // ── Verdict ──
+  let verdict;
+  if (demerits <= 1) {
+    verdict = 'PASS';
+  } else if (demerits <= 3) {
+    verdict = 'MARGINAL';
+  } else {
+    verdict = 'FAIL';
+  }
+
+  return { verdict, demerits, flags };
 }

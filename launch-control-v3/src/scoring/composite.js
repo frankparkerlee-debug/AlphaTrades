@@ -9,14 +9,14 @@ import { query } from '../data/db.js';
 import { selectOptionsContract } from '../options/contract-selector.js';
 import logger from '../utils/logger.js';
 
-// Grade thresholds
+// Grade thresholds — calibrated for B+ daily, A- weekly, A weekly, A+ monthly
 const GRADE_SCALE = [
-  [83, 'A+'],
-  [73, 'A'],
-  [63, 'A-'],
-  [53, 'B+'],
-  [43, 'B'],
-  [33, 'B-'],
+  [95, 'A+'],
+  [90, 'A'],
+  [84, 'A-'],
+  [74, 'B+'],
+  [60, 'B'],
+  [45, 'B-'],
   [0,  'C'],
 ];
 
@@ -53,18 +53,18 @@ function gradeIsBetterThan(g1, g2) {
 }
 
 /**
- * Primary quality filter — PA and Volume must both clear midpoints
- * AND minimum 4 of 5 pillars above midpoint
+ * Primary quality filter — PA and Volume must both clear elevated thresholds
+ * AND all 5 pillars above midpoint (no weak links)
  */
 function primaryFilter(ts, pas, vs, ns, ms) {
-  // Hard gate — PA and Volume both required
-  if (pas <= 17.5 || vs <= 15) return false;
+  // Hard gate — PA and Volume both required at higher bar
+  if (pas <= 20 || vs <= 18) return false;
 
-  // 4/5 pillars above midpoint
+  // All 5 pillars above midpoint — no weak links allowed
   const midpoints = [2.5, 17.5, 15, 7.5, 7.5];
   const scores    = [ts,  pas,  vs, ns,  ms ];
   const above = scores.filter((s, i) => s > midpoints[i]).length;
-  return above >= 4;
+  return above >= 5;
 }
 
 /**
