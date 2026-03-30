@@ -152,10 +152,22 @@ export function simulateSingleLeg(signal, bars, params) {
   const totalTradingMinutes = holdDays === 0 ? 390 : (holdDays + 1) * 390;
 
   // ── Stop and target on the underlying ──────────────────────────────────────
-  const stopATR = stopCondition?.value || 0.5;
-  const targetATR = targetCondition?.value || 1.0;
-  const stopPrice = entryPrice - (stopATR * atrDollar * mult);
-  const targetPrice = entryPrice + (targetATR * atrDollar * mult);
+  // Support both absolute PRICE stops and ATR-multiple stops.
+  // Live adapter passes { type: 'PRICE', value: dollarPrice }.
+  // Legacy strategies pass { value: atrMultiple } or omit type.
+  let stopPrice, targetPrice;
+  if (stopCondition?.type === 'PRICE' && stopCondition.value > 0) {
+    stopPrice = stopCondition.value;
+  } else {
+    const stopATR = stopCondition?.value || 0.5;
+    stopPrice = entryPrice - (stopATR * atrDollar * mult);
+  }
+  if (targetCondition?.type === 'PRICE' && targetCondition.value > 0) {
+    targetPrice = targetCondition.value;
+  } else {
+    const targetATR = targetCondition?.value || 1.0;
+    targetPrice = entryPrice + (targetATR * atrDollar * mult);
+  }
 
   // ── Position sizing ────────────────────────────────────────────────────────
   // Max risk per contract = premium * 100 (can't lose more than you paid)

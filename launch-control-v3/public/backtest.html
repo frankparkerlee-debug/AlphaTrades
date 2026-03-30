@@ -267,10 +267,11 @@ function renderResults(data, lastRun) {
 
   // By exit type
   const et = $('exitTable').querySelector('tbody');
-  et.innerHTML = ['T1','T2','T3','STOP','EOD'].filter(e => data.byExit[e]?.count > 0).map(e => {
+  et.innerHTML = Object.keys(data.byExit || {}).filter(e => data.byExit[e]?.count > 0).map(e => {
     const d = data.byExit[e];
+    const exitColor = e==='STOP'||e==='SPREAD_STOP' ? 'var(--red)' : e==='EOD'||e==='TIME' ? 'var(--text3)' : 'var(--green)';
     return `<tr>
-      <td style="color:${e==='STOP'?'var(--red)':e==='EOD'?'var(--text3)':'var(--green)'}">${e}</td>
+      <td style="color:${exitColor}">${e}</td>
       <td>${d.count}</td>
       <td>${d.pct}%</td>
       <td class="${pnlClass(d.pnl)}">${dollarFmt(d.pnl)}</td>
@@ -305,7 +306,7 @@ function renderResults(data, lastRun) {
     <td class="grade-col" style="color:${gradeColor(s.grade)}">${s.grade}</td>
     <td>${s.composite}</td>
     <td>$${s.entryPrice?.toFixed(2) || '—'}</td>
-    <td style="color:${s.exitType==='STOP'?'var(--red)':s.exitType==='EOD'?'var(--text3)':'var(--green)'}">${s.exitType}</td>
+    <td style="color:${s.exitType==='STOP'||s.exitType==='SPREAD_STOP'?'var(--red)':s.exitType==='EOD'||s.exitType==='TIME'?'var(--text3)':'var(--green)'}">${s.exitType}</td>
     <td class="${pnlClass(s.pnlDollars)}">${dollarFmt(s.pnlDollars)}</td>
     <td>${s.holdMinutes}m</td>
   </tr>`).join('');
