@@ -1,7 +1,7 @@
 /**
  * Multi-Strategy Backtest Runner
  *
- * Orchestrates all 13 strategies, applies portfolio constraints,
+ * Orchestrates all 7 research-backed strategies, applies portfolio constraints,
  * simulates spread P&L, and feeds validation pipeline.
  *
  * Returns a unified results object for frontend consumption.
@@ -41,18 +41,13 @@ import { generateB2Signals } from './strategies/b2-post-earnings-drift.js';
 
 // Live strategy imports (cash account — single-leg options with confluence)
 import {
-  generateGapSignals,
-  generateORBSignals,
-  generateVWAPSignals,
-  generatePowerHourSignals,
-  generateCascadeSignals,
-  generatePostMacroSignals,
-  generateTrapSignals,
-  generateBounceSignals,
-  generateBreakdownSignals,
-  generateConsecSignals,
-  generateVolDropSignals,
-  generatePreEarningsSignals,
+  generateORBBreakoutSignals,
+  generateVWAPBounceSignals,
+  generateFirstPullbackSignals,
+  generateGapFillSignals,
+  generatePowerHourMomentumSignals,
+  generateSRBounceSignals,
+  generateMacroReactionSignals,
 } from './strategies/live-adapter.js';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
@@ -62,18 +57,13 @@ const MAX_DAILY_RISK_PCT       = 0.40; // max 40% of account at risk per day
 
 // Live strategies (cash account, single-leg options, confluence-validated)
 const LIVE_STRATEGIES = [
-  { name: 'GAP_REVERSAL',            fn: generateGapSignals,         intraday: true },
-  { name: 'OPENING_RANGE_BREAKOUT',  fn: generateORBSignals,         intraday: true },
-  { name: 'VWAP_RECLAIM',            fn: generateVWAPSignals,        intraday: true },
-  { name: 'POWER_HOUR',              fn: generatePowerHourSignals,   intraday: true },
-  { name: 'CORRELATION_CASCADE',     fn: generateCascadeSignals,     intraday: true },
-  { name: 'POST_MACRO',              fn: generatePostMacroSignals,   intraday: true },
-  { name: 'FAILED_BREAKDOWN',        fn: generateTrapSignals,        intraday: true },
-  { name: 'BOUNCE_STRATEGIES',       fn: generateBounceSignals,      intraday: true },
-  { name: 'BREAKDOWN_STRATEGIES',    fn: generateBreakdownSignals,   intraday: true },
-  { name: 'CONSEC_BOUNCE',           fn: generateConsecSignals,      intraday: false },
-  { name: 'VOL_DROP_PUT',            fn: generateVolDropSignals,       intraday: false },
-  { name: 'PRE_EARNINGS_PUT',        fn: generatePreEarningsSignals,   intraday: false },
+  { name: 'ORB_BREAKOUT',          fn: generateORBBreakoutSignals,       intraday: true },
+  { name: 'VWAP_BOUNCE',           fn: generateVWAPBounceSignals,        intraday: true },
+  { name: 'FIRST_PULLBACK',        fn: generateFirstPullbackSignals,     intraday: true },
+  { name: 'GAP_FILL_REVERSION',    fn: generateGapFillSignals,           intraday: true },
+  { name: 'POWER_HOUR_MOMENTUM',   fn: generatePowerHourMomentumSignals, intraday: true },
+  { name: 'SR_BOUNCE',             fn: generateSRBounceSignals,          intraday: true },
+  { name: 'MACRO_REACTION',        fn: generateMacroReactionSignals,     intraday: true },
 ];
 
 // Spread-based strategies (legacy — for comparison/margin account testing)
