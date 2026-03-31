@@ -83,15 +83,16 @@ function confidenceToGrade(confidence, strategy) {
  */
 const HOLD_CONFIG = {
   // Day trades (primary)
-  ORB_BREAKOUT:          { maxHoldMinutes: 60,  holdDays: 0 },
-  VWAP_BOUNCE:           { maxHoldMinutes: 90,  holdDays: 0 },
-  FIRST_PULLBACK:        { maxHoldMinutes: 90,  holdDays: 0 },
-  GAP_FILL_REVERSION:    { maxHoldMinutes: 120, holdDays: 0 },
-  POWER_HOUR_MOMENTUM:   { maxHoldMinutes: 45,  holdDays: 0 },
-  MACRO_REACTION:        { maxHoldMinutes: 180, holdDays: 0 },
-  EXTREME_REVERSAL:      { maxHoldMinutes: 120, holdDays: 0 },
-  EOD_MEAN_REVERSION:    { maxHoldMinutes: 25,  holdDays: 0 },
-  HIGH_RVOL_BREAKOUT:    { maxHoldMinutes: 60,  holdDays: 0 },
+  // Hold times tuned by directional study: exit before edge decays
+  ORB_BREAKOUT:          { maxHoldMinutes: 25,  holdDays: 0 }, // 62% correct at 5-30 min, drops to 37% at 60
+  VWAP_BOUNCE:           { maxHoldMinutes: 15,  holdDays: 0 }, // Edge at 5-10 min, reverses after 15
+  FIRST_PULLBACK:        { maxHoldMinutes: 30,  holdDays: 0 },
+  GAP_FILL_REVERSION:    { maxHoldMinutes: 30,  holdDays: 0 },
+  POWER_HOUR_MOMENTUM:   { maxHoldMinutes: 10,  holdDays: 0 }, // 72% at 5 min, 44% at 15 -- quick scalp
+  MACRO_REACTION:        { maxHoldMinutes: 30,  holdDays: 0 },
+  EXTREME_REVERSAL:      { maxHoldMinutes: 30,  holdDays: 0 },
+  EOD_MEAN_REVERSION:    { maxHoldMinutes: 15,  holdDays: 0 },
+  HIGH_RVOL_BREAKOUT:    { maxHoldMinutes: 25,  holdDays: 0 },
   // Swing trades (secondary)
   PEAD_DRIFT:            { maxHoldMinutes: 390, holdDays: 3 },
   SECTOR_LAGGARD:        { maxHoldMinutes: 390, holdDays: 2 },
@@ -2564,14 +2565,14 @@ export function generateMomentumScalpSignals(date, dayData, context) {
       // Gate 1: price moved >= 0.3% in 10 bars
       if (absMovePct < 0.003) continue;
 
-      // Gate 2: current bar volume > session average so far
+      // Gate 2: current bar volume > recent 20-bar average (not session avg -- opening bars inflate it)
       const barsUpTo = getBarsUpTo(minuteBars, ticker, date, checkKey);
       if (barsUpTo.length < 5) continue;
-      const totalVol = cumulativeVolume(barsUpTo);
-      const avgVol = totalVol / barsUpTo.length;
+      const recent20 = barsUpTo.slice(-20);
+      const recentVol = recent20.reduce((s, b) => s + (b.v || 0), 0) / recent20.length;
       const currentVol = currentBar.v || 0;
-      if (avgVol <= 0 || currentVol <= avgVol) continue;
-      const volRatio = currentVol / avgVol;
+      if (recentVol <= 0 || currentVol < recentVol * 0.8) continue; // Allow 80% of recent avg
+      const volRatio = recentVol > 0 ? currentVol / recentVol : 1;
 
       // That's it for entry gates -- keep it simple
 
