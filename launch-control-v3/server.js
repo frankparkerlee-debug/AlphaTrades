@@ -991,6 +991,74 @@ app.post('/api/backtest/run', async (req, res) => {
   }
 });
 
+// Diagnostic: check bar data and RTH coverage for debugging strategies
+app.get('/api/backtest/diagnostics', async (req, res) => {
+  try {
+    // Sample a few tickers to check bar coverage
+    const barQuery = await db.query(`
+      SELECT ticker,
+             date_trunc('day', ts) as day,
+             COUNT(*) as total_bars,
+             MIN(ts) as first_bar,
+             MAX(ts) as last_bar,
+             COUNT(*) FILTER (WHERE EXTRACT(HOUR FROM ts) >= 13 AND EXTRACT(HOUR FROM ts) < 21) as rth_bars
+      FROM lc_v3.bars
+      WHERE ticker IN (SELECT ticker FROM lc_v3.bars GROUP BY ticker LIMIT 5)
+      GROUP BY ticker, date_trunc('day', ts)
+      ORDER BY day DESC
+      LIMIT 25
+    `);
+
+    // Check how many tickers have bars
+    const tickerCount = await db.query(`SELECT COUNT(DISTINCT ticker) as cnt FROM lc_v3.bars`);
+    const dateRange = await db.query(`SELECT MIN(ts)::date as first_date, MAX(ts)::date as last_date, COUNT(DISTINCT ts::date) as trading_days FROM lc_v3.bars`);
+
+    // Check ETF bars
+    const etfQuery = await db.query(`
+      SELECT ticker,
+             date_trunc('day', ts) as day,
+             COUNT(*) as total_bars,
+             MIN(ts) as first_bar,
+             MAX(ts) as last_bar
+      FROM lc_v3.bars
+      WHERE ticker IN ('SPY', 'QQQ', 'IWM')
+      GROUP BY ticker, date_trunc('day', ts)
+      ORDER BY day DESC
+      LIMIT 15
+    `);
+
+    // Get the latest backtest config to see which tickers were used
+    const configQuery = await db.query(`
+      SELECT results->'config'->'tickers' as tickers,
+             results->'config'->'dateRange' as date_range
+      FROM lc_v3.backtest_results ORDER BY created_at DESC LIMIT 1
+    `);
+
+    res.json({
+      tickerCount: tickerCount.rows[0]?.cnt,
+      dateRange: dateRange.rows[0],
+      sampleBars: barQuery.rows.map(r => ({
+        ticker: r.ticker,
+        day: r.day?.toISOString().slice(0,10),
+        totalBars: +r.total_bars,
+        rthBars: +r.rth_bars,
+        first: r.first_bar?.toISOString().slice(11,16),
+        last: r.last_bar?.toISOString().slice(11,16),
+      })),
+      etfBars: etfQuery.rows.map(r => ({
+        ticker: r.ticker,
+        day: r.day?.toISOString().slice(0,10),
+        totalBars: +r.total_bars,
+        first: r.first_bar?.toISOString().slice(11,16),
+        last: r.last_bar?.toISOString().slice(11,16),
+      })),
+      backtestConfig: configQuery.rows[0] || null,
+    });
+  } catch (err) {
+    res.json({ error: err.message });
+  }
+});
+
 // ── SEED BARS (one-shot, triggered via POST) ─────────────────────────────────
 let seedRunning = false;
 let seedResult = null;
