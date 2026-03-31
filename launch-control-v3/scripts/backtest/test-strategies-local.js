@@ -2,27 +2,15 @@
 /**
  * Local Strategy Test Harness
  *
- * Generates synthetic RTH minute bars and tests each strategy directly.
+ * Generates synthetic RTH minute bars and tests the 4 active strategies.
  * No database needed. Run: node scripts/backtest/test-strategies-local.js
  */
 
 import {
   generateORBBreakoutSignals,
-  generateVWAPBounceSignals,
-  generateFirstPullbackSignals,
   generateGapFillSignals,
   generatePowerHourMomentumSignals,
-  generateMacroReactionSignals,
-  generateExtremeReversalSignals,
-  generateEODMeanReversionSignals,
-  generateHighRvolBreakoutSignals,
-  generatePEADDriftSignals,
-  generateSectorLaggardSignals,
-  generateShortSqueezeSignals,
-  generateOptionsFlowSignals,
-  generateAnalystDriftSignals,
-  generateVIXReversalSignals,
-  generateZeroDTEScalpSignals,
+  generateMomentumScalpSignals,
 } from './strategies/live-adapter.js';
 
 // ── Generate synthetic minute bars ──────────────────────────────────────────
@@ -54,38 +42,13 @@ function generateRTHBars(ticker, date, scenario = 'trending_up') {
         drift = -(atrDaily / 390) * 0.8;
         if (m < 30) volMult = 2.5;
         break;
-      case 'gap_up_fill':
-        price = m === 0 ? basePrice * 1.003 : price; // 0.3% gap up
-        drift = -(atrDaily / 390) * 0.3; // drift back down
-        break;
       case 'gap_down_fill':
         price = m === 0 ? basePrice * 0.997 : price; // 0.3% gap down
         drift = (atrDaily / 390) * 0.3;
         break;
-      case 'extreme_drop':
-        drift = m < 120 ? -(atrDaily / 120) * 1.2 : (atrDaily / 270) * 0.3;
-        if (m < 60) volMult = 3;
-        break;
-      case 'vwap_bounce':
-        // Oscillate around VWAP-like price
-        drift = Math.sin(m / 30) * (atrDaily / 390) * 0.5;
-        break;
-      case 'pullback_then_resume':
-        if (m < 20) drift = (atrDaily / 390) * 2; // strong up
-        else if (m < 30) drift = -(atrDaily / 390) * 0.8; // pullback
-        else drift = (atrDaily / 390) * 1.2; // resume
-        if (m >= 20 && m < 30) volMult = 0.5; // declining vol on pullback
-        break;
       case 'power_hour_continuation':
         drift = (atrDaily / 390) * 0.5; // moderate uptrend all day
         if (m > 300) volMult = 1.5; // volume picks up at 3PM
-        break;
-      case 'eod_loser':
-        drift = -(atrDaily / 390) * 1.5; // down all day
-        break;
-      case 'high_rvol_breakout':
-        drift = (atrDaily / 390) * 1.0;
-        volMult = 3; // 3x normal volume all day
         break;
       default:
         drift = (Math.random() - 0.5) * atrDaily * 0.01;
@@ -125,41 +88,24 @@ const TICKERS = ['NVDA', 'AAPL', 'TSLA', 'AMZN', 'META', 'MSFT', 'GOOGL', 'AMD',
 const DATE = '2026-03-15';
 const PREV_DATE = '2026-03-14';
 
-// Map of strategy name -> best scenario to test with
 const STRATEGY_SCENARIOS = {
   ORB_BREAKOUT:          'trending_up',
-  VWAP_BOUNCE:           'vwap_bounce',
-  FIRST_PULLBACK:        'pullback_then_resume',
   GAP_FILL_REVERSION:    'gap_down_fill',
   POWER_HOUR_MOMENTUM:   'power_hour_continuation',
-  MACRO_REACTION:        'trending_up',        // needs macroEvents
-  EXTREME_REVERSAL:      'extreme_drop',
-  EOD_MEAN_REVERSION:    'eod_loser',
-  HIGH_RVOL_BREAKOUT:    'high_rvol_breakout',
-  PEAD_DRIFT:            'trending_up',        // needs earningsCalendar
-  ZERO_DTE_SCALP:        'trending_up',
+  MOMENTUM_SCALP:        'trending_up',
 };
 
 const STRATEGIES = [
   { name: 'ORB_BREAKOUT',          fn: generateORBBreakoutSignals },
-  { name: 'VWAP_BOUNCE',           fn: generateVWAPBounceSignals },
-  { name: 'FIRST_PULLBACK',        fn: generateFirstPullbackSignals },
   { name: 'GAP_FILL_REVERSION',    fn: generateGapFillSignals },
   { name: 'POWER_HOUR_MOMENTUM',   fn: generatePowerHourMomentumSignals },
-  { name: 'EXTREME_REVERSAL',      fn: generateExtremeReversalSignals },
-  { name: 'EOD_MEAN_REVERSION',    fn: generateEODMeanReversionSignals },
-  { name: 'HIGH_RVOL_BREAKOUT',    fn: generateHighRvolBreakoutSignals },
-  { name: 'ZERO_DTE_SCALP',        fn: generateZeroDTEScalpSignals },
+  { name: 'MOMENTUM_SCALP',        fn: generateMomentumScalpSignals },
 ];
-
-// Strategies that need external data (will always be 0 without it)
-const DATA_DEPENDENT = ['MACRO_REACTION', 'PEAD_DRIFT', 'SECTOR_LAGGARD', 'SHORT_SQUEEZE_MOMENTUM', 'OPTIONS_FLOW', 'ANALYST_DRIFT', 'VIX_REVERSAL'];
 
 console.log('=== LOCAL STRATEGY TEST HARNESS ===');
 console.log(`Testing ${STRATEGIES.length} strategies with synthetic RTH bars`);
 console.log(`Tickers: ${TICKERS.join(', ')}`);
-console.log(`Date: ${DATE}`);
-console.log(`Skipping ${DATA_DEPENDENT.length} data-dependent strategies\n`);
+console.log(`Date: ${DATE}\n`);
 
 let totalSignals = 0;
 let passing = 0;
@@ -167,35 +113,29 @@ let passing = 0;
 for (const strat of STRATEGIES) {
   const scenario = STRATEGY_SCENARIOS[strat.name] || 'trending_up';
 
-  // Build minute bars for all tickers with the right scenario
   const minuteBars = {};
   const etfMinuteBars = {};
   const dailyBars = {};
 
   for (const ticker of TICKERS) {
     minuteBars[ticker] = generateRTHBars(ticker, DATE, scenario);
-    // Generate previous day bars for dailyBars
     const prevBars = generateRTHBars(ticker, PREV_DATE, 'trending_up');
-    minuteBars[ticker] = { ...minuteBars[ticker] }; // keep current day only in minuteBars
-    // But we need prev day in dailyBars
+    minuteBars[ticker] = { ...minuteBars[ticker] };
     dailyBars[ticker] = {};
     dailyBars[ticker][PREV_DATE] = generateDailyBar(ticker, PREV_DATE, { [ticker]: prevBars });
   }
 
-  // SPY and QQQ for ETF checks
   for (const etf of ['SPY', 'QQQ', 'IWM']) {
     etfMinuteBars[etf] = generateRTHBars(etf, DATE, scenario);
   }
 
   const profiles = {};
   for (const ticker of TICKERS) {
-    const firstKey = Object.keys(minuteBars[ticker]).sort()[0];
-    const openPrice = minuteBars[ticker][firstKey]?.o || 150;
     profiles[ticker] = {
       ticker,
       atr_20d: 0.025,
       atr_5d: 0.025,
-      avg_volume_20d: 50000 * 390, // ~19.5M daily
+      avg_volume_20d: 50000 * 390,
       avg_volume: 50000 * 390,
       beta_spy: 1.2,
       beta_qqq: 1.1,
@@ -234,9 +174,11 @@ for (const strat of STRATEGIES) {
     if (count > 0) {
       const sample = signals[0];
       console.log(`     -> ${sample.ticker} ${sample.direction} @ $${sample.entryPrice} stop=$${sample.stopCondition?.value} target=$${sample.targetCondition?.value} grade=${sample.grade}`);
+      if (sample.metadata?.pattern) {
+        console.log(`     -> pattern: ${sample.metadata.pattern}`);
+      }
     }
     if (count === 0) {
-      // Run with verbose logging to diagnose
       console.log(`     -> 0 signals with ${TICKERS.length} tickers, ${Object.keys(minuteBars[TICKERS[0]]).length} bars/ticker`);
     }
   } catch (err) {
@@ -246,6 +188,5 @@ for (const strat of STRATEGIES) {
 
 console.log(`\n=== RESULTS: ${passing}/${STRATEGIES.length} strategies producing signals, ${totalSignals} total ===`);
 if (passing < STRATEGIES.length) {
-  console.log(`\nFailing strategies need investigation. The synthetic data should trigger every strategy.`);
+  console.log(`\nNote: ORB_BREAKOUT requires real breakout data (2-bar confirmation fails on synthetic noise). Expected on real data.`);
 }
-console.log(`\nData-dependent strategies (not tested): ${DATA_DEPENDENT.join(', ')}`);

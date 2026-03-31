@@ -127,13 +127,13 @@ export async function fetchAllDataFromDB(config, tickers) {
   // ETF minute bars (SPY/QQQ) — critical for regime detection
   // If not in DB, fetch from Alpaca API (real data >> synthetic flat bars)
   const etfMinuteBars = {};
-  for (const etf of ['SPY', 'QQQ']) {
+  for (const etf of ['SPY', 'QQQ', 'IWM']) {
     etfMinuteBars[etf] = minuteBars[etf] || {};
   }
 
   if (Object.keys(etfMinuteBars.SPY).length === 0 && API_HEADERS['APCA-API-KEY-ID']) {
-    console.log('[DATA-DB] No SPY/QQQ bars in DB — fetching from Alpaca API for accurate regime detection');
-    for (const etf of ['SPY', 'QQQ']) {
+    console.log('[DATA-DB] No SPY/QQQ/IWM bars in DB — fetching from Alpaca API');
+    for (const etf of ['SPY', 'QQQ', 'IWM']) {
       try {
         const apiBars = await fetchBarsFromAPI(etf, '1Min', startDate, endDate, 'sip');
         for (const bar of apiBars) {
@@ -158,7 +158,7 @@ export async function fetchAllDataFromDB(config, tickers) {
         console.warn(`[DATA-DB] Failed to fetch ${etf} from API: ${err.message}`);
       }
     }
-    console.log(`[DATA-DB] SPY bars: ${Object.keys(etfMinuteBars.SPY).length}, QQQ bars: ${Object.keys(etfMinuteBars.QQQ).length}`);
+    console.log(`[DATA-DB] SPY bars: ${Object.keys(etfMinuteBars.SPY).length}, QQQ bars: ${Object.keys(etfMinuteBars.QQQ).length}, IWM bars: ${Object.keys(etfMinuteBars.IWM || {}).length}`);
   }
 
   // VIX — try VIXY ETF as proxy (VIX index not available via /v2/stocks)

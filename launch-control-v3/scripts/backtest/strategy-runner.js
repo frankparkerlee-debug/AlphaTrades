@@ -1,8 +1,10 @@
 /**
  * Multi-Strategy Backtest Runner
  *
- * Orchestrates all 16 research-backed strategies (9 day, 6 swing, 1 scalp),
- * applies portfolio constraints, simulates single-leg P&L, and feeds
+ * 4 focused strategies with academic backing and TA-driven entries:
+ *   ORB_BREAKOUT, GAP_FILL_REVERSION, POWER_HOUR_MOMENTUM, MOMENTUM_SCALP
+ *
+ * Applies portfolio constraints, simulates single-leg P&L, and feeds
  * validation pipeline.
  *
  * Returns a unified results object for frontend consumption.
@@ -28,27 +30,11 @@ import { query } from '../../src/data/db.js';
 
 // Spread-based strategies decommissioned — margin account, no documented edge
 
-// Live strategy imports (cash account — single-leg options with confluence)
+// 4 focused strategies — academic backing + TA-driven entries
 import {
-  // Day trades (9)
   generateORBBreakoutSignals,
-  generateVWAPBounceSignals,
-  generateFirstPullbackSignals,
   generateGapFillSignals,
   generatePowerHourMomentumSignals,
-  generateMacroReactionSignals,
-  generateExtremeReversalSignals,
-  generateEODMeanReversionSignals,
-  generateHighRvolBreakoutSignals,
-  // Swing trades (6)
-  generatePEADDriftSignals,
-  generateSectorLaggardSignals,
-  generateShortSqueezeSignals,
-  generateOptionsFlowSignals,
-  generateAnalystDriftSignals,
-  generateVIXReversalSignals,
-  // Scalp (2)
-  generateZeroDTEScalpSignals,
   generateMomentumScalpSignals,
 } from './strategies/live-adapter.js';
 
@@ -57,35 +43,13 @@ import {
 const MAX_CONCURRENT_POSITIONS = 5;    // max open positions at once
 const MAX_DAILY_RISK_PCT       = 0.40; // max 40% of account at risk per day
 
-// Live strategies (cash account, single-leg options, confluence-validated)
-const LIVE_STRATEGIES = [
-  // Day trades (primary) — all intraday, holdDays: 0
-  { name: 'ORB_BREAKOUT',          fn: generateORBBreakoutSignals,       intraday: true },
-  { name: 'VWAP_BOUNCE',           fn: generateVWAPBounceSignals,        intraday: true },
-  { name: 'FIRST_PULLBACK',        fn: generateFirstPullbackSignals,     intraday: true },
-  { name: 'GAP_FILL_REVERSION',    fn: generateGapFillSignals,           intraday: true },
-  { name: 'POWER_HOUR_MOMENTUM',   fn: generatePowerHourMomentumSignals, intraday: true },
-  { name: 'MACRO_REACTION',        fn: generateMacroReactionSignals,     intraday: true },
-  { name: 'EXTREME_REVERSAL',      fn: generateExtremeReversalSignals,   intraday: true },
-  { name: 'EOD_MEAN_REVERSION',    fn: generateEODMeanReversionSignals,  intraday: true },
-  { name: 'HIGH_RVOL_BREAKOUT',    fn: generateHighRvolBreakoutSignals,  intraday: true },
-  // Swing trades (secondary) — holdDays > 0
-  { name: 'PEAD_DRIFT',            fn: generatePEADDriftSignals,         intraday: false },
-  { name: 'SECTOR_LAGGARD',        fn: generateSectorLaggardSignals,     intraday: false },
-  { name: 'SHORT_SQUEEZE_MOMENTUM',fn: generateShortSqueezeSignals,      intraday: false },
-  { name: 'OPTIONS_FLOW',          fn: generateOptionsFlowSignals,       intraday: false },
-  { name: 'ANALYST_DRIFT',         fn: generateAnalystDriftSignals,      intraday: false },
-  { name: 'VIX_REVERSAL',          fn: generateVIXReversalSignals,       intraday: false },
-  // Scalp
-  { name: 'ZERO_DTE_SCALP',        fn: generateZeroDTEScalpSignals,      intraday: true },
-  { name: 'MOMENTUM_SCALP',        fn: generateMomentumScalpSignals,     intraday: true },
+// 4 strategies — each with documented edge and TA-driven entries
+const STRATEGIES = [
+  { name: 'ORB_BREAKOUT',          fn: generateORBBreakoutSignals,       intraday: true },  // Zarattini et al. 2024
+  { name: 'GAP_FILL_REVERSION',    fn: generateGapFillSignals,           intraday: true },  // 89-93% small gap fill rate
+  { name: 'POWER_HOUR_MOMENTUM',   fn: generatePowerHourMomentumSignals, intraday: true },  // Swiss Finance Institute
+  { name: 'MOMENTUM_SCALP',        fn: generateMomentumScalpSignals,     intraday: true },  // TA scalp: level rejection, burst, continuation
 ];
-
-// SPREAD_STRATEGIES decommissioned — no documented edge, worse than coin flip
-const SPREAD_STRATEGIES = [];
-
-// Default: run live strategies (cash account)
-const STRATEGIES = LIVE_STRATEGIES;
 
 /**
  * Run multi-strategy backtest.
@@ -115,9 +79,26 @@ export async function runMultiStrategyBacktest(startDate, endDate, accountSize =
     };
   }
 
+  // Include ETFs (SPY, QQQ, IWM) in scanning universe for scalp strategies.
+  // They have minute bars in etfMinuteBars and are high-liquidity targets.
+  const ETF_TICKERS = ['SPY', 'QQQ', 'IWM'];
+  for (const etf of ETF_TICKERS) {
+    if (!profiles[etf]) {
+      profiles[etf] = {
+        ticker: etf,
+        atr_20d: 0.012,       // ETFs have lower volatility than individual stocks
+        atr_5d: 0.012,
+        sector_etf: null,
+        avg_volume_20d: 80000000, // high liquidity
+        avg_volume: 80000000,
+        options_liquidity_score: 1.0,
+      };
+    }
+  }
+
   let tickers = tickerFilter || Object.keys(profiles);
   tickers = tickers.filter(t => profiles[t]);
-  console.log(`[MULTI-STRAT] ${tickers.length} tickers`);
+  console.log(`[MULTI-STRAT] ${tickers.length} tickers (including ETFs: ${ETF_TICKERS.join(', ')})`);
 
   // 2. Fetch bar data
   const config = { startDate, endDate, tickers, accountSize };
@@ -143,6 +124,13 @@ export async function runMultiStrategyBacktest(startDate, endDate, accountSize =
   // Merge profiles
   for (const [ticker, extended] of Object.entries(stratData.profiles)) {
     profiles[ticker] = { ...profiles[ticker], ...extended };
+  }
+
+  // 3b. Merge ETF bars into minuteBars so strategies can scan SPY/QQQ/IWM
+  for (const etf of ETF_TICKERS) {
+    if (data.etfMinuteBars[etf] && !data.minuteBars[etf]) {
+      data.minuteBars[etf] = data.etfMinuteBars[etf];
+    }
   }
 
   // 4. Generate signals for each strategy across all trading days

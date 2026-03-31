@@ -393,20 +393,21 @@ export const SETUP_RUBRICS = {
 
   MOMENTUM_SCALP: {
     factors: [
-      { name: 'abs_move_pct', weight: 50, score: (m) => {
-        const move = m.abs_move_pct || 0;
-        if (move >= 0.8) return 100;
-        if (move >= 0.5) return 75;
-        if (move >= 0.3) return 50;
-        return 20;
+      { name: 'pattern', weight: 35, score: (m) => {
+        if (m.pattern === 'MOMENTUM_BURST') return 100;
+        if (m.pattern === 'LEVEL_REJECTION') return 85;
+        if (m.pattern === 'TREND_CONTINUATION') return 90;
+        return 30;
       }},
-      { name: 'vol_ratio', weight: 50, score: (m) => {
+      { name: 'vol_ratio', weight: 25, score: (m) => {
         const vr = m.vol_ratio || 0;
         if (vr >= 2.0) return 100;
         if (vr >= 1.5) return 75;
         if (vr >= 1.0) return 50;
         return 20;
       }},
+      { name: 'candle_type', weight: 20, score: (m) => scoreCandle(m.candle_type) },
+      { name: 'spy_aligned', weight: 20, score: (m) => m.spy_aligned ? 100 : 30 },
     ],
   },
 };

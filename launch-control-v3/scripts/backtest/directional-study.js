@@ -13,6 +13,13 @@ const TIME_HORIZONS = [5, 10, 15, 30, 45, 60, 90, 120];
 const HORIZON_LABELS = TIME_HORIZONS.map(m => `${m}min`);
 const CAPTURE_THRESHOLD_ATR = 0.3;
 
+// Directional correctness: did price ever move >= $0.05 in our direction?
+// Simple, clear, binary. Measured using bar high (CALL) or bar low (PUT).
+// On stocks at $100-500, $0.05 is noise. This intentionally sets a LOW bar --
+// it identifies signals that were immediately and totally wrong (price never
+// went even $0.05 our way). Strategies should aim for 90%+ on this metric.
+const DIRECTIONAL_THRESHOLD_DOLLARS = 0.05;
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /**
@@ -105,12 +112,9 @@ export function runDirectionalStudy(signals, minuteBars, etfMinuteBars) {
 
   // Log summary
   for (const r of results) {
-    const acc30 = r.directionAccuracy['30min'];
-    const acc60 = r.directionAccuracy['60min'];
     console.log(
       `[DIRECTIONAL] ${r.strategyName}: ${r.totalSignals} sigs | ` +
-      `30m=${acc30 ? acc30.pct + '%' : 'N/A'} | ` +
-      `60m=${acc60 ? acc60.pct + '%' : 'N/A'} | ` +
+      `directional=${r.directionalAccuracy}% (${r.directionalCorrectCount}/${r.totalSignals} moved $0.05+) | ` +
       `MFE/MAE=${r.mfeMaeRatio.toFixed(2)} | ` +
       `capture=${(r.captureRate * 100).toFixed(0)}%`
     );
@@ -140,6 +144,7 @@ function analyzeStrategy(stratName, signals, minuteBars, etfMinuteBars) {
   const maeValues = [];     // in ATR (positive = adverse)
   const mfeMinutes = [];    // time to MFE
   let captureCount = 0;
+  let directionalCorrectCount = 0;
 
   for (const sig of signals) {
     const detail = analyzeSignal(sig, minuteBars, etfMinuteBars);
@@ -169,6 +174,11 @@ function analyzeStrategy(stratName, signals, minuteBars, etfMinuteBars) {
     // Capture rate: did price move > threshold ATR in the right direction at any point?
     if (detail.mfe !== null && detail.mfe >= CAPTURE_THRESHOLD_ATR) {
       captureCount++;
+    }
+
+    // Directional correctness: any bar moved >= $0.05 in trade direction
+    if (detail.directionallyCorrect) {
+      directionalCorrectCount++;
     }
   }
 
@@ -222,10 +232,17 @@ function analyzeStrategy(stratName, signals, minuteBars, etfMinuteBars) {
     ? parseFloat((captureCount / signalDetails.length).toFixed(3))
     : 0;
 
+  // Directional accuracy: % of signals where price moved >= $0.05 in trade direction
+  const directionalAccuracy = signalDetails.length > 0
+    ? parseFloat((directionalCorrectCount / signalDetails.length * 100).toFixed(1))
+    : 0;
+
   return {
     strategyName: stratName,
     totalSignals: signalDetails.length,
-    directionAccuracy,
+    directionalAccuracy,     // PRIMARY metric: % where any bar moved $0.05+ in our direction
+    directionalCorrectCount,
+    directionByHorizon: directionAccuracy,  // secondary: time-horizon breakdown
     avgMoveATR,
     mfeStats,
     maeStats,
@@ -370,6 +387,13 @@ function analyzeSignal(sig, minuteBars, etfMinuteBars) {
     }
   }
 
+  // MFE/MAE in dollar terms (not ATR-normalized)
+  const mfeDollars = parseFloat((mfe * dollarATR).toFixed(2));
+  const maeDollars = parseFloat((Math.abs(mae) * dollarATR).toFixed(2));
+
+  // Directional correctness: did price ever move >= $0.05 in our direction?
+  const directionallyCorrect = mfeDollars >= DIRECTIONAL_THRESHOLD_DOLLARS;
+
   return {
     ticker,
     date,
@@ -378,6 +402,9 @@ function analyzeSignal(sig, minuteBars, etfMinuteBars) {
     moves: movesByHorizon,
     mfe: parseFloat(mfe.toFixed(3)),
     mae: parseFloat(mae.toFixed(3)),
+    mfeDollars,
+    maeDollars,
+    directionallyCorrect,
     mfeMinutes,
     spyMoveAtMFE,
   };

@@ -82,27 +82,11 @@ function confidenceToGrade(confidence, strategy) {
  * Hold time configuration per strategy.
  */
 const HOLD_CONFIG = {
-  // Day trades (primary)
   // Hold times tuned by directional study: exit before edge decays
   ORB_BREAKOUT:          { maxHoldMinutes: 25,  holdDays: 0 }, // 62% correct at 5-30 min, drops to 37% at 60
-  VWAP_BOUNCE:           { maxHoldMinutes: 15,  holdDays: 0 }, // Edge at 5-10 min, reverses after 15
-  FIRST_PULLBACK:        { maxHoldMinutes: 30,  holdDays: 0 },
-  GAP_FILL_REVERSION:    { maxHoldMinutes: 30,  holdDays: 0 },
+  GAP_FILL_REVERSION:    { maxHoldMinutes: 30,  holdDays: 0 }, // one check per day, gap fill takes ~30 min
   POWER_HOUR_MOMENTUM:   { maxHoldMinutes: 10,  holdDays: 0 }, // 72% at 5 min, 44% at 15 -- quick scalp
-  MACRO_REACTION:        { maxHoldMinutes: 30,  holdDays: 0 },
-  EXTREME_REVERSAL:      { maxHoldMinutes: 30,  holdDays: 0 },
-  EOD_MEAN_REVERSION:    { maxHoldMinutes: 15,  holdDays: 0 },
-  HIGH_RVOL_BREAKOUT:    { maxHoldMinutes: 25,  holdDays: 0 },
-  // Swing trades (secondary)
-  PEAD_DRIFT:            { maxHoldMinutes: 390, holdDays: 3 },
-  SECTOR_LAGGARD:        { maxHoldMinutes: 390, holdDays: 2 },
-  SHORT_SQUEEZE_MOMENTUM:{ maxHoldMinutes: 390, holdDays: 3 },
-  OPTIONS_FLOW:          { maxHoldMinutes: 390, holdDays: 5 },
-  ANALYST_DRIFT:         { maxHoldMinutes: 390, holdDays: 20 },
-  VIX_REVERSAL:          { maxHoldMinutes: 390, holdDays: 20 },
-  // Scalp
-  ZERO_DTE_SCALP:        { maxHoldMinutes: 15,  holdDays: 0 },
-  MOMENTUM_SCALP:        { maxHoldMinutes: 30,  holdDays: 0 },
+  MOMENTUM_SCALP:        { maxHoldMinutes: 8,   holdDays: 0 }, // pure TA scalp: 2-7 min holds
 };
 
 /**
@@ -599,83 +583,128 @@ export function generateORBBreakoutSignals(date, dayData, context) {
     const rangeWidthPct = or.width / sessionOpen;
     if (rangeWidthPct < 0.002 || rangeWidthPct > 0.015) continue;
 
-    // Scan bars 5-60 for FIRST breakout
-    const maxOffset = Math.min(60, allKeys.length - 1);
+    // Scan bars 5-55 for FIRST breakout, then require 2-bar confirmation.
+    // TA insight: winners show +0.08-0.18 ATR at 5min. Losers stall immediately.
+    // By waiting 2 bars, we filter false breakouts that collapse back into range.
+    const atr = profile.atr_20d || 0.025;
+    const atrDollar = atr * sessionOpen;
+    const maxOffset = Math.min(55, allKeys.length - 3); // leave room for confirmation bars
     for (let i = RANGE_BARS; i <= maxOffset; i++) {
       if (seen.has(ticker)) break;
 
-      const checkKey = allKeys[i];
-      const bar = tickerMinutes[checkKey];
-      if (!bar) continue;
+      const breakoutKey = allKeys[i];
+      const breakoutBar = tickerMinutes[breakoutKey];
+      if (!breakoutBar) continue;
 
-      const breakAbove = bar.c > or.high;
-      const breakBelow = bar.c < or.low;
+      const breakAbove = breakoutBar.c > or.high;
+      const breakBelow = breakoutBar.c < or.low;
       if (!breakAbove && !breakBelow) continue;
 
       const direction = breakAbove ? 'CALL' : 'PUT';
 
-      // Volume check: current bar volume vs range avg
-      const volRatio = or.avgVolume > 0 ? (bar.v || 0) / or.avgVolume : 0;
+      // Volume check: breakout bar volume vs range avg
+      const volRatio = or.avgVolume > 0 ? (breakoutBar.v || 0) / or.avgVolume : 0;
       if (volRatio < 1.3) continue;
 
-      // Candle quality
-      const candleAnalysis = analyzeCandle(bar);
-      if (candleAnalysis.bodyRatio < 0.50) continue;
+      // Candle quality on breakout bar
+      const breakoutCandle = analyzeCandle(breakoutBar);
+      if (breakoutCandle.bodyRatio < 0.50) continue;
 
-      // VWAP alignment
-      const bars = getBarsUpTo(minuteBars, ticker, date, checkKey);
+      // ── 2-bar confirmation ──
+      // Check that price HOLDS beyond the range for 2 bars after breakout.
+      // This is the key TA filter: real breakouts don't stall.
+      const confBar1 = tickerMinutes[allKeys[i + 1]];
+      const confBar2 = tickerMinutes[allKeys[i + 2]];
+      if (!confBar1 || !confBar2) continue;
+
+      // Confirmation: both bars must close beyond the breakout level
+      if (direction === 'CALL') {
+        if (confBar1.c <= or.high || confBar2.c <= or.high) continue;
+        // Price should be advancing: confBar2 close >= breakout close (no stall)
+        if (confBar2.c < breakoutBar.c) continue;
+      } else {
+        if (confBar1.c >= or.low || confBar2.c >= or.low) continue;
+        if (confBar2.c > breakoutBar.c) continue;
+      }
+
+      // ── Bar structure quality on confirmation bars ──
+      // Winners show momentum bars: large bodies, small wicks
+      const confCandle1 = analyzeCandle(confBar1);
+      const confCandle2 = analyzeCandle(confBar2);
+      // At least 1 of 2 confirmation bars should be a strong candle (body > 50%)
+      const hasStrongConf = confCandle1.bodyRatio >= 0.50 || confCandle2.bodyRatio >= 0.50;
+
+      // ── Confirmation volume ──
+      // At least one confirmation bar should have decent volume (>= 0.8x breakout bar)
+      const confVolOk = (confBar1.v >= breakoutBar.v * 0.8) || (confBar2.v >= breakoutBar.v * 0.8);
+
+      // Entry at confirmation bar close (bar i+2), not the breakout bar
+      const entryBar = confBar2;
+      const entryKey = allKeys[i + 2];
+      const entryPrice = entryBar.c;
+
+      // VWAP alignment (using bars up to entry, not breakout)
+      const bars = getBarsUpTo(minuteBars, ticker, date, entryKey);
       const vwap = computeVWAP(bars);
-      if (direction === 'CALL' && bar.c <= vwap) continue;
-      if (direction === 'PUT' && bar.c >= vwap) continue;
+      if (direction === 'CALL' && entryPrice <= vwap) continue;
+      if (direction === 'PUT' && entryPrice >= vwap) continue;
 
       // SPY alignment
-      const spyChange = getETFChange(etfMinuteBars, 'SPY', date, checkKey);
+      const spyChange = getETFChange(etfMinuteBars, 'SPY', date, entryKey);
       const spyAligned = (direction === 'CALL' && spyChange > 0) || (direction === 'PUT' && spyChange < 0);
 
       // Confluence
-      const confluenceResult = checkConfluence(bars, direction, { vwap, currentPrice: bar.c }, { minFactors: 3 });
+      const confluenceResult = checkConfluence(bars, direction, { vwap, currentPrice: entryPrice }, { minFactors: 3 });
       if (!confluenceResult.pass) continue;
 
-      // Engulfing
+      // Engulfing on breakout bar pair
       let engulfing = false;
       if (bars.length >= 2) {
         const engulfResult = direction === 'CALL'
-          ? detectBullishEngulfing(bars.slice(-2))
-          : detectBearishEngulfing(bars.slice(-2));
+          ? detectBullishEngulfing([tickerMinutes[allKeys[i - 1]] || breakoutBar, breakoutBar])
+          : detectBearishEngulfing([tickerMinutes[allKeys[i - 1]] || breakoutBar, breakoutBar]);
         engulfing = engulfResult.detected;
       }
 
-      // Confidence scoring
+      // Confidence scoring -- now includes confirmation quality
       let confidence = 60;
-      if (candleAnalysis.type.includes('MARUBOZU')) confidence += 6;
-      else if (candleAnalysis.type.includes('STRONG')) confidence += 4;
+      if (breakoutCandle.type.includes('MARUBOZU')) confidence += 6;
+      else if (breakoutCandle.type.includes('STRONG')) confidence += 4;
       else confidence += 2;
       if (engulfing) confidence += 4;
       if (volRatio >= 1.5) confidence += 5;
-      else confidence += 3; // already passed 1.3x gate
+      else confidence += 3;
       if (spyAligned) confidence += 3;
-      confidence += 3; // VWAP aligned (already passed gate)
+      confidence += 3; // VWAP aligned
       confidence += Math.max(0, confluenceResult.confirming * 2);
       confidence -= confluenceResult.opposing * 2;
       confidence += 5; // first breakout bonus
+      // NEW: confirmation quality bonuses
+      if (hasStrongConf) confidence += 3; // strong confirmation bars
+      if (confVolOk) confidence += 2; // volume sustained through confirmation
+      // Penalty if confirmation is weak
+      if (!hasStrongConf && !confVolOk) confidence -= 5;
       confidence = Math.max(60, Math.min(95, confidence));
 
       // Stop: opposite edge of opening range. Target: 1.5x risk.
       const stopPrice = direction === 'CALL' ? +or.low.toFixed(2) : +or.high.toFixed(2);
-      const risk = Math.abs(bar.c - (direction === 'CALL' ? or.low : or.high));
+      const risk = Math.abs(entryPrice - (direction === 'CALL' ? or.low : or.high));
       const targetPrice = direction === 'CALL'
-        ? +(bar.c + risk * 1.5).toFixed(2)
-        : +(bar.c - risk * 1.5).toFixed(2);
+        ? +(entryPrice + risk * 1.5).toFixed(2)
+        : +(entryPrice - risk * 1.5).toFixed(2);
 
       seen.add(ticker);
-      const _orbAtrDollar = (profile.atr_20d || 0.025) * bar.c;
-      const _orbEnrich = enrichMetadata(bars, ticker, date, bar.c, vwap, sessionOpen, _orbAtrDollar, etfMinuteBars, checkKey);
-      signals.push(buildSignal('ORB_BREAKOUT', date, checkKey, ticker, direction, confidence, bar.c, stopPrice, targetPrice, profile, {
+      const _orbAtrDollar = atrDollar;
+      const _orbEnrich = enrichMetadata(bars, ticker, date, entryPrice, vwap, sessionOpen, _orbAtrDollar, etfMinuteBars, entryKey);
+      signals.push(buildSignal('ORB_BREAKOUT', date, entryKey, ticker, direction, confidence, entryPrice, stopPrice, targetPrice, profile, {
         range_high: +or.high.toFixed(2),
         range_low: +or.low.toFixed(2),
         range_width_pct: +(rangeWidthPct * 100).toFixed(2),
-        volume_ratio: +volRatio.toFixed(2),
-        candle_type: candleAnalysis.type,
+        breakout_vol_ratio: +volRatio.toFixed(2),
+        breakout_candle: breakoutCandle.type,
+        conf_bar1_body: +confCandle1.bodyRatio.toFixed(2),
+        conf_bar2_body: +confCandle2.bodyRatio.toFixed(2),
+        conf_vol_sustained: confVolOk,
         engulfing,
         spy_aligned: spyAligned,
         vwap_aligned: true,
@@ -1181,33 +1210,62 @@ export function generatePowerHourMomentumSignals(date, dayData, context) {
     if (direction === 'CALL' && currentPrice <= vwap) { diag.noVwap++; continue; }
     if (direction === 'PUT' && currentPrice >= vwap) { diag.noVwap++; continue; }
 
-    // Reversal bar count in last 10 bars (soft: count, don't gate)
+    // ── Micro-trend structure (last 5 bars) ──
+    // The edge at power hour is CONTINUATION. Last 5 bars must show directional structure.
+    // CALL: higher lows (each bar's low >= prev bar's low). PUT: lower highs.
+    const last5 = bars.slice(-5);
+    let microTrendBars = 0;
+    for (let t = 1; t < last5.length; t++) {
+      if (direction === 'CALL' && last5[t].l >= last5[t - 1].l) microTrendBars++;
+      if (direction === 'PUT' && last5[t].h <= last5[t - 1].h) microTrendBars++;
+    }
+    const hasMicroTrend = microTrendBars >= 3; // 3 of 4 pairs must confirm
+    if (microTrendBars < 2) { diag.reversal++; continue; } // hard gate: at least 2
+
+    // Reversal bar count in last 10 bars
     const last10 = bars.slice(-10);
-    const reversalThreshold = 0.2 * atrDollar; // Relaxed from 0.15
+    const reversalThreshold = 0.2 * atrDollar;
     let reversalCount = 0;
     for (const bar of last10) {
       const barMove = bar.c - bar.o;
       if (direction === 'CALL' && barMove < -reversalThreshold) reversalCount++;
       if (direction === 'PUT' && barMove > reversalThreshold) reversalCount++;
     }
-    // Only gate on majority reversal (5+ of 10 bars reversing = real reversal)
     if (reversalCount >= 5) { diag.reversal++; continue; }
 
-    // Consolidation/flag pattern: last 15 bars range < 0.3 ATR
+    // ── Bar-over-bar volume check (last 3 bars) ──
+    // Power hour moves that work have volume stepping up. Coarse block comparison misses this.
+    const last3 = bars.slice(-3);
+    let volSteppingUp = 0;
+    for (let t = 1; t < last3.length; t++) {
+      if ((last3[t].v || 0) > (last3[t - 1].v || 0)) volSteppingUp++;
+    }
+    const hasVolStep = volSteppingUp >= 1; // at least 1 of 2 steps increasing
+
+    // Consolidation/flag pattern: last 15 bars range
     const last15 = bars.slice(-15);
     const consolHigh = Math.max(...last15.map(b => b.h));
     const consolLow = Math.min(...last15.map(b => b.l));
     const consolRange = consolHigh - consolLow;
     const hasConsolidation = consolRange < 0.3 * atrDollar;
-    // Not a hard gate, but used for confidence
 
-    // Volume increasing: compare last 15 bars avg to prior 15 bars avg
+    // ── Breakout from consolidation ──
+    // Current bar should be at or near session extreme (not mid-range)
+    const sessionHigh = Math.max(...bars.map(b => b.h));
+    const sessionLow = Math.min(...bars.map(b => b.l));
+    const sessionRange = sessionHigh - sessionLow;
+    const atExtreme = sessionRange > 0 && (
+      (direction === 'CALL' && (currentPrice - sessionLow) / sessionRange >= 0.75) ||
+      (direction === 'PUT' && (sessionHigh - currentPrice) / sessionRange >= 0.75)
+    );
+
+    // Volume block comparison (kept for context)
     const prior15 = bars.slice(-30, -15);
     const last15Vol = last15.reduce((s, b) => s + (b.v || 0), 0) / last15.length;
     const prior15Vol = prior15.length > 0 ? prior15.reduce((s, b) => s + (b.v || 0), 0) / prior15.length : last15Vol;
     const volTrend = prior15Vol > 0 ? last15Vol / prior15Vol : 1;
 
-    // SPY alignment (soft bonus, not hard gate)
+    // SPY alignment (soft bonus)
     const spyChange = getETFChange(etfMinuteBars, 'SPY', date, checkKey);
     const spyAligned = (direction === 'CALL' && spyChange > 0) || (direction === 'PUT' && spyChange < 0);
     diag.passed++;
@@ -1227,23 +1285,26 @@ export function generatePowerHourMomentumSignals(date, dayData, context) {
     // Candle quality
     const candleAnalysis = analyzeCandle(bars[bars.length - 1]);
 
-    // Confidence
+    // Confidence -- now rewards micro-trend quality, bar-over-bar volume, and position at extreme
     let confidence = 60;
     if (candleAnalysis.type.includes('MARUBOZU')) confidence += 6;
     else if (candleAnalysis.type.includes('STRONG')) confidence += 4;
     else confidence += 2;
     if (engulfing) confidence += 4;
-    if (volTrend >= 1.3) confidence += 5;
-    else if (volTrend >= 1.0) confidence += 3;
-    if (spyAligned) confidence += 3; // SPY bonus (soft)
-    confidence += 3; // VWAP aligned (hard gate)
-    if (reversalCount === 0) confidence += 3; // clean trend bonus
+    if (volTrend >= 1.3) confidence += 3;
+    else if (volTrend >= 1.0) confidence += 1;
+    if (hasVolStep) confidence += 3; // NEW: bar-over-bar volume stepping up
+    if (spyAligned) confidence += 3;
+    confidence += 3; // VWAP aligned
+    if (reversalCount === 0) confidence += 2;
     confidence += Math.max(0, confluenceResult.confirming * 2);
     confidence -= confluenceResult.opposing * 2;
     if (moveATRs >= 0.5) confidence += 4;
-    else confidence += 3;
-    if (hasConsolidation) confidence += 3;
-    if (confluenceResult.pass) confidence += 3;
+    else confidence += 2;
+    if (hasConsolidation) confidence += 2;
+    if (hasMicroTrend) confidence += 4; // NEW: strong micro-trend structure
+    if (atExtreme) confidence += 3; // NEW: at session extreme = real breakout
+    if (confluenceResult.pass) confidence += 2;
     confidence = Math.max(60, Math.min(95, confidence));
 
     // Stop: below consolidation low/high. Target: 2:1 R:R.
@@ -2510,30 +2571,39 @@ export function generateZeroDTEScalpSignals(date, dayData, context) {
 /**
  * MOMENTUM_SCALP
  *
- * Thesis: When a stock moves significantly in one direction with volume
- * confirmation, ride the momentum with a tight trailing stop. No complex
- * pattern matching -- just follow the move.
+ * Pure TA scalp strategy. Identifies high-opportunity setups from price action
+ * and rides them for 1-5 minutes. Three patterns, each with a clear structural reason:
+ *
+ * 1. LEVEL_REJECTION: Price touches a key level (VWAP, session H/L, OR H/L, prev day H/L)
+ *    and prints a rejection wick. Scalp the bounce. WHY: Institutional liquidity pools at
+ *    key levels cause predictable reactions.
+ *
+ * 2. MOMENTUM_BURST: Consolidation (5+ bars in tight range) breaks with a large-body
+ *    candle + volume spike. Ride the initial thrust. WHY: Compression resolves into
+ *    expansion -- stored energy releases directionally.
+ *
+ * 3. TREND_CONTINUATION: 5+ bars trending (higher lows / lower highs), 1-2 bar pullback
+ *    on declining volume, then a continuation candle. WHY: Orderly pullbacks in a trend
+ *    are profit-taking, not reversals. First pullback has highest follow-through.
  *
  * Rules:
- *   - Check every 10 min from offset 10 to 360 (9:40 AM - 3:30 PM)
- *   - Entry: price moved >= 0.3% from 10 bars ago + volume > session average
- *   - Direction: follow the move (up -> CALL, down -> PUT)
- *   - Stop: 0.15% against entry
- *   - Target: 0.4% in direction (~2.5:1 R:R)
- *   - Max hold: 30 minutes
- *   - Max 2 signals per ticker per day, max 8 total (top by magnitude)
+ *   - Check every 5 bars from offset 15 to 370 (9:45 AM - 3:40 PM)
+ *   - Max hold: 5 minutes
+ *   - Stop: tight, pattern-specific (rejection wick, consolidation edge, pullback low)
+ *   - Target: 0.2-0.3% or 1.5:1 R:R
+ *   - Max 3 signals per ticker per day, max 10 total (top by confidence)
  */
 export function generateMomentumScalpSignals(date, dayData, context) {
-  const { minuteBars } = dayData;
+  const { minuteBars, etfMinuteBars } = dayData;
   const { profiles, tickers } = context;
   const signals = [];
   const tickerCounts = {};
-  const MAX_PER_TICKER = 2;
-  const MAX_TOTAL = 8;
+  const MAX_PER_TICKER = 3;
+  const MAX_TOTAL = 10;
 
-  // Check offsets: every 10 min from 10 to 360
+  // Check every 5 bars for faster pattern detection
   const CHECK_OFFSETS = [];
-  for (let i = 10; i <= 360; i += 10) CHECK_OFFSETS.push(i);
+  for (let i = 15; i <= 370; i += 5) CHECK_OFFSETS.push(i);
 
   for (const ticker of tickers) {
     const profile = profiles[ticker];
@@ -2543,77 +2613,245 @@ export function generateMomentumScalpSignals(date, dayData, context) {
     if (allKeys.length < 20) continue;
 
     const tickerMinutes = minuteBars[ticker] || {};
+    const atr = profile.atr_20d || profile.atr_5d || 0.025;
+    const sessionOpen = tickerMinutes[allKeys[0]]?.o;
+    if (!sessionOpen) continue;
+    const atrDollar = atr * sessionOpen;
+
+    // Precompute key levels once per ticker
+    const prevBar = findPrevDayBar(dayData.dailyBars || {}, ticker, date);
+    const or = computeOpeningRange(minuteBars, ticker, date, 5);
 
     for (const offset of CHECK_OFFSETS) {
       if (offset >= allKeys.length) continue;
       if ((tickerCounts[ticker] || 0) >= MAX_PER_TICKER) break;
 
       const checkKey = allKeys[offset];
-      const currentBar = tickerMinutes[checkKey];
-      if (!currentBar) continue;
+      const bars = getBarsUpTo(minuteBars, ticker, date, checkKey);
+      if (bars.length < 10) continue;
 
-      // Look back 10 bars for short-term momentum
-      const lookbackOffset = offset - 10;
-      if (lookbackOffset < 0 || lookbackOffset >= allKeys.length) continue;
-      const lookbackBar = tickerMinutes[allKeys[lookbackOffset]];
-      if (!lookbackBar || !lookbackBar.c || lookbackBar.c <= 0) continue;
-
+      const currentBar = bars[bars.length - 1];
       const currentPrice = currentBar.c;
-      const movePct = (currentPrice - lookbackBar.c) / lookbackBar.c;
-      const absMovePct = Math.abs(movePct);
+      const vwap = computeVWAP(bars);
 
-      // Gate 1: price moved >= 0.3% in 10 bars
-      if (absMovePct < 0.003) continue;
+      // Volume context: current bar vs recent 10-bar avg
+      const recent10 = bars.slice(-11, -1);
+      const avgVol10 = recent10.reduce((s, b) => s + (b.v || 0), 0) / recent10.length;
+      const volRatio = avgVol10 > 0 ? (currentBar.v || 0) / avgVol10 : 1;
 
-      // Gate 2: current bar volume > recent 20-bar average (not session avg -- opening bars inflate it)
-      const barsUpTo = getBarsUpTo(minuteBars, ticker, date, checkKey);
-      if (barsUpTo.length < 5) continue;
-      const recent20 = barsUpTo.slice(-20);
-      const recentVol = recent20.reduce((s, b) => s + (b.v || 0), 0) / recent20.length;
-      const currentVol = currentBar.v || 0;
-      if (recentVol <= 0 || currentVol < recentVol * 0.8) continue; // Allow 80% of recent avg
-      const volRatio = recentVol > 0 ? currentVol / recentVol : 1;
+      let pattern = null;
+      let direction = null;
+      let stopPrice = 0;
+      let targetPrice = 0;
+      let patternConfidence = 0;
 
-      // That's it for entry gates -- keep it simple
+      // ══════════════════════════════════════════════════════════════════════
+      // PATTERN 1: LEVEL REJECTION
+      // Price within 0.15% of a key level + rejection wick (>50% of bar is wick on level side)
+      // ══════════════════════════════════════════════════════════════════════
+      if (!pattern) {
+        const levels = [];
+        if (vwap > 0) levels.push({ level: vwap, source: 'vwap' });
+        if (prevBar) {
+          if (prevBar.h > 0) levels.push({ level: prevBar.h, source: 'prev_high' });
+          if (prevBar.l > 0) levels.push({ level: prevBar.l, source: 'prev_low' });
+        }
+        if (or) {
+          levels.push({ level: or.high, source: 'or_high' });
+          levels.push({ level: or.low, source: 'or_low' });
+        }
+        // Session high/low
+        const sessHigh = Math.max(...bars.map(b => b.h));
+        const sessLow = Math.min(...bars.map(b => b.l));
+        if (isFinite(sessHigh)) levels.push({ level: sessHigh, source: 'sess_high' });
+        if (isFinite(sessLow)) levels.push({ level: sessLow, source: 'sess_low' });
 
-      // Direction: follow the move
-      const direction = movePct > 0 ? 'CALL' : 'PUT';
+        for (const lv of levels) {
+          const dist = Math.abs(currentPrice - lv.level) / lv.level;
+          if (dist > 0.003) continue; // within 0.3% of level
 
-      // Confidence scoring (simple)
-      let confidence = 65;
-      if (absMovePct > 0.005) confidence += 5;
-      if (absMovePct > 0.008) confidence += 5;
-      if (volRatio > 2.0) confidence += 5;
+          const barRange = currentBar.h - currentBar.l;
+          if (barRange <= 0) continue;
+
+          // Rejection wick: price approached from below (lower wick small, upper wick large = PUT)
+          // or from above (upper wick small, lower wick large = CALL)
+          const upperWick = currentBar.h - Math.max(currentBar.o, currentBar.c);
+          const lowerWick = Math.min(currentBar.o, currentBar.c) - currentBar.l;
+
+          // Price approached level from below -> rejection = PUT (short)
+          if (currentPrice >= lv.level && upperWick > barRange * 0.40) {
+            direction = 'PUT';
+            pattern = 'LEVEL_REJECTION';
+            // Stop just above the wick high
+            stopPrice = +(currentBar.h + atrDollar * 0.05).toFixed(2);
+            const risk = stopPrice - currentPrice;
+            targetPrice = +(currentPrice - risk * 1.5).toFixed(2);
+            patternConfidence = lv.source === 'vwap' ? 5 : 3;
+            break;
+          }
+          // Price approached level from above -> rejection = CALL (long)
+          if (currentPrice <= lv.level && lowerWick > barRange * 0.40) {
+            direction = 'CALL';
+            pattern = 'LEVEL_REJECTION';
+            stopPrice = +(currentBar.l - atrDollar * 0.05).toFixed(2);
+            const risk = currentPrice - stopPrice;
+            targetPrice = +(currentPrice + risk * 1.5).toFixed(2);
+            patternConfidence = lv.source === 'vwap' ? 5 : 3;
+            break;
+          }
+        }
+      }
+
+      // ══════════════════════════════════════════════════════════════════════
+      // PATTERN 2: MOMENTUM BURST
+      // 5+ bars in tight range (consolidation), then current bar breaks out with
+      // large body (>70% of range) + volume spike (>1.5x avg)
+      // ══════════════════════════════════════════════════════════════════════
+      if (!pattern && bars.length >= 7) {
+        const consolBars = bars.slice(-7, -1); // 6 bars before current
+        const consolHigh = Math.max(...consolBars.map(b => b.h));
+        const consolLow = Math.min(...consolBars.map(b => b.l));
+        const consolRange = consolHigh - consolLow;
+
+        // Tight consolidation: range < 0.3% of price
+        if (consolRange > 0 && consolRange / currentPrice < 0.003) {
+          const body = Math.abs(currentBar.c - currentBar.o);
+          const barRange = currentBar.h - currentBar.l;
+
+          // Breakout bar: large body + breaks consolidation + volume
+          if (barRange > 0 && body / barRange >= 0.60 && volRatio >= 1.2) {
+            if (currentBar.c > consolHigh) {
+              direction = 'CALL';
+              pattern = 'MOMENTUM_BURST';
+              stopPrice = +consolLow.toFixed(2);
+              const risk = currentPrice - consolLow;
+              targetPrice = +(currentPrice + risk * 1.5).toFixed(2);
+              patternConfidence = 5;
+            } else if (currentBar.c < consolLow) {
+              direction = 'PUT';
+              pattern = 'MOMENTUM_BURST';
+              stopPrice = +consolHigh.toFixed(2);
+              const risk = consolHigh - currentPrice;
+              targetPrice = +(currentPrice - risk * 1.5).toFixed(2);
+              patternConfidence = 5;
+            }
+          }
+        }
+      }
+
+      // ══════════════════════════════════════════════════════════════════════
+      // PATTERN 3: TREND CONTINUATION
+      // 5+ bars making higher lows (CALL) or lower highs (PUT),
+      // then 1-2 bar pullback on declining volume, then continuation candle.
+      // ══════════════════════════════════════════════════════════════════════
+      if (!pattern && bars.length >= 10) {
+        const trendWindow = bars.slice(-10, -3); // bars -10 to -4 (7 bars for trend)
+        const pullbackWindow = bars.slice(-3, -1); // bars -3 and -2 (pullback)
+        const triggerBar = bars[bars.length - 1]; // current bar (continuation trigger)
+
+        // Check for uptrend: higher lows in trend window
+        let hlCount = 0;
+        for (let t = 1; t < trendWindow.length; t++) {
+          if (trendWindow[t].l >= trendWindow[t - 1].l) hlCount++;
+        }
+
+        // Check for downtrend: lower highs in trend window
+        let lhCount = 0;
+        for (let t = 1; t < trendWindow.length; t++) {
+          if (trendWindow[t].h <= trendWindow[t - 1].h) lhCount++;
+        }
+
+        const trendHigh = Math.max(...trendWindow.map(b => b.h));
+        const trendLow = Math.min(...trendWindow.map(b => b.l));
+
+        // Pullback check: 1-2 bars moving against trend on lower volume
+        const trendAvgVol = trendWindow.reduce((s, b) => s + (b.v || 0), 0) / trendWindow.length;
+        const pbAvgVol = pullbackWindow.reduce((s, b) => s + (b.v || 0), 0) / pullbackWindow.length;
+        const pbVolDecline = trendAvgVol > 0 && pbAvgVol < trendAvgVol * 1.0; // pullback vol <= trend vol
+
+        // Uptrend continuation (3+ of 6 higher lows)
+        if (hlCount >= 3 && pbVolDecline) {
+          const pbLow = Math.min(...pullbackWindow.map(b => b.l));
+          // Pullback should not retrace more than 50% of the trend move
+          const trendMove = trendHigh - trendLow;
+          const pbDepth = trendHigh - pbLow;
+          if (trendMove > 0 && pbDepth < trendMove * 0.5) {
+            // Trigger: current bar closes above pullback high
+            const pbHigh = Math.max(...pullbackWindow.map(b => b.h));
+            if (triggerBar.c > pbHigh && triggerBar.c > triggerBar.o) {
+              direction = 'CALL';
+              pattern = 'TREND_CONTINUATION';
+              stopPrice = +(pbLow - atrDollar * 0.03).toFixed(2);
+              const risk = currentPrice - stopPrice;
+              targetPrice = +(currentPrice + risk * 1.5).toFixed(2);
+              patternConfidence = hlCount >= 5 ? 5 : 3;
+            }
+          }
+        }
+
+        // Downtrend continuation (3+ of 6 lower highs)
+        if (!pattern && lhCount >= 3 && pbVolDecline) {
+          const pbHigh = Math.max(...pullbackWindow.map(b => b.h));
+          const trendMove = trendHigh - trendLow;
+          const pbDepth = pbHigh - trendLow;
+          if (trendMove > 0 && pbDepth < trendMove * 0.5) {
+            const pbLow = Math.min(...pullbackWindow.map(b => b.l));
+            if (triggerBar.c < pbLow && triggerBar.c < triggerBar.o) {
+              direction = 'PUT';
+              pattern = 'TREND_CONTINUATION';
+              stopPrice = +(pbHigh + atrDollar * 0.03).toFixed(2);
+              const risk = stopPrice - currentPrice;
+              targetPrice = +(currentPrice - risk * 1.5).toFixed(2);
+              patternConfidence = lhCount >= 5 ? 5 : 3;
+            }
+          }
+        }
+      }
+
+      // ── No pattern matched ──
+      if (!pattern || !direction) continue;
+
+      // ── VWAP alignment (soft bonus, not gate -- level rejection may scalp against VWAP) ──
+      const vwapAligned = vwap > 0 && (
+        (direction === 'CALL' && currentPrice >= vwap) ||
+        (direction === 'PUT' && currentPrice <= vwap)
+      );
+
+      // ── SPY alignment (soft bonus) ──
+      const spyChange = getETFChange(etfMinuteBars, 'SPY', date, checkKey);
+      const spyAligned = (direction === 'CALL' && spyChange > 0) || (direction === 'PUT' && spyChange < 0);
+
+      // Candle quality
+      const candleAnalysis = analyzeCandle(currentBar);
+
+      // Confidence
+      let confidence = 62;
+      confidence += patternConfidence; // pattern-specific bonus (3-5)
+      if (candleAnalysis.type.includes('MARUBOZU')) confidence += 5;
+      else if (candleAnalysis.type.includes('STRONG')) confidence += 3;
+      else confidence += 1;
+      if (volRatio >= 2.0) confidence += 4;
+      else if (volRatio >= 1.3) confidence += 2;
+      if (vwapAligned) confidence += 3;
+      if (spyAligned) confidence += 3;
       confidence = Math.max(60, Math.min(95, confidence));
-
-      // Stop: 0.15% against entry
-      const stopPct = 0.0015;
-      const stopPrice = direction === 'CALL'
-        ? +(currentPrice * (1 - stopPct)).toFixed(2)
-        : +(currentPrice * (1 + stopPct)).toFixed(2);
-
-      // Target: 0.4% in direction
-      const targetPct = 0.004;
-      const targetPrice = direction === 'CALL'
-        ? +(currentPrice * (1 + targetPct)).toFixed(2)
-        : +(currentPrice * (1 - targetPct)).toFixed(2);
 
       tickerCounts[ticker] = (tickerCounts[ticker] || 0) + 1;
 
-      const _msVwap = barsUpTo.length > 0 ? computeVWAP(barsUpTo) : null;
-      const _msAtrDollar = (profile.atr_20d || 0.025) * currentPrice;
-      const _msEnrich = enrichMetadata(barsUpTo, ticker, date, currentPrice, _msVwap, barsUpTo[0]?.o || null, _msAtrDollar, dayData.etfMinuteBars, checkKey);
+      const _msEnrich = enrichMetadata(bars, ticker, date, currentPrice, vwap, sessionOpen, atrDollar, etfMinuteBars, checkKey);
       signals.push(buildSignal('MOMENTUM_SCALP', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
-        move_pct: +(movePct * 100).toFixed(3),
-        abs_move_pct: +(absMovePct * 100).toFixed(3),
+        pattern,
         vol_ratio: +volRatio.toFixed(2),
+        vwap_aligned: vwapAligned,
+        spy_aligned: spyAligned,
+        candle_type: candleAnalysis.type,
         confluence: 0,
         ..._msEnrich,
       }));
     }
   }
 
-  // Cap at top 8 by momentum magnitude
-  signals.sort((a, b) => Math.abs(b.metadata?.abs_move_pct || 0) - Math.abs(a.metadata?.abs_move_pct || 0));
+  // Cap at top 10 by confidence
+  signals.sort((a, b) => b.composite - a.composite);
   return signals.slice(0, MAX_TOTAL);
 }
