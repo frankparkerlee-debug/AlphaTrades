@@ -101,6 +101,7 @@ const HOLD_CONFIG = {
   VIX_REVERSAL:          { maxHoldMinutes: 390, holdDays: 20 },
   // Scalp
   ZERO_DTE_SCALP:        { maxHoldMinutes: 15,  holdDays: 0 },
+  MOMENTUM_SCALP:        { maxHoldMinutes: 30,  holdDays: 0 },
 };
 
 /**
@@ -407,6 +408,133 @@ function levelsConverging(levels, price, tolerance = 0.001) {
   };
 }
 
+/**
+ * Enrich signal metadata with standardized market, volume, price, and candle context.
+ * Call this just before buildSignal in each strategy, then spread into liveSignal.
+ *
+ * @param {Array} bars - Session bars up to signal time [{o,h,l,c,v,t}, ...]
+ * @param {string} ticker - Ticker symbol
+ * @param {string} date - Date string YYYY-MM-DD
+ * @param {number} currentPrice - Current price at signal time
+ * @param {number|null} vwap - Computed VWAP (null if unavailable)
+ * @param {number|null} sessionOpen - Session open price (null if unavailable)
+ * @param {number|null} atrDollar - ATR in dollar terms (null if unavailable)
+ * @param {Object|null} etfMinuteBars - ETF minute bars for SPY change
+ * @param {string} checkKey - Minute bar key at signal time (for ETF lookup)
+ * @returns {Object} Enrichment fields to spread into metadata
+ */
+function enrichMetadata(bars, ticker, date, currentPrice, vwap, sessionOpen, atrDollar, etfMinuteBars, checkKey) {
+  const result = {};
+
+  // ── Market context ──────────────────────────────────────────────────────
+  // spy_change_pct: SPY change from open at signal time
+  result.spy_change_pct = etfMinuteBars
+    ? +(getETFChange(etfMinuteBars, 'SPY', date, checkKey) * 100).toFixed(3)
+    : 0;
+
+  // intraday_vol: standard deviation of returns over last 20 bars
+  if (bars.length >= 21) {
+    const returns = [];
+    const slice = bars.slice(-21);
+    for (let i = 1; i < slice.length; i++) {
+      if (slice[i - 1].c > 0) {
+        returns.push((slice[i].c - slice[i - 1].c) / slice[i - 1].c);
+      }
+    }
+    if (returns.length > 1) {
+      const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
+      const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (returns.length - 1);
+      result.intraday_vol = +Math.sqrt(variance).toFixed(6);
+    } else {
+      result.intraday_vol = 0;
+    }
+  } else {
+    result.intraday_vol = 0;
+  }
+
+  // bars_from_open: how many minutes into the session
+  result.bars_from_open = bars.length;
+
+  // ── Volume context ──────────────────────────────────────────────────────
+  // vol_ratio_20bar: current bar volume / average of last 20 bars
+  if (bars.length >= 2) {
+    const lookback = Math.min(20, bars.length - 1);
+    const recentBars = bars.slice(-(lookback + 1), -1);
+    const avgVol = recentBars.reduce((s, b) => s + (b.v || 0), 0) / recentBars.length;
+    const currentVol = bars[bars.length - 1].v || 0;
+    result.vol_ratio_20bar = avgVol > 0 ? +(currentVol / avgVol).toFixed(2) : 0;
+  } else {
+    result.vol_ratio_20bar = 0;
+  }
+
+  // cumulative_rvol: total session volume so far / expected at this pace
+  // Compare to first-10-bar volume rate extrapolation (early session pace baseline)
+  if (bars.length >= 1) {
+    const cumVol = bars.reduce((s, b) => s + (b.v || 0), 0);
+    const first10 = bars.slice(0, Math.min(10, bars.length));
+    const first10Vol = first10.reduce((s, b) => s + (b.v || 0), 0);
+    const first10AvgPerBar = first10.length > 0 ? first10Vol / first10.length : 0;
+    const expectedCum = first10AvgPerBar * bars.length;
+    result.cumulative_rvol = expectedCum > 0 ? +(cumVol / expectedCum).toFixed(2) : 0;
+  } else {
+    result.cumulative_rvol = 0;
+  }
+
+  // ── Price context ───────────────────────────────────────────────────────
+  // dist_from_vwap_pct: signed distance from VWAP
+  if (vwap && vwap > 0 && currentPrice > 0) {
+    result.dist_from_vwap_pct = +(((currentPrice - vwap) / vwap) * 100).toFixed(3);
+  } else {
+    result.dist_from_vwap_pct = null;
+  }
+
+  // dist_from_session_high_pct & dist_from_session_low_pct
+  if (bars.length >= 1 && currentPrice > 0) {
+    const sessionHigh = Math.max(...bars.map(b => b.h));
+    const sessionLow = Math.min(...bars.map(b => b.l));
+    if (isFinite(sessionHigh) && sessionHigh > 0) {
+      result.dist_from_session_high_pct = +(((currentPrice - sessionHigh) / sessionHigh) * 100).toFixed(3);
+    } else {
+      result.dist_from_session_high_pct = 0;
+    }
+    if (isFinite(sessionLow) && sessionLow > 0) {
+      result.dist_from_session_low_pct = +(((currentPrice - sessionLow) / sessionLow) * 100).toFixed(3);
+    } else {
+      result.dist_from_session_low_pct = 0;
+    }
+  } else {
+    result.dist_from_session_high_pct = 0;
+    result.dist_from_session_low_pct = 0;
+  }
+
+  // move_from_open_pct: total % move from session open
+  if (sessionOpen && sessionOpen > 0 && currentPrice > 0) {
+    result.move_from_open_pct = +(((currentPrice - sessionOpen) / sessionOpen) * 100).toFixed(3);
+  } else {
+    result.move_from_open_pct = null;
+  }
+
+  // ── Candle context ──────────────────────────────────────────────────────
+  // last_3_bar_direction: count of up bars in last 3
+  if (bars.length >= 3) {
+    const last3 = bars.slice(-3);
+    result.last_3_bar_direction = last3.filter(b => b.c > b.o).length;
+  } else {
+    result.last_3_bar_direction = null;
+  }
+
+  // bar_range_vs_atr: current bar range / ATR
+  if (bars.length >= 1 && atrDollar && atrDollar > 0) {
+    const lastBar = bars[bars.length - 1];
+    const barRange = lastBar.h - lastBar.l;
+    result.bar_range_vs_atr = +(barRange / atrDollar).toFixed(3);
+  } else {
+    result.bar_range_vs_atr = null;
+  }
+
+  return result;
+}
+
 // ── Strategy Implementations ─────────────────────────────────────────────────
 
 /**
@@ -539,6 +667,8 @@ export function generateORBBreakoutSignals(date, dayData, context) {
         : +(bar.c - risk * 1.5).toFixed(2);
 
       seen.add(ticker);
+      const _orbAtrDollar = (profile.atr_20d || 0.025) * bar.c;
+      const _orbEnrich = enrichMetadata(bars, ticker, date, bar.c, vwap, sessionOpen, _orbAtrDollar, etfMinuteBars, checkKey);
       signals.push(buildSignal('ORB_BREAKOUT', date, checkKey, ticker, direction, confidence, bar.c, stopPrice, targetPrice, profile, {
         range_high: +or.high.toFixed(2),
         range_low: +or.low.toFixed(2),
@@ -549,6 +679,7 @@ export function generateORBBreakoutSignals(date, dayData, context) {
         spy_aligned: spyAligned,
         vwap_aligned: true,
         confluence: confluenceResult.confirming,
+        ..._orbEnrich,
       }));
       break; // FIRST breakout only
     }
@@ -686,6 +817,7 @@ export function generateVWAPBounceSignals(date, dayData, context) {
       }
 
       seen.add(ticker);
+      const _vbEnrich = enrichMetadata(bars, ticker, date, currentPrice, vwap, bars[0]?.o || null, atrDollar, etfMinuteBars, checkKey);
       signals.push(buildSignal('VWAP_BOUNCE', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
         vwap_price: +vwap.toFixed(2),
         vwap_distance_pct: +(distPct * 100).toFixed(2),
@@ -696,6 +828,7 @@ export function generateVWAPBounceSignals(date, dayData, context) {
         is_hammer: isHammer,
         spy_aligned: spyAligned,
         confluence: confluenceResult.confirming,
+        ..._vbEnrich,
       }));
       break;
     }
@@ -828,6 +961,7 @@ export function generateFirstPullbackSignals(date, dayData, context) {
         : +(momentumExtreme - 0.3 * atrDollar).toFixed(2);
 
       seen.add(ticker);
+      const _fpEnrich = enrichMetadata(bars, ticker, date, currentPrice, vwap, sessionOpen, atrDollar, etfMinuteBars, checkKey);
       signals.push(buildSignal('FIRST_PULLBACK', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
         move_from_open_atrs: +moveATRs.toFixed(2),
         pullback_bars: pullback.pullbackBars,
@@ -838,6 +972,7 @@ export function generateFirstPullbackSignals(date, dayData, context) {
         engulfing,
         spy_aligned: spyAligned,
         confluence: confluenceResult.confirming,
+        ..._fpEnrich,
       }));
       break;
     }
@@ -981,6 +1116,7 @@ export function generateGapFillSignals(date, dayData, context) {
     }
 
     seen.add(ticker);
+    const _gfEnrich = enrichMetadata(bars, ticker, date, currentPrice, vwap, sessionOpen, atrDollar, etfMinuteBars, checkKey);
     signals.push(buildSignal('GAP_FILL_REVERSION', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
       gap_pct: +(gapPct * 100).toFixed(2),
       logic_type: logicType,
@@ -990,6 +1126,7 @@ export function generateGapFillSignals(date, dayData, context) {
       spy_aligned: spyAligned,
       vwap_aligned: vwap > 0,
       confluence: confluenceResult.confirming,
+      ..._gfEnrich,
     }));
   }
 
@@ -1117,6 +1254,7 @@ export function generatePowerHourMomentumSignals(date, dayData, context) {
       ? +(currentPrice + Math.max(risk, 0.1 * atrDollar) * 2).toFixed(2)
       : +(currentPrice - Math.max(risk, 0.1 * atrDollar) * 2).toFixed(2);
 
+    const _phEnrich = enrichMetadata(bars, ticker, date, currentPrice, vwap, sessionOpen, atrDollar, etfMinuteBars, checkKey);
     signals.push(buildSignal('POWER_HOUR_MOMENTUM', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
       move_from_open_pct: +((intradayMove / sessionOpen) * 100).toFixed(2),
       move_in_atrs: +moveATRs.toFixed(2),
@@ -1127,6 +1265,7 @@ export function generatePowerHourMomentumSignals(date, dayData, context) {
       engulfing,
       spy_aligned: spyAligned,
       confluence: confluenceResult.confirming,
+      ..._phEnrich,
     }));
   }
 
@@ -1244,6 +1383,7 @@ export function generateMacroReactionSignals(date, dayData, context) {
         : +(currentPrice - 0.7 * atrDollar).toFixed(2);
 
       // Build signal with HALF position size
+      const _mrEnrich = enrichMetadata(bars, ticker, date, currentPrice, vwap, sessionOpen, atrDollar, etfMinuteBars, checkKey);
       const sig = buildSignal('MACRO_REACTION', date, checkKey, ticker, consensusDirection, confidence, currentPrice, stopPrice, targetPrice, profile, {
         macro_event: macroEvent,
         beta: +beta.toFixed(2),
@@ -1253,6 +1393,7 @@ export function generateMacroReactionSignals(date, dayData, context) {
         candle_type: candleAnalysis.type,
         engulfing,
         confluence: confluenceResult.confirming,
+        ..._mrEnrich,
       });
       sig.sizePct = (sig.sizePct || 0.10) * 0.5; // HALF position size
       signals.push(sig);
@@ -1368,6 +1509,7 @@ export function generateExtremeReversalSignals(date, dayData, context) {
       const targetPrice = +retracementTarget.toFixed(2);
 
       seen.add(ticker);
+      const _erEnrich = enrichMetadata(bars, ticker, date, currentPrice, vwap, sessionOpen, atrDollar, etfMinuteBars, checkKey);
       signals.push(buildSignal('EXTREME_REVERSAL', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
         move_from_open_atrs: +moveATRs.toFixed(2),
         move_from_open_pct: +((moveFromOpen / sessionOpen) * 100).toFixed(2),
@@ -1375,6 +1517,7 @@ export function generateExtremeReversalSignals(date, dayData, context) {
         engulfing,
         volume_ratio: +volRatio.toFixed(2),
         confluence: confluenceResult.confirming || 0,
+        ..._erEnrich,
       }));
       break;
     }
@@ -1484,11 +1627,13 @@ export function generateEODMeanReversionSignals(date, dayData, context) {
       ? +(currentPrice + 0.5 * atrDollar).toFixed(2)
       : +(currentPrice - 0.5 * atrDollar).toFixed(2);
 
+    const _eodEnrich = enrichMetadata(bars, ticker, date, currentPrice, vwap, bars[0]?.o || null, atrDollar, etfMinuteBars, checkKey);
     signals.push(buildSignal('EOD_MEAN_REVERSION', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
       intraday_return_pct: +(intradayReturn * 100).toFixed(2),
       candle_type: candleAnalysis.type,
       engulfing,
       confluence: 0,
+      ..._eodEnrich,
     }));
   }
 
@@ -1608,6 +1753,7 @@ export function generateHighRvolBreakoutSignals(date, dayData, context) {
         : +(currentPrice - risk * 1.5).toFixed(2);
 
       seen.add(ticker);
+      const _hrEnrich = enrichMetadata(bars, ticker, date, currentPrice, vwap, sessionOpen, atrDollar, etfMinuteBars, checkKey);
       signals.push(buildSignal('HIGH_RVOL_BREAKOUT', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
         rvol: +rvol.toFixed(2),
         move_from_open_atrs: +moveATRs.toFixed(2),
@@ -1615,6 +1761,7 @@ export function generateHighRvolBreakoutSignals(date, dayData, context) {
         engulfing,
         spy_aligned: spyAligned,
         confluence: confluenceResult.confirming,
+        ..._hrEnrich,
       }));
       break;
     }
@@ -1640,11 +1787,15 @@ export function generatePEADDriftSignals(date, dayData, context) {
   const signals = [];
 
   // Check for earnings events (earningsCalendar from strategy-data-loader)
-  const earningsToday = context.earningsCalendar?.[date] || context.earningsEvents?.[date] || {};
+  // earningsCalendar[date] is an ARRAY of tickers like ['AAPL', 'MSFT'], not an object keyed by ticker
+  const earningsToday = context.earningsCalendar?.[date] || context.earningsEvents?.[date] || [];
 
   for (const ticker of tickers) {
-    const earnings = earningsToday[ticker];
-    if (!earnings) continue; // Only trade on earnings days
+    // earningsToday may be an array (earningsCalendar) or object (earningsEvents fallback)
+    const hasEarnings = Array.isArray(earningsToday)
+      ? earningsToday.includes(ticker)
+      : !!earningsToday?.[ticker];
+    if (!hasEarnings) continue; // Only trade on earnings days
 
     const profile = profiles[ticker];
     if (!profile) continue;
@@ -1725,6 +1876,7 @@ export function generatePEADDriftSignals(date, dayData, context) {
       ? +(currentPrice + 2.0 * atrDollar).toFixed(2)
       : +(currentPrice - 2.0 * atrDollar).toFixed(2);
 
+    const _pdEnrich = enrichMetadata(bars, ticker, date, currentPrice, vwap, sessionOpen, atrDollar, etfMinuteBars, checkKey);
     signals.push(buildSignal('PEAD_DRIFT', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
       gap_pct: +(gapPct * 100).toFixed(2),
       drift_from_open_pct: +(driftFromOpen * 100).toFixed(2),
@@ -1732,6 +1884,7 @@ export function generatePEADDriftSignals(date, dayData, context) {
       candle_type: candleAnalysis.type,
       engulfing,
       confluence: 0,
+      ..._pdEnrich,
     }));
   }
 
@@ -1822,6 +1975,7 @@ export function generateSectorLaggardSignals(date, dayData, context) {
         ? +(tickerCurrent + 1.5 * atrDollar).toFixed(2)
         : +(tickerCurrent - 1.5 * atrDollar).toFixed(2);
 
+      const _slEnrich = enrichMetadata(bars, ticker, date, tickerCurrent, vwap, tickerOpen, atrDollar, etfMinuteBars, checkKey);
       signals.push(buildSignal('SECTOR_LAGGARD', date, checkKey, ticker, sectorDirection, confidence, tickerCurrent, stopPrice, targetPrice, profile, {
         sector_etf: sectorETF,
         sector_return_pct: +(etfReturn * 100).toFixed(2),
@@ -1829,6 +1983,7 @@ export function generateSectorLaggardSignals(date, dayData, context) {
         lag_ratio: +lagRatio.toFixed(2),
         candle_type: candleAnalysis.type,
         confluence: 0,
+        ..._slEnrich,
       }));
     }
   }
@@ -1908,12 +2063,14 @@ export function generateShortSqueezeSignals(date, dayData, context) {
     // Target: 2.0 ATR
     const targetPrice = +(currentPrice + 2.0 * atrDollar).toFixed(2);
 
+    const _ssEnrich = enrichMetadata(bars, ticker, date, currentPrice, vwap, sessionOpen, atrDollar, etfMinuteBars, checkKey);
     signals.push(buildSignal('SHORT_SQUEEZE_MOMENTUM', date, checkKey, ticker, 'CALL', confidence, currentPrice, stopPrice, targetPrice, profile, {
       short_pct: +(si.short_pct * 100).toFixed(1),
       move_from_open_pct: +(moveFromOpen * 100).toFixed(2),
       volume_ratio: +volRatio.toFixed(2),
       candle_type: candleAnalysis.type,
       confluence: 0,
+      ..._ssEnrich,
     }));
   }
 
@@ -1984,11 +2141,15 @@ export function generateOptionsFlowSignals(date, dayData, context) {
       ? +(currentPrice + 1.5 * atrDollar).toFixed(2)
       : +(currentPrice - 1.5 * atrDollar).toFixed(2);
 
+    const _ofBars = getBarsUpTo(minuteBars, ticker, date, checkKey);
+    const _ofVwap = _ofBars.length > 0 ? computeVWAP(_ofBars) : null;
+    const _ofEnrich = enrichMetadata(_ofBars, ticker, date, currentPrice, _ofVwap, _ofBars[0]?.o || null, atrDollar, dayData.etfMinuteBars, checkKey);
     signals.push(buildSignal('OPTIONS_FLOW', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
       call_put_ratio: +flow.call_put_ratio.toFixed(2),
       volume_vs_oi: +(flow.volume_vs_oi || 0).toFixed(1),
       candle_type: candleAnalysis.type,
       confluence: 0,
+      ..._ofEnrich,
     }));
   }
 
@@ -2008,19 +2169,21 @@ export function generateAnalystDriftSignals(date, dayData, context) {
   const { profiles, tickers } = context;
   const signals = [];
 
-  // Check for analyst rating changes (from ticker_intelligence or external feed)
-  // Also check intelligence data for analyst consensus changes
-  const analystChanges = context.analystChanges?.[date] || {};
-  // Fallback: derive from intelligence data if no explicit changes feed
-  if (Object.keys(analystChanges).length === 0 && context.intelligence) {
+  // Derive analyst signals from context.intelligence (the available data source)
+  // context.intelligence[ticker] has: analyst_consensus, analyst_price_target, upside_to_target_pct
+  const analystChanges = {};
+  if (context.intelligence) {
     for (const ticker of tickers) {
       const intel = context.intelligence[ticker];
-      if (!intel) continue;
-      // Check if analyst_consensus indicates a recent change
-      if (intel.analyst_consensus === 'STRONG_BUY' && intel.upside_to_target_pct > 15) {
-        analystChanges[ticker] = { direction: 'UPGRADE', firm: 'consensus', firm_tier: 'major' };
-      } else if (intel.analyst_consensus === 'SELL' || (intel.analyst_consensus === 'HOLD' && intel.upside_to_target_pct < -10)) {
-        analystChanges[ticker] = { direction: 'DOWNGRADE', firm: 'consensus', firm_tier: 'major' };
+      if (!intel || !intel.analyst_consensus) continue;
+      const upside = intel.upside_to_target_pct || 0;
+      // Upgrade signal: buy/strong_buy consensus with meaningful upside (> 5%)
+      const consensus = (intel.analyst_consensus || '').toUpperCase();
+      if ((consensus === 'BUY' || consensus === 'STRONG_BUY') && upside > 5) {
+        analystChanges[ticker] = { direction: 'UPGRADE', firm: 'consensus', firm_tier: 'major', upside_pct: upside };
+      // Downgrade signal: sell consensus, or hold with negative upside (< -5%)
+      } else if (consensus === 'SELL' || consensus === 'STRONG_SELL' || (consensus === 'HOLD' && upside < -5)) {
+        analystChanges[ticker] = { direction: 'DOWNGRADE', firm: 'consensus', firm_tier: 'major', upside_pct: upside };
       }
     }
   }
@@ -2075,11 +2238,14 @@ export function generateAnalystDriftSignals(date, dayData, context) {
       ? +(currentPrice + targetATR * atrDollar).toFixed(2)
       : +(currentPrice - targetATR * atrDollar).toFixed(2);
 
+    const _adVwap = bars.length > 0 ? computeVWAP(bars) : null;
+    const _adEnrich = enrichMetadata(bars, ticker, date, currentPrice, _adVwap, bars[0]?.o || null, atrDollar, dayData.etfMinuteBars, checkKey);
     signals.push(buildSignal('ANALYST_DRIFT', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
       analyst_direction: change.direction,
       firm: change.firm || 'unknown',
       candle_type: candleAnalysis.type,
       confluence: 0,
+      ..._adEnrich,
     }));
   }
 
@@ -2099,26 +2265,27 @@ export function generateVIXReversalSignals(date, dayData, context) {
   const { profiles, tickers } = context;
   const signals = [];
 
-  // VIX data from dayData.vixByTime or context.vixData
+  // VIX data from dayData.vixByTime: { 'YYYY-MM-DDTHH:MM': priceValue }
+  // Values are plain numbers (VIXY/UVXY proxy prices), not bar objects
   const vixByTime = dayData.vixByTime || {};
   const vixKeys = Object.keys(vixByTime).filter(k => k.startsWith(date)).sort();
-  const vixData = context.vixData?.[date] || null;
 
-  // Get VIX level from available sources
+  const CHECK_OFFSET = 30;
+
+  // Get VIX level at or before the check offset time
+  // We'll resolve this per-ticker below using the first ticker's minute keys as time reference
+  // For the gate check, use the latest VIX reading for the day
   let vixLevel = 0;
   if (vixKeys.length > 0) {
-    const lastVixBar = vixByTime[vixKeys[vixKeys.length - 1]];
-    vixLevel = lastVixBar?.c || lastVixBar?.close || 0;
-  } else if (vixData) {
-    vixLevel = vixData.close || vixData.level || 0;
+    const lastVal = vixByTime[vixKeys[vixKeys.length - 1]];
+    // vixByTime values are plain numbers (price), not objects
+    vixLevel = typeof lastVal === 'number' ? lastVal : (lastVal?.c || lastVal?.close || 0);
   }
   if (vixLevel <= 0) return signals;
 
   // Only fire when VIX is extreme (> 28 absolute)
-  const vixPercentile = vixData?.percentile_90d || 0;
-  if (vixLevel < 28 && vixPercentile < 90) return signals;
-
-  const CHECK_OFFSET = 30;
+  // No vixData percentile available in context, rely on absolute level
+  if (vixLevel < 28) return signals;
 
   for (const ticker of tickers) {
     const profile = profiles[ticker];
@@ -2136,6 +2303,19 @@ export function generateVIXReversalSignals(date, dayData, context) {
     const bars = getBarsUpTo(minuteBars, ticker, date, checkKey);
     if (bars.length < 15) continue;
 
+    // Resolve VIX at or before check offset time for this ticker
+    // checkKey format: 'YYYY-MM-DDTHH:MM', vixKeys use same format
+    let vixAtCheck = vixLevel; // fallback to day-level reading
+    if (vixKeys.length > 0) {
+      for (let vi = vixKeys.length - 1; vi >= 0; vi--) {
+        if (vixKeys[vi] <= checkKey) {
+          const val = vixByTime[vixKeys[vi]];
+          vixAtCheck = typeof val === 'number' ? val : (val?.c || val?.close || vixLevel);
+          break;
+        }
+      }
+    }
+
     const currentPrice = bars[bars.length - 1].c;
     const atr = profile.atr_20d || 0.025;
     const atrDollar = atr * currentPrice;
@@ -2149,7 +2329,7 @@ export function generateVIXReversalSignals(date, dayData, context) {
     let confidence = 60;
     if (candleAnalysis.type.includes('STRONG')) confidence += 4;
     else confidence += 2;
-    if (vixLevel >= 35) confidence += 5; // very extreme
+    if (vixAtCheck >= 35) confidence += 5; // very extreme
     else confidence += 3;
     if (beta >= 1.5) confidence += 4;
     else confidence += 2;
@@ -2163,12 +2343,13 @@ export function generateVIXReversalSignals(date, dayData, context) {
     const targetPrice = +(currentPrice + 2.5 * atrDollar).toFixed(2);
 
     // Half position size (high-vol environment)
+    const _vxEnrich = enrichMetadata(bars, ticker, date, currentPrice, vwap, bars[0]?.o || null, atrDollar, dayData.etfMinuteBars, checkKey);
     const sig = buildSignal('VIX_REVERSAL', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
-      vix_level: +vixLevel.toFixed(1),
-      vix_percentile: +vixPercentile.toFixed(0),
+      vix_level: +vixAtCheck.toFixed(1),
       beta: +beta.toFixed(2),
       candle_type: candleAnalysis.type,
       confluence: 0,
+      ..._vxEnrich,
     });
     sig.sizePct = (sig.sizePct || 0.10) * 0.5; // HALF size in extreme vol
     signals.push(sig);
@@ -2307,11 +2488,13 @@ export function generateZeroDTEScalpSignals(date, dayData, context) {
 
       scalpCounts[ticker]++;
 
+      const _zdEnrich = enrichMetadata(bars, ticker, date, currentPrice, vwap, sessionOpen, atrDollar, etfMinuteBars, checkKey);
       const sig = buildSignal('ZERO_DTE_SCALP', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
         pattern,
         vwap_price: +vwap.toFixed(2),
         candle_type: candleAnalysis.type,
         confluence: 0,
+        ..._zdEnrich,
       });
       sig.sizePct = 0.05; // Fixed 5% position size for scalps
       signals.push(sig);
@@ -2319,4 +2502,117 @@ export function generateZeroDTEScalpSignals(date, dayData, context) {
   }
 
   return signals;
+}
+
+// ── MOMENTUM_SCALP ─────────────────────────────────────────────────────────────
+
+/**
+ * MOMENTUM_SCALP
+ *
+ * Thesis: When a stock moves significantly in one direction with volume
+ * confirmation, ride the momentum with a tight trailing stop. No complex
+ * pattern matching -- just follow the move.
+ *
+ * Rules:
+ *   - Check every 10 min from offset 10 to 360 (9:40 AM - 3:30 PM)
+ *   - Entry: price moved >= 0.3% from 10 bars ago + volume > session average
+ *   - Direction: follow the move (up -> CALL, down -> PUT)
+ *   - Stop: 0.15% against entry
+ *   - Target: 0.4% in direction (~2.5:1 R:R)
+ *   - Max hold: 30 minutes
+ *   - Max 2 signals per ticker per day, max 8 total (top by magnitude)
+ */
+export function generateMomentumScalpSignals(date, dayData, context) {
+  const { minuteBars } = dayData;
+  const { profiles, tickers } = context;
+  const signals = [];
+  const tickerCounts = {};
+  const MAX_PER_TICKER = 2;
+  const MAX_TOTAL = 8;
+
+  // Check offsets: every 10 min from 10 to 360
+  const CHECK_OFFSETS = [];
+  for (let i = 10; i <= 360; i += 10) CHECK_OFFSETS.push(i);
+
+  for (const ticker of tickers) {
+    const profile = profiles[ticker];
+    if (!profile) continue;
+
+    const allKeys = getMinuteKeys(minuteBars, ticker, date);
+    if (allKeys.length < 20) continue;
+
+    const tickerMinutes = minuteBars[ticker] || {};
+
+    for (const offset of CHECK_OFFSETS) {
+      if (offset >= allKeys.length) continue;
+      if ((tickerCounts[ticker] || 0) >= MAX_PER_TICKER) break;
+
+      const checkKey = allKeys[offset];
+      const currentBar = tickerMinutes[checkKey];
+      if (!currentBar) continue;
+
+      // Look back 10 bars for short-term momentum
+      const lookbackOffset = offset - 10;
+      if (lookbackOffset < 0 || lookbackOffset >= allKeys.length) continue;
+      const lookbackBar = tickerMinutes[allKeys[lookbackOffset]];
+      if (!lookbackBar || !lookbackBar.c || lookbackBar.c <= 0) continue;
+
+      const currentPrice = currentBar.c;
+      const movePct = (currentPrice - lookbackBar.c) / lookbackBar.c;
+      const absMovePct = Math.abs(movePct);
+
+      // Gate 1: price moved >= 0.3% in 10 bars
+      if (absMovePct < 0.003) continue;
+
+      // Gate 2: current bar volume > session average so far
+      const barsUpTo = getBarsUpTo(minuteBars, ticker, date, checkKey);
+      if (barsUpTo.length < 5) continue;
+      const totalVol = cumulativeVolume(barsUpTo);
+      const avgVol = totalVol / barsUpTo.length;
+      const currentVol = currentBar.v || 0;
+      if (avgVol <= 0 || currentVol <= avgVol) continue;
+      const volRatio = currentVol / avgVol;
+
+      // That's it for entry gates -- keep it simple
+
+      // Direction: follow the move
+      const direction = movePct > 0 ? 'CALL' : 'PUT';
+
+      // Confidence scoring (simple)
+      let confidence = 65;
+      if (absMovePct > 0.005) confidence += 5;
+      if (absMovePct > 0.008) confidence += 5;
+      if (volRatio > 2.0) confidence += 5;
+      confidence = Math.max(60, Math.min(95, confidence));
+
+      // Stop: 0.15% against entry
+      const stopPct = 0.0015;
+      const stopPrice = direction === 'CALL'
+        ? +(currentPrice * (1 - stopPct)).toFixed(2)
+        : +(currentPrice * (1 + stopPct)).toFixed(2);
+
+      // Target: 0.4% in direction
+      const targetPct = 0.004;
+      const targetPrice = direction === 'CALL'
+        ? +(currentPrice * (1 + targetPct)).toFixed(2)
+        : +(currentPrice * (1 - targetPct)).toFixed(2);
+
+      tickerCounts[ticker] = (tickerCounts[ticker] || 0) + 1;
+
+      const _msVwap = barsUpTo.length > 0 ? computeVWAP(barsUpTo) : null;
+      const _msAtrDollar = (profile.atr_20d || 0.025) * currentPrice;
+      const _msEnrich = enrichMetadata(barsUpTo, ticker, date, currentPrice, _msVwap, barsUpTo[0]?.o || null, _msAtrDollar, dayData.etfMinuteBars, checkKey);
+      signals.push(buildSignal('MOMENTUM_SCALP', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
+        move_pct: +(movePct * 100).toFixed(3),
+        abs_move_pct: +(absMovePct * 100).toFixed(3),
+        vol_ratio: +volRatio.toFixed(2),
+        confluence: 0,
+        ..._msEnrich,
+      }));
+    }
+  }
+
+  // Cap at top 8 by momentum magnitude
+  signals.sort((a, b) => Math.abs(b.metadata?.abs_move_pct || 0) - Math.abs(a.metadata?.abs_move_pct || 0));
+  return signals.slice(0, MAX_TOTAL);
 }

@@ -390,6 +390,25 @@ export const SETUP_RUBRICS = {
       { name: 'confluence', weight: 25, score: (m) => scoreConfluence(m.confluence) },
     ],
   },
+
+  MOMENTUM_SCALP: {
+    factors: [
+      { name: 'abs_move_pct', weight: 50, score: (m) => {
+        const move = m.abs_move_pct || 0;
+        if (move >= 0.8) return 100;
+        if (move >= 0.5) return 75;
+        if (move >= 0.3) return 50;
+        return 20;
+      }},
+      { name: 'vol_ratio', weight: 50, score: (m) => {
+        const vr = m.vol_ratio || 0;
+        if (vr >= 2.0) return 100;
+        if (vr >= 1.5) return 75;
+        if (vr >= 1.0) return 50;
+        return 20;
+      }},
+    ],
+  },
 };
 
 // Fallback rubric for strategies not explicitly defined

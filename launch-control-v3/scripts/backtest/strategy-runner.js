@@ -23,6 +23,7 @@ import { runStatisticalTests } from './statistical-tests.js';
 import { scoreSetupQuality } from './setup-quality.js';
 import { calibrateGrades } from './grade-calibrator.js';
 import { buildReportCard, deriveDeploymentVerdict } from './strategy-report-card.js';
+import { runDirectionalStudy } from './directional-study.js';
 import { query } from '../../src/data/db.js';
 
 // Spread-based strategies decommissioned — margin account, no documented edge
@@ -46,8 +47,9 @@ import {
   generateOptionsFlowSignals,
   generateAnalystDriftSignals,
   generateVIXReversalSignals,
-  // Scalp (1)
+  // Scalp (2)
   generateZeroDTEScalpSignals,
+  generateMomentumScalpSignals,
 } from './strategies/live-adapter.js';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
@@ -76,6 +78,7 @@ const LIVE_STRATEGIES = [
   { name: 'VIX_REVERSAL',          fn: generateVIXReversalSignals,       intraday: false },
   // Scalp
   { name: 'ZERO_DTE_SCALP',        fn: generateZeroDTEScalpSignals,      intraday: true },
+  { name: 'MOMENTUM_SCALP',        fn: generateMomentumScalpSignals,     intraday: true },
 ];
 
 // SPREAD_STRATEGIES decommissioned — no documented edge, worse than coin flip
@@ -214,6 +217,10 @@ export async function runMultiStrategyBacktest(startDate, endDate, accountSize =
   // 7. Build results
   const output = buildMultiStratResults(results, config, data.tradingDays);
   output.entryValidation = entryValidation;
+
+  // 7b. Directional study — raw price movement independent of option PnL
+  console.log('[MULTI-STRAT] Running directional study (raw price movement)...');
+  output.directionalStudy = runDirectionalStudy(constrained, data.minuteBars, data.etfMinuteBars);
 
   // ── 8-14: AGGREGATE validation (full portfolio) ──────────────────────────
   console.log('[MULTI-STRAT] Running aggregate validation pipeline...');

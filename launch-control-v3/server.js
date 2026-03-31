@@ -1511,6 +1511,30 @@ app.get('/api/backtest/direction-check', async (req, res) => {
   }
 });
 
+// Directional study — raw price movement analysis independent of option PnL
+app.get('/api/backtest/directional-study', async (req, res) => {
+  try {
+    const result = await db.query(
+      "SELECT results->'directionalStudy' as ds, results->'config' as config, run_date, created_at FROM lc_v3.backtest_results ORDER BY created_at DESC LIMIT 1"
+    );
+    if (!result.rows[0]) {
+      return res.json({ directionalStudy: null, error: 'No backtest results found' });
+    }
+    const ds = result.rows[0].ds;
+    if (!ds) {
+      return res.json({ directionalStudy: null, error: 'No directional study data in latest backtest. Re-run backtest to generate.' });
+    }
+    res.json({
+      directionalStudy: ds,
+      config: result.rows[0].config,
+      runDate: result.rows[0].run_date,
+      lastRun: result.rows[0].created_at?.toISOString(),
+    });
+  } catch (err) {
+    res.json({ directionalStudy: null, error: err.message });
+  }
+});
+
 // Debug: check what bars exist in DB
 app.get('/api/backtest/debug', async (req, res) => {
   try {
