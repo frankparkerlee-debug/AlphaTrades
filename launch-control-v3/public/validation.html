@@ -70,7 +70,22 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;b
 
 /* Strategy Cards */
 .sc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px;margin-bottom:16px}
-.sc-card{background:var(--bg1);border:1px solid var(--border);border-radius:6px;padding:16px;position:relative;overflow:hidden}
+.sc-card{background:var(--bg1);border:1px solid var(--border);border-radius:6px;padding:16px;position:relative;overflow:hidden;cursor:pointer;transition:border-color .15s}
+.sc-card:hover{border-color:var(--border2)}
+.sc-detail{display:none;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
+.sc-card.sc-expanded .sc-detail{display:block}
+.sc-expand-hint{font-family:var(--mono);font-size:8px;color:var(--text4);letter-spacing:1px;text-align:center;margin-top:6px}
+.sc-card.sc-expanded .sc-expand-hint{display:none}
+.sc-detail-section{margin-bottom:10px}
+.sc-detail-title{font-family:var(--mono);font-size:8px;font-weight:700;color:var(--text3);letter-spacing:1px;margin-bottom:4px;text-transform:uppercase}
+.sc-detail-table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:10px}
+.sc-detail-table td{padding:3px 6px;border-bottom:1px solid var(--bg3);color:var(--text2)}
+.sc-detail-table td:last-child{text-align:right}
+.sc-regime-bar{display:flex;align-items:center;gap:6px;margin-bottom:3px}
+.sc-regime-label{font-family:var(--mono);font-size:9px;color:var(--text3);min-width:80px}
+.sc-regime-track{flex:1;height:5px;background:var(--bg3);border-radius:3px;overflow:hidden}
+.sc-regime-fill{height:100%;border-radius:3px}
+.sc-regime-val{font-family:var(--mono);font-size:9px;font-weight:700;min-width:35px;text-align:right}
 .sc-card.sc-deploy{border-left:3px solid var(--green)}
 .sc-card.sc-refine{border-left:3px solid var(--amber)}
 .sc-card.sc-shelve{border-left:3px solid var(--red)}
@@ -817,12 +832,104 @@ function renderStrategyCards(d){
       h+=`</div>`;
     }
 
-    h+=`</div>`;
+    h+=`<div class="sc-expand-hint">CLICK TO EXPAND</div>`;
+
+    // ── Expandable detail section ──
+    h+=`<div class="sc-detail">`;
+
+    // Summary stats table
+    if(summary.totalSignals||summary.winRate!=null){
+      h+=`<div class="sc-detail-section"><div class="sc-detail-title">PERFORMANCE SUMMARY</div><table class="sc-detail-table">`;
+      if(summary.signalsPerDay!=null)h+=`<tr><td>Signals/Day</td><td>${summary.signalsPerDay}</td></tr>`;
+      if(summary.avgWinPct!=null)h+=`<tr><td>Avg Win</td><td class="pos" style="color:var(--green)">+${summary.avgWinPct}%</td></tr>`;
+      if(summary.avgLossPct!=null)h+=`<tr><td>Avg Loss</td><td class="neg" style="color:var(--red)">${summary.avgLossPct}%</td></tr>`;
+      if(summary.avgHoldMinutes!=null)h+=`<tr><td>Avg Hold</td><td>${summary.avgHoldMinutes} min</td></tr>`;
+      if(summary.maxDrawdownDollars!=null)h+=`<tr><td>Max Drawdown</td><td class="neg" style="color:var(--red)">${fmt(summary.maxDrawdownDollars)}</td></tr>`;
+      if(summary.calls!=null)h+=`<tr><td>Calls / Puts</td><td>${summary.calls} / ${summary.puts||0}</td></tr>`;
+      if(summary.callWinRate!=null)h+=`<tr><td>Call WR / Put WR</td><td>${summary.callWinRate}% / ${summary.putWinRate||0}%</td></tr>`;
+      if(summary.totalCommissions!=null)h+=`<tr><td>Total Costs</td><td>${fmt(summary.totalCosts||0)}</td></tr>`;
+      h+=`</table></div>`;
+    }
+
+    // Monte Carlo detail
+    if(val.monteCarlo?.base){
+      const mc=val.monteCarlo;
+      h+=`<div class="sc-detail-section"><div class="sc-detail-title">MONTE CARLO (THIS STRATEGY ONLY)</div><table class="sc-detail-table">`;
+      h+=`<tr><td>P(Profit)</td><td style="color:${mc.base.probability.profit>=50?'var(--green)':'var(--red)'}">${mc.base.probability.profit}%</td></tr>`;
+      if(mc.base.pnl)h+=`<tr><td>Median P&L</td><td style="color:${mc.base.pnl.median>=0?'var(--green)':'var(--red)'}">${fmt(mc.base.pnl.median)}</td></tr>`;
+      if(mc.base.probability.ruin!=null)h+=`<tr><td>P(Ruin)</td><td style="color:${mc.base.probability.ruin<5?'var(--green)':'var(--red)'}">${mc.base.probability.ruin}%</td></tr>`;
+      if(mc.base.drawdown)h+=`<tr><td>Avg Max Drawdown</td><td style="color:var(--red)">${fmt(mc.base.drawdown.mean)}</td></tr>`;
+      if(mc.tradeStats){
+        if(mc.tradeStats.sharpe!=null)h+=`<tr><td>Sharpe</td><td>${mc.tradeStats.sharpe}</td></tr>`;
+        if(mc.tradeStats.kellyPct!=null)h+=`<tr><td>Kelly %</td><td>${mc.tradeStats.kellyPct}%</td></tr>`;
+      }
+      h+=`</table></div>`;
+    }
+
+    // Walk-forward detail
+    if(val.walkForward){
+      const wf=val.walkForward;
+      h+=`<div class="sc-detail-section"><div class="sc-detail-title">WALK-FORWARD (THIS STRATEGY ONLY)</div><table class="sc-detail-table">`;
+      h+=`<tr><td>Verdict</td><td style="color:${wf.verdict==='ROBUST'?'var(--green)':wf.verdict==='OVERFIT'?'var(--red)':'var(--amber)'}">${wf.verdict||'--'}</td></tr>`;
+      if(wf.summary){
+        if(wf.summary.consistency!=null)h+=`<tr><td>Consistency</td><td>${wf.summary.consistency}%</td></tr>`;
+        if(wf.summary.avgTrainWinRate!=null)h+=`<tr><td>Train WR / Test WR</td><td>${wf.summary.avgTrainWinRate}% / ${wf.summary.avgTestWinRate}%</td></tr>`;
+        if(wf.summary.winRateDegradation!=null)h+=`<tr><td>WR Degradation</td><td>${wf.summary.winRateDegradation}x</td></tr>`;
+      }
+      h+=`</table></div>`;
+    }
+
+    // Regime stress detail
+    if(val.regimeStress?.regimes){
+      const regimes=val.regimeStress.regimes;
+      const regimeKeys=['marketRegime','direction','timeOfDay'];
+      for(const rk of regimeKeys){
+        const data=regimes[rk];
+        if(!data||!Array.isArray(data)||data.length===0)continue;
+        h+=`<div class="sc-detail-section"><div class="sc-detail-title">REGIME: ${rk.replace(/([A-Z])/g,' $1').toUpperCase()}</div>`;
+        data.forEach(r=>{
+          const wr=r.winRate||0;
+          const color=wr>=50?'var(--green)':wr>=40?'var(--amber)':'var(--red)';
+          h+=`<div class="sc-regime-bar">
+            <div class="sc-regime-label">${r.label||''}</div>
+            <div class="sc-regime-track"><div class="sc-regime-fill" style="width:${Math.min(100,wr)}%;background:${color}"></div></div>
+            <div class="sc-regime-val" style="color:${color}">${wr}%</div>
+          </div>`;
+        });
+        h+=`</div>`;
+      }
+    }
+
+    // OOS detail
+    if(val.outOfSample){
+      const oos2=val.outOfSample;
+      h+=`<div class="sc-detail-section"><div class="sc-detail-title">OUT-OF-SAMPLE (THIS STRATEGY ONLY)</div><table class="sc-detail-table">`;
+      h+=`<tr><td>Verdict</td><td style="color:${oos2.verdict==='ROBUST'||oos2.verdict==='PASS'?'var(--green)':'var(--red)'}">${oos2.verdict||'--'}</td></tr>`;
+      if(oos2.train)h+=`<tr><td>Train WR / PF</td><td>${oos2.train.winRate||'--'}% / ${oos2.train.profitFactor||'--'}</td></tr>`;
+      if(oos2.test)h+=`<tr><td>Test WR / PF</td><td>${oos2.test.winRate||'--'}% / ${oos2.test.profitFactor||'--'}</td></tr>`;
+      h+=`</table></div>`;
+    }
+
+    // Recommendations
+    if(card.verdict?.recommendations?.length>0){
+      h+=`<div class="sc-detail-section"><div class="sc-detail-title">RECOMMENDATIONS</div>`;
+      card.verdict.recommendations.forEach(r=>h+=`<div style="font-size:10px;color:var(--text2);margin-bottom:3px;padding-left:8px;border-left:2px solid var(--border)">${r}</div>`);
+      h+=`</div>`;
+    }
+
+    h+=`</div>`; // end sc-detail
+
+    h+=`</div>`; // end sc-card
   }
   h+=`</div>`;
 
   h+=`<div style="font-family:var(--mono);font-size:9px;color:var(--text4);margin-top:8px">Last run: ${d.lastRun?new Date(d.lastRun).toLocaleString():'unknown'}</div>`;
   $('tc-strategy-cards').innerHTML=h;
+
+  // Click to expand/collapse cards
+  document.querySelectorAll('.sc-card').forEach(card=>{
+    card.addEventListener('click',()=>card.classList.toggle('sc-expanded'));
+  });
 }
 
 function phaseColor(score){

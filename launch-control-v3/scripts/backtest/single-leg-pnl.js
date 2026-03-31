@@ -244,7 +244,12 @@ export function simulateSingleLeg(signal, bars, params) {
       entryAreaVols.push(bar.v || 0);
     }
 
-    // ── Exit: protective stop (underlying price) ──────────────────────────
+    // ── Exit priority: STOP first, then TARGET, then TIME, then MOMENTUM ──
+    // Stops and targets are the primary exit mechanism. Momentum exits are
+    // a trailing protection that only fires after the trade has had time to
+    // develop AND the move is clearly failing.
+
+    // 1. Protective stop (underlying price)
     const hitStop = direction === 'CALL'
       ? bar.l <= stopPrice
       : bar.h >= stopPrice;
@@ -256,11 +261,32 @@ export function simulateSingleLeg(signal, bars, params) {
       break;
     }
 
-    // ── Exit: momentum breakdown ──────────────────────────────────────────
-    // Only check after minimum bars held to avoid noise
+    // 2. Target reached (primary profit-taking)
+    const hitTarget = direction === 'CALL'
+      ? bar.h >= targetPrice
+      : bar.l <= targetPrice;
 
-    // A. Reversal bars: 2+ consecutive bars closing against direction
-    if (barsProcessed >= 5) {
+    if (hitTarget) {
+      exitType = 'TARGET';
+      exitBar = bar;
+      holdMinutes = minutesHeld;
+      break;
+    }
+
+    // 3. Time limit (backstop)
+    if (minutesHeld > maxHoldMinutes) {
+      exitType = 'TIME';
+      exitBar = bar;
+      holdMinutes = minutesHeld;
+      break;
+    }
+
+    // 4. Momentum breakdown (trailing protection -- only after trade has developed)
+    // These are SECONDARY exits: they protect profits or cut losses when
+    // momentum is clearly dying, but only after enough bars to avoid noise.
+
+    // A. Reversal bars: 3+ consecutive bars closing against direction (after 10+ bars)
+    if (barsProcessed >= 10) {
       const barAgainstDirection = direction === 'CALL'
         ? (bar.c < bar.o)
         : (bar.c > bar.o);
@@ -269,7 +295,7 @@ export function simulateSingleLeg(signal, bars, params) {
       } else {
         consecutiveReversalBars = 0;
       }
-      if (consecutiveReversalBars >= 2) {
+      if (consecutiveReversalBars >= 3) {
         exitType = 'MOMENTUM_EXIT';
         exitBar = bar;
         holdMinutes = minutesHeld;
@@ -277,10 +303,10 @@ export function simulateSingleLeg(signal, bars, params) {
       }
     }
 
-    // B. Volume exhaustion: 3+ consecutive bars below 50% of entry-area volume
-    if (barsProcessed >= 8 && entryAreaVols.length >= 5) {
+    // B. Volume exhaustion: 3+ consecutive bars below 40% of entry-area volume (after 12+ bars)
+    if (barsProcessed >= 12 && entryAreaVols.length >= 5) {
       const baselineVol = entryAreaVols.reduce((s, v) => s + v, 0) / entryAreaVols.length;
-      if (baselineVol > 0 && (bar.v || 0) < baselineVol * 0.5) {
+      if (baselineVol > 0 && (bar.v || 0) < baselineVol * 0.4) {
         consecutiveLowVolBars++;
       } else {
         consecutiveLowVolBars = 0;
@@ -293,30 +319,10 @@ export function simulateSingleLeg(signal, bars, params) {
       }
     }
 
-    // C. Favorable move reversal: price retraces 50%+ of peak move
-    //    (only after reaching meaningful move of 0.2 ATR)
-    if (peakFavorableMove >= 0.2 * atrDollar && favorableMove < peakFavorableMove * 0.5) {
+    // C. Favorable move reversal: price retraces 60%+ of peak move
+    //    (only after 10+ bars AND reaching meaningful move of 0.4 ATR)
+    if (barsProcessed >= 10 && peakFavorableMove >= 0.4 * atrDollar && favorableMove < peakFavorableMove * 0.4) {
       exitType = 'MOMENTUM_EXIT';
-      exitBar = bar;
-      holdMinutes = minutesHeld;
-      break;
-    }
-
-    // ── Exit: target reached (secondary - lock in gains) ──────────────────
-    const hitTarget = direction === 'CALL'
-      ? bar.h >= targetPrice
-      : bar.l <= targetPrice;
-
-    if (hitTarget) {
-      exitType = 'TARGET';
-      exitBar = bar;
-      holdMinutes = minutesHeld;
-      break;
-    }
-
-    // ── Exit: time limit (backstop) ───────────────────────────────────────
-    if (minutesHeld > maxHoldMinutes) {
-      exitType = 'TIME';
       exitBar = bar;
       holdMinutes = minutesHeld;
       break;

@@ -25,6 +25,33 @@ import { applyCalibration } from '../grade-calibrator.js';
 
 // ── Shared Helpers ───────────────────────────────────────────────────────────
 
+/**
+ * Determine if a date string (YYYY-MM-DD) falls in US Eastern Daylight Time.
+ * EDT runs from the second Sunday in March to the first Sunday in November.
+ */
+function isEDT(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  // Second Sunday in March
+  const mar1Day = new Date(y, 2, 1).getDay(); // 0=Sun
+  const secondSunMar = mar1Day === 0 ? 8 : (14 - mar1Day + 1);
+  // First Sunday in November
+  const nov1Day = new Date(y, 10, 1).getDay();
+  const firstSunNov = nov1Day === 0 ? 1 : (7 - nov1Day + 1);
+  const mmdd = m * 100 + d;
+  return mmdd >= (300 + secondSunMar) && mmdd < (1100 + firstSunNov);
+}
+
+/**
+ * Get RTH (Regular Trading Hours) UTC time boundaries for a given date.
+ * EDT (UTC-4): 9:30 AM = 13:30 UTC, 4:00 PM = 20:00 UTC
+ * EST (UTC-5): 9:30 AM = 14:30 UTC, 4:00 PM = 21:00 UTC
+ */
+function getRTHBounds(dateStr) {
+  return isEDT(dateStr)
+    ? { start: '13:30', end: '20:00' }
+    : { start: '14:30', end: '21:00' };
+}
+
 // Per-strategy grade calibrations loaded from DB at startup (live mode).
 // In backtest mode, these are computed after the run and stored for next time.
 let _gradeCalibrations = {};
@@ -93,20 +120,30 @@ function findPrevDayBar(dailyBars, ticker, date) {
 
 /**
  * Get sorted minute bar keys for a ticker on a given date.
+ * Filters to Regular Trading Hours only (9:30 AM - 4:00 PM ET).
+ * This ensures offset 0 = market open, offset 330 = 3:00 PM, etc.
  */
 function getMinuteKeys(minuteBars, ticker, date) {
   const tickerMinutes = minuteBars[ticker] || {};
-  return Object.keys(tickerMinutes).filter(k => k.startsWith(date)).sort();
+  const { start, end } = getRTHBounds(date);
+  const rthStart = `${date}T${start}`;
+  const rthEnd = `${date}T${end}`;
+  return Object.keys(tickerMinutes)
+    .filter(k => k >= rthStart && k <= rthEnd)
+    .sort();
 }
 
 /**
  * Build an array of bar objects from minuteBars up to (and including) a given time key.
+ * Filters to RTH only so VWAP and other aggregations exclude pre-market data.
  * Returns [{o, h, l, c, v, t}, ...] sorted chronologically.
  */
 function getBarsUpTo(minuteBars, ticker, date, upToKey) {
   const tickerMinutes = minuteBars[ticker] || {};
+  const { start } = getRTHBounds(date);
+  const rthStart = `${date}T${start}`;
   const keys = Object.keys(tickerMinutes)
-    .filter(k => k.startsWith(date) && k <= upToKey)
+    .filter(k => k >= rthStart && k <= upToKey)
     .sort();
   return keys.map(k => ({ ...tickerMinutes[k], t: k }));
 }
@@ -255,13 +292,13 @@ function isVolumeDecreasing(bars, lookback = 5) {
  */
 function detectPullback(bars, direction, atr) {
   const result = { detected: false, pullbackLow: 0, pullbackHigh: 0, pullbackBars: 0, triggerBar: null };
-  if (bars.length < 6) return result;
+  if (bars.length < 5) return result;
 
-  // Find the momentum extreme
+  // Find the momentum extreme (exclude last 2 bars to leave room for pullback + trigger)
   let extremeIdx = -1;
   let extremeVal = direction === 'CALL' ? -Infinity : Infinity;
 
-  for (let i = 0; i < bars.length - 3; i++) {
+  for (let i = 0; i < bars.length - 2; i++) {
     if (direction === 'CALL' && bars[i].h > extremeVal) {
       extremeVal = bars[i].h;
       extremeIdx = i;
@@ -272,46 +309,34 @@ function detectPullback(bars, direction, atr) {
     }
   }
 
-  if (extremeIdx < 2 || extremeIdx >= bars.length - 3) return result;
+  if (extremeIdx < 1 || extremeIdx >= bars.length - 2) return result;
 
   // Look for pullback bars after the extreme
+  // Relaxed: count bars that are generally against trend OR flat (small moves)
   let pullbackStart = extremeIdx + 1;
   let pullbackCount = 0;
   let pullbackHigh = -Infinity;
   let pullbackLow = Infinity;
-  let prevVol = bars[pullbackStart]?.v || 0;
-  let volumeDecreasing = true;
 
-  for (let i = pullbackStart; i < bars.length - 1 && pullbackCount < 8; i++) {
+  for (let i = pullbackStart; i < bars.length - 1 && pullbackCount < 10; i++) {
     const bar = bars[i];
     const barRange = bar.h - bar.l;
-    if (barRange <= 0) break;
+    if (barRange <= 0) { pullbackCount++; continue; }
 
-    // Check direction: pullback bars should move against the trend
+    // Count bars that move against trend OR are small (< 30% ATR)
     const barMove = bar.c - bar.o;
     const isAgainst = (direction === 'CALL' && barMove <= 0) || (direction === 'PUT' && barMove >= 0);
-    if (!isAgainst && pullbackCount < 3) break; // need at least 3 bars against
-
-    // Check wick ratio -- no bar with wick > 60% of range
-    const upperWick = bar.h - Math.max(bar.o, bar.c);
-    const lowerWick = Math.min(bar.o, bar.c) - bar.l;
-    const maxWick = Math.max(upperWick, lowerWick);
-    if (maxWick / barRange > 0.60) break;
-
-    // Track volume declining
-    if ((bar.v || 0) > prevVol * 1.1 && pullbackCount > 0) {
-      volumeDecreasing = false;
-    }
-    prevVol = bar.v || 0;
+    const isSmall = Math.abs(barMove) < 0.3 * atr;
+    if (!isAgainst && !isSmall && pullbackCount < 2) break; // need at least 2 counter/flat bars
 
     if (bar.h > pullbackHigh) pullbackHigh = bar.h;
     if (bar.l < pullbackLow) pullbackLow = bar.l;
     pullbackCount++;
   }
 
-  if (pullbackCount < 3) return result;
+  if (pullbackCount < 2) return result;
 
-  // Check trigger: the last bar should break the pullback trendline
+  // Check trigger: the last bar should break the pullback high/low
   const lastBar = bars[bars.length - 1];
   const triggerBreaks = direction === 'CALL'
     ? lastBar.c > pullbackHigh
@@ -390,6 +415,7 @@ function levelsConverging(levels, price, tolerance = 0.001) {
  * Time: Bars 5-60 from open (9:35-10:30 AM). FIRST breakout only.
  * Range: First 5 bars. Min width 0.2%, max 1.5% of price.
  */
+let _orbDiagLogged = false;
 export function generateORBBreakoutSignals(date, dayData, context) {
   const { minuteBars, etfMinuteBars, dailyBars } = dayData;
   const { profiles, tickers } = context;
@@ -397,6 +423,19 @@ export function generateORBBreakoutSignals(date, dayData, context) {
   const seen = new Set();
 
   const RANGE_BARS = 5;
+
+  // One-time diagnostic: log RTH bar counts
+  if (!_orbDiagLogged) {
+    _orbDiagLogged = true;
+    const sampleTicker = tickers[0];
+    const rthKeys = getMinuteKeys(minuteBars, sampleTicker, date);
+    const allTickerKeys = Object.keys(minuteBars[sampleTicker] || {}).filter(k => k.startsWith(date)).sort();
+    const bounds = getRTHBounds(date);
+    console.log(`[DIAG] RTH filter: ${sampleTicker} ${date} | total=${allTickerKeys.length} rth=${rthKeys.length} | bounds=${bounds.start}-${bounds.end} | first_rth=${rthKeys[0]} last_rth=${rthKeys[rthKeys.length-1]} | first_all=${allTickerKeys[0]} last_all=${allTickerKeys[allTickerKeys.length-1]}`);
+    // Log ETF bar counts too
+    const spyRth = getMinuteKeys(etfMinuteBars || {}, 'SPY', date);
+    console.log(`[DIAG] SPY ETF: rth=${spyRth.length} first=${spyRth[0]} last=${spyRth[spyRth.length-1]}`);
+  }
 
   for (const ticker of tickers) {
     if (seen.has(ticker)) continue;
@@ -530,6 +569,9 @@ export function generateVWAPBounceSignals(date, dayData, context) {
 
   const CHECK_OFFSETS = [15, 45, 75, 105, 135, 165, 195, 225, 255, 270];
 
+  // Diagnostic counters (first date only)
+  const diag = { checks: 0, noVwap: 0, distFail: 0, noCross: 0, volFail: 0, candleFail: 0, passed: 0 };
+
   for (const ticker of tickers) {
     const profile = profiles[ticker];
     if (!profile) continue;
@@ -548,12 +590,13 @@ export function generateVWAPBounceSignals(date, dayData, context) {
       const bars = getBarsUpTo(minuteBars, ticker, date, checkKey);
       if (bars.length < 15) continue;
 
+      diag.checks++;
       const currentPrice = bars[bars.length - 1].c;
       const vwap = computeVWAP(bars);
-      if (!vwap || vwap <= 0) continue;
+      if (!vwap || vwap <= 0) { diag.noVwap++; continue; }
 
       const distPct = Math.abs(currentPrice - vwap) / vwap;
-      if (distPct < 0.0015 || distPct > 0.005) continue; // 0.15-0.5% from VWAP
+      if (distPct < 0.001 || distPct > 0.008) { diag.distFail++; continue; } // Widened: 0.1-0.8% from VWAP
 
       // Direction: if price is just above VWAP after being below = CALL bounce
       // If price is just below VWAP after being above = PUT bounce
@@ -567,12 +610,12 @@ export function generateVWAPBounceSignals(date, dayData, context) {
       let direction;
       if (aboveVwap && wasBelow) direction = 'CALL';
       else if (!aboveVwap && wasAbove) direction = 'PUT';
-      else continue;
+      else { diag.noCross++; continue; }
 
-      // Volume declining on pullback
-      if (!isVolumeDecreasing(bars, 5)) continue;
+      // Volume declining on pullback (soft bonus, not hard gate)
+      const volDeclining = isVolumeDecreasing(bars, 5);
 
-      // Reversal candle check
+      // Reversal candle check (soft -- VWAP proximity IS the thesis)
       const lastBar = bars[bars.length - 1];
       const candleAnalysis = analyzeCandle(lastBar);
       const isHammer = candleAnalysis.type === 'HAMMER' || candleAnalysis.type === 'INVERTED_HAMMER';
@@ -584,11 +627,12 @@ export function generateVWAPBounceSignals(date, dayData, context) {
         engulfing = engulfResult.detected;
       }
       const hasReversal = isHammer || engulfing || candleAnalysis.bodyRatio >= 0.50;
-      if (!hasReversal) continue;
+      // Require at least one of: volume declining OR reversal candle
+      if (!volDeclining && !hasReversal) { diag.candleFail++; continue; }
+      diag.passed++;
 
-      // Confluence
-      const confluenceResult = checkConfluence(bars, direction, { vwap, currentPrice }, { minFactors: 3 });
-      if (!confluenceResult.pass) continue;
+      // Confluence (minFactors: 2 -- VWAP distance + vol decline + reversal candle already filter heavily)
+      const confluenceResult = checkConfluence(bars, direction, { vwap, currentPrice }, { minFactors: 2 });
 
       // SPY alignment
       const spyChange = getETFChange(etfMinuteBars, 'SPY', date, checkKey);
@@ -600,20 +644,21 @@ export function generateVWAPBounceSignals(date, dayData, context) {
       else if (candleAnalysis.type.includes('STRONG')) confidence += 4;
       else confidence += 2;
       if (isHammer || engulfing) confidence += 4;
-      // Volume decline bonus (already passed gate)
+      // Volume decline bonus
       const volBars = bars.slice(-10);
       const firstHalf = volBars.slice(0, 5);
       const secondHalf = volBars.slice(-5);
       const firstVol = firstHalf.reduce((s, b) => s + (b.v || 0), 0);
       const secondVol = secondHalf.reduce((s, b) => s + (b.v || 0), 0);
       const volDeclineRatio = firstVol > 0 ? secondVol / firstVol : 1;
-      if (volDeclineRatio < 0.6) confidence += 5;
-      else confidence += 3;
+      if (volDeclining && volDeclineRatio < 0.6) confidence += 5;
+      else if (volDeclining) confidence += 3;
+      else confidence += 1;
       if (spyAligned) confidence += 3;
       if (distPct >= 0.0015 && distPct <= 0.0025) confidence += 3;
       confidence += Math.max(0, confluenceResult.confirming * 2);
       confidence -= confluenceResult.opposing * 2;
-      confidence += 3; // strategy bonus
+      if (confluenceResult.pass) confidence += 3; // bonus for 2+ confluence
       confidence = Math.max(60, Math.min(95, confidence));
 
       // Stop: 0.3 ATR beyond VWAP (scales with stock price/volatility)
@@ -642,7 +687,7 @@ export function generateVWAPBounceSignals(date, dayData, context) {
       signals.push(buildSignal('VWAP_BOUNCE', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
         vwap_price: +vwap.toFixed(2),
         vwap_distance_pct: +(distPct * 100).toFixed(2),
-        volume_declining: true,
+        volume_declining: volDeclining,
         volume_decline_ratio: +volDeclineRatio.toFixed(2),
         candle_type: candleAnalysis.type,
         engulfing,
@@ -654,6 +699,9 @@ export function generateVWAPBounceSignals(date, dayData, context) {
     }
   }
 
+  if (diag.checks > 0 && signals.length === 0) {
+    console.log(`[DIAG] VWAP_BOUNCE ${date}: checks=${diag.checks} noVwap=${diag.noVwap} distFail=${diag.distFail} noCross=${diag.noCross} volFail=${diag.volFail} candleFail=${diag.candleFail} passed=${diag.passed}`);
+  }
   return signals;
 }
 
@@ -670,6 +718,7 @@ export function generateFirstPullbackSignals(date, dayData, context) {
   const seen = new Set();
 
   const CHECK_OFFSETS = [15, 20, 25, 30, 40, 50, 60, 75, 90];
+  const diag = { checks: 0, noMomentum: 0, noPullback: 0, deepPB: 0, vwapFail: 0, passed: 0 };
 
   for (const ticker of tickers) {
     if (seen.has(ticker)) continue;
@@ -694,18 +743,19 @@ export function generateFirstPullbackSignals(date, dayData, context) {
       const bars = getBarsUpTo(minuteBars, ticker, date, checkKey);
       if (bars.length < 10) continue;
 
+      diag.checks++;
       const currentPrice = bars[bars.length - 1].c;
 
-      // Momentum check: need >= 0.5 ATR move from open
+      // Momentum check: need >= 0.3 ATR move from open (relaxed from 0.5)
       const moveFromOpen = currentPrice - sessionOpen;
       const moveATRs = Math.abs(moveFromOpen) / atrDollar;
-      if (moveATRs < 0.5) continue;
+      if (moveATRs < 0.3) { diag.noMomentum++; continue; }
 
       const direction = moveFromOpen > 0 ? 'CALL' : 'PUT';
 
       // Detect first pullback
       const pullback = detectPullback(bars, direction, atrDollar);
-      if (!pullback.detected) continue;
+      if (!pullback.detected) { diag.noPullback++; continue; }
 
       // Pullback depth check: must retrace < 50% of the initial move
       // Deeper retracement = trend exhaustion, not profit-taking pause
@@ -716,20 +766,19 @@ export function generateFirstPullbackSignals(date, dayData, context) {
       const pullbackDepth = direction === 'CALL'
         ? moveExtreme - pullback.pullbackLow
         : pullback.pullbackHigh - moveExtreme;
-      if (totalMove > 0 && pullbackDepth / totalMove > 0.50) continue;
+      if (totalMove > 0 && pullbackDepth / totalMove > 0.62) { diag.deepPB++; continue; } // Relaxed from 0.50
 
-      // VWAP alignment
+      // VWAP alignment (soft -- momentum + pullback is the thesis)
       const vwap = computeVWAP(bars);
-      if (direction === 'CALL' && currentPrice <= vwap) continue;
-      if (direction === 'PUT' && currentPrice >= vwap) continue;
+      const vwapAligned = (direction === 'CALL' && currentPrice > vwap) || (direction === 'PUT' && currentPrice < vwap);
+      diag.passed++;
 
       // SPY alignment
       const spyChange = getETFChange(etfMinuteBars, 'SPY', date, checkKey);
       const spyAligned = (direction === 'CALL' && spyChange > 0) || (direction === 'PUT' && spyChange < 0);
 
-      // Confluence
-      const confluenceResult = checkConfluence(bars, direction, { vwap, currentPrice }, { minFactors: 3 });
-      if (!confluenceResult.pass) continue;
+      // Confluence (minFactors: 2 -- momentum + pullback + VWAP + SPY already filter heavily)
+      const confluenceResult = checkConfluence(bars, direction, { vwap, currentPrice }, { minFactors: 2 });
 
       // Candle quality on trigger bar
       const candleAnalysis = analyzeCandle(bars[bars.length - 1]);
@@ -758,10 +807,11 @@ export function generateFirstPullbackSignals(date, dayData, context) {
       if (triggerVolRatio >= 1.3) confidence += 5;
       else confidence += 3;
       if (spyAligned) confidence += 3;
-      confidence += 3; // VWAP aligned (passed gate)
+      if (vwapAligned) confidence += 3; // VWAP bonus (soft)
       confidence += Math.max(0, confluenceResult.confirming * 2);
       confidence -= confluenceResult.opposing * 2;
-      confidence += 4; // first pullback bonus
+      if (confluenceResult.pass) confidence += 4; // first pullback bonus
+      else confidence += 2;
       confidence = Math.max(60, Math.min(95, confidence));
 
       // Stop: below pullback low/high. Target: momentum extreme + 0.3 ATR.
@@ -791,6 +841,9 @@ export function generateFirstPullbackSignals(date, dayData, context) {
     }
   }
 
+  if (diag.checks > 0 && signals.length === 0) {
+    console.log(`[DIAG] FIRST_PULLBACK ${date}: checks=${diag.checks} noMomentum=${diag.noMomentum} noPullback=${diag.noPullback} deepPB=${diag.deepPB} vwapFail=${diag.vwapFail} passed=${diag.passed}`);
+  }
   return signals;
 }
 
@@ -951,6 +1004,7 @@ export function generatePowerHourMomentumSignals(date, dayData, context) {
   const { minuteBars, etfMinuteBars, dailyBars } = dayData;
   const { profiles, tickers } = context;
   const signals = [];
+  const diag = { tickers: 0, noKeys: 0, noTrend: 0, noVwap: 0, reversal: 0, noSpy: 0, passed: 0 };
 
   const CHECK_OFFSET = 330;
 
@@ -959,7 +1013,8 @@ export function generatePowerHourMomentumSignals(date, dayData, context) {
     if (!profile) continue;
 
     const allKeys = getMinuteKeys(minuteBars, ticker, date);
-    if (allKeys.length <= CHECK_OFFSET) continue;
+    if (allKeys.length <= CHECK_OFFSET) { diag.noKeys++; continue; }
+    diag.tickers++;
 
     const tickerMinutes = minuteBars[ticker] || {};
     const sessionOpen = tickerMinutes[allKeys[0]]?.o;
@@ -973,29 +1028,30 @@ export function generatePowerHourMomentumSignals(date, dayData, context) {
     const atr = profile.atr_20d || 0.025;
     const atrDollar = atr * currentPrice;
 
-    // Intraday trend check: >= 0.3 ATR
+    // Intraday trend check: >= 0.2 ATR (relaxed from 0.3)
     const intradayMove = currentPrice - sessionOpen;
     const moveATRs = Math.abs(intradayMove) / atrDollar;
-    if (moveATRs < 0.3) continue;
+    if (moveATRs < 0.2) { diag.noTrend++; continue; }
 
     const direction = intradayMove > 0 ? 'CALL' : 'PUT';
 
     // VWAP confirming
     const vwap = computeVWAP(bars);
-    if (!vwap || vwap <= 0) continue;
-    if (direction === 'CALL' && currentPrice <= vwap) continue;
-    if (direction === 'PUT' && currentPrice >= vwap) continue;
+    if (!vwap || vwap <= 0) { diag.noVwap++; continue; }
+    if (direction === 'CALL' && currentPrice <= vwap) { diag.noVwap++; continue; }
+    if (direction === 'PUT' && currentPrice >= vwap) { diag.noVwap++; continue; }
 
-    // No strong reversal bars in last 10 bars (relaxed from 30 per Gao et al.)
-    const last30 = bars.slice(-10);
-    const reversalThreshold = 0.15 * atrDollar;
-    let hasReversal = false;
-    for (const bar of last30) {
+    // Reversal bar count in last 10 bars (soft: count, don't gate)
+    const last10 = bars.slice(-10);
+    const reversalThreshold = 0.2 * atrDollar; // Relaxed from 0.15
+    let reversalCount = 0;
+    for (const bar of last10) {
       const barMove = bar.c - bar.o;
-      if (direction === 'CALL' && barMove < -reversalThreshold) { hasReversal = true; break; }
-      if (direction === 'PUT' && barMove > reversalThreshold) { hasReversal = true; break; }
+      if (direction === 'CALL' && barMove < -reversalThreshold) reversalCount++;
+      if (direction === 'PUT' && barMove > reversalThreshold) reversalCount++;
     }
-    if (hasReversal) continue;
+    // Only gate on majority reversal (5+ of 10 bars reversing = real reversal)
+    if (reversalCount >= 5) { diag.reversal++; continue; }
 
     // Consolidation/flag pattern: last 15 bars range < 0.3 ATR
     const last15 = bars.slice(-15);
@@ -1011,14 +1067,13 @@ export function generatePowerHourMomentumSignals(date, dayData, context) {
     const prior15Vol = prior15.length > 0 ? prior15.reduce((s, b) => s + (b.v || 0), 0) / prior15.length : last15Vol;
     const volTrend = prior15Vol > 0 ? last15Vol / prior15Vol : 1;
 
-    // SPY alignment
+    // SPY alignment (soft bonus, not hard gate)
     const spyChange = getETFChange(etfMinuteBars, 'SPY', date, checkKey);
     const spyAligned = (direction === 'CALL' && spyChange > 0) || (direction === 'PUT' && spyChange < 0);
-    if (!spyAligned) continue; // hard gate for power hour
+    diag.passed++;
 
     // Confluence
-    const confluenceResult = checkConfluence(bars, direction, { vwap, currentPrice }, { minFactors: 3 });
-    if (!confluenceResult.pass) continue;
+    const confluenceResult = checkConfluence(bars, direction, { vwap, currentPrice }, { minFactors: 2 });
 
     // Engulfing
     let engulfing = false;
@@ -1040,13 +1095,15 @@ export function generatePowerHourMomentumSignals(date, dayData, context) {
     if (engulfing) confidence += 4;
     if (volTrend >= 1.3) confidence += 5;
     else if (volTrend >= 1.0) confidence += 3;
-    confidence += 3; // SPY aligned (hard gate)
+    if (spyAligned) confidence += 3; // SPY bonus (soft)
     confidence += 3; // VWAP aligned (hard gate)
+    if (reversalCount === 0) confidence += 3; // clean trend bonus
     confidence += Math.max(0, confluenceResult.confirming * 2);
     confidence -= confluenceResult.opposing * 2;
     if (moveATRs >= 0.5) confidence += 4;
     else confidence += 3;
     if (hasConsolidation) confidence += 3;
+    if (confluenceResult.pass) confidence += 3;
     confidence = Math.max(60, Math.min(95, confidence));
 
     // Stop: below consolidation low/high. Target: 2:1 R:R.
@@ -1071,6 +1128,9 @@ export function generatePowerHourMomentumSignals(date, dayData, context) {
     }));
   }
 
+  if (diag.tickers > 0 && signals.length === 0) {
+    console.log(`[DIAG] POWER_HOUR ${date}: tickers=${diag.tickers} noKeys=${diag.noKeys} noTrend=${diag.noTrend} noVwap=${diag.noVwap} reversal=${diag.reversal} noSpy=${diag.noSpy} passed=${diag.passed}`);
+  }
   // Cap at top 5
   signals.sort((a, b) => b.composite - a.composite);
   return signals.slice(0, 5);
@@ -1247,8 +1307,8 @@ export function generateExtremeReversalSignals(date, dayData, context) {
       const moveFromOpen = currentPrice - sessionOpen;
       const moveATRs = Math.abs(moveFromOpen) / atrDollar;
 
-      // Must have moved > 2 ATR from open (extreme move)
-      if (moveATRs < 2.0) continue;
+      // Must have moved > 1.5 ATR from open (extreme move)
+      if (moveATRs < 1.5) continue;
 
       // Reversal direction: if stock dropped 2+ ATR, buy CALL (mean reversion up)
       const direction = moveFromOpen < 0 ? 'CALL' : 'PUT';
@@ -1384,7 +1444,7 @@ export function generateEODMeanReversionSignals(date, dayData, context) {
     // Must have moved meaningfully (> 1% intraday) to be a reversal candidate
     if (Math.abs(intradayReturn) < 0.01) continue;
 
-    const bars = getBarsUpTo(minuteBars, ticker, cand.checkKey.slice(0, 10), checkKey);
+    const bars = getBarsUpTo(minuteBars, ticker, date, checkKey);
     if (bars.length < 30) continue;
 
     const vwap = computeVWAP(bars);
@@ -1513,9 +1573,8 @@ export function generateHighRvolBreakoutSignals(date, dayData, context) {
         engulfing = engulfResult.detected;
       }
 
-      // Confluence
-      const confluenceResult = checkConfluence(bars, direction, { vwap, currentPrice }, { minFactors: 3 });
-      if (!confluenceResult.pass) continue;
+      // Confluence (soft -- RVOL 2x + VWAP alignment + 0.5 ATR move already filter heavily)
+      const confluenceResult = checkConfluence(bars, direction, { vwap, currentPrice }, { minFactors: 2 });
 
       // Confidence
       let confidence = 60;
@@ -1530,6 +1589,7 @@ export function generateHighRvolBreakoutSignals(date, dayData, context) {
       confidence += Math.max(0, confluenceResult.confirming * 2);
       confidence -= confluenceResult.opposing * 2;
       confidence += 4; // high RVOL bonus
+      if (confluenceResult.pass) confidence += 3;
       confidence = Math.max(60, Math.min(95, confidence));
 
       // Stop: below first-30-min low/high
@@ -1578,8 +1638,8 @@ export function generatePEADDriftSignals(date, dayData, context) {
   const { profiles, tickers } = context;
   const signals = [];
 
-  // Check for earnings events
-  const earningsToday = context.earningsEvents?.[date] || {};
+  // Check for earnings events (earningsCalendar from strategy-data-loader)
+  const earningsToday = context.earningsCalendar?.[date] || context.earningsEvents?.[date] || {};
 
   for (const ticker of tickers) {
     const earnings = earningsToday[ticker];
@@ -1948,7 +2008,21 @@ export function generateAnalystDriftSignals(date, dayData, context) {
   const signals = [];
 
   // Check for analyst rating changes (from ticker_intelligence or external feed)
+  // Also check intelligence data for analyst consensus changes
   const analystChanges = context.analystChanges?.[date] || {};
+  // Fallback: derive from intelligence data if no explicit changes feed
+  if (Object.keys(analystChanges).length === 0 && context.intelligence) {
+    for (const ticker of tickers) {
+      const intel = context.intelligence[ticker];
+      if (!intel) continue;
+      // Check if analyst_consensus indicates a recent change
+      if (intel.analyst_consensus === 'STRONG_BUY' && intel.upside_to_target_pct > 15) {
+        analystChanges[ticker] = { direction: 'UPGRADE', firm: 'consensus', firm_tier: 'major' };
+      } else if (intel.analyst_consensus === 'SELL' || (intel.analyst_consensus === 'HOLD' && intel.upside_to_target_pct < -10)) {
+        analystChanges[ticker] = { direction: 'DOWNGRADE', firm: 'consensus', firm_tier: 'major' };
+      }
+    }
+  }
 
   for (const ticker of tickers) {
     const change = analystChanges[ticker];
@@ -2024,13 +2098,23 @@ export function generateVIXReversalSignals(date, dayData, context) {
   const { profiles, tickers } = context;
   const signals = [];
 
-  // Requires VIX data
-  const vixData = context.vixData?.[date];
-  if (!vixData) return signals;
+  // VIX data from dayData.vixByTime or context.vixData
+  const vixByTime = dayData.vixByTime || {};
+  const vixKeys = Object.keys(vixByTime).filter(k => k.startsWith(date)).sort();
+  const vixData = context.vixData?.[date] || null;
 
-  // Only fire when VIX is extreme (> 90th percentile or absolute > 28)
-  const vixLevel = vixData.close || vixData.level || 0;
-  const vixPercentile = vixData.percentile_90d || 0;
+  // Get VIX level from available sources
+  let vixLevel = 0;
+  if (vixKeys.length > 0) {
+    const lastVixBar = vixByTime[vixKeys[vixKeys.length - 1]];
+    vixLevel = lastVixBar?.c || lastVixBar?.close || 0;
+  } else if (vixData) {
+    vixLevel = vixData.close || vixData.level || 0;
+  }
+  if (vixLevel <= 0) return signals;
+
+  // Only fire when VIX is extreme (> 28 absolute)
+  const vixPercentile = vixData?.percentile_90d || 0;
   if (vixLevel < 28 && vixPercentile < 90) return signals;
 
   const CHECK_OFFSET = 30;
