@@ -336,19 +336,21 @@ function detectPullback(bars, direction, atr) {
 
   if (pullbackCount < 2) return result;
 
-  // Check trigger: the last bar should break the pullback high/low
-  const lastBar = bars[bars.length - 1];
-  const triggerBreaks = direction === 'CALL'
-    ? lastBar.c > pullbackHigh
-    : lastBar.c < pullbackLow;
-
-  if (!triggerBreaks) return result;
-
-  result.detected = true;
-  result.pullbackLow = pullbackLow;
-  result.pullbackHigh = pullbackHigh;
-  result.pullbackBars = pullbackCount;
-  result.triggerBar = lastBar;
+  // Check trigger: any of the last 3 bars should break the pullback high/low
+  for (let t = Math.max(0, bars.length - 3); t < bars.length; t++) {
+    const triggerBar = bars[t];
+    const triggerBreaks = direction === 'CALL'
+      ? triggerBar.c > pullbackHigh
+      : triggerBar.c < pullbackLow;
+    if (triggerBreaks) {
+      result.detected = true;
+      result.pullbackLow = pullbackLow;
+      result.pullbackHigh = pullbackHigh;
+      result.pullbackBars = pullbackCount;
+      result.triggerBar = triggerBar;
+      return result;
+    }
+  }
   return result;
 }
 
@@ -1307,8 +1309,8 @@ export function generateExtremeReversalSignals(date, dayData, context) {
       const moveFromOpen = currentPrice - sessionOpen;
       const moveATRs = Math.abs(moveFromOpen) / atrDollar;
 
-      // Must have moved > 1.5 ATR from open (extreme move)
-      if (moveATRs < 1.5) continue;
+      // Must have moved > 1.0 ATR from open (extreme move)
+      if (moveATRs < 1.0) continue;
 
       // Reversal direction: if stock dropped 2+ ATR, buy CALL (mean reversion up)
       const direction = moveFromOpen < 0 ? 'CALL' : 'PUT';
@@ -1425,12 +1427,12 @@ export function generateEODMeanReversionSignals(date, dayData, context) {
   // Sort by intraday return -- biggest losers first (these are the reversal candidates)
   candidates.sort((a, b) => a.intradayReturn - b.intradayReturn);
 
-  // Take bottom decile (biggest losers) for CALL reversal
-  const bottomN = Math.max(1, Math.floor(candidates.length * 0.10));
+  // Take bottom 20% (biggest losers) for CALL reversal
+  const bottomN = Math.max(2, Math.floor(candidates.length * 0.20));
   const losers = candidates.slice(0, bottomN);
 
-  // Also take top decile (biggest winners) for PUT reversal
-  const topN = Math.max(1, Math.floor(candidates.length * 0.10));
+  // Also take top 20% (biggest winners) for PUT reversal
+  const topN = Math.max(2, Math.floor(candidates.length * 0.20));
   const winners = candidates.slice(-topN);
 
   const reversalCandidates = [
@@ -1441,8 +1443,8 @@ export function generateEODMeanReversionSignals(date, dayData, context) {
   for (const cand of reversalCandidates) {
     const { ticker, profile, direction, currentPrice, checkKey, atr, atrDollar, allKeys, intradayReturn } = cand;
 
-    // Must have moved meaningfully (> 1% intraday) to be a reversal candidate
-    if (Math.abs(intradayReturn) < 0.01) continue;
+    // Must have moved meaningfully (> 0.5% intraday) to be a reversal candidate
+    if (Math.abs(intradayReturn) < 0.005) continue;
 
     const bars = getBarsUpTo(minuteBars, ticker, date, checkKey);
     if (bars.length < 30) continue;
@@ -1530,7 +1532,7 @@ export function generateHighRvolBreakoutSignals(date, dayData, context) {
     const expectedFirst30Vol = avgDailyVol * 0.25;
     if (expectedFirst30Vol <= 0) continue;
     const rvol = first30Vol / expectedFirst30Vol;
-    if (rvol < 2.0) continue; // Must be 2x+ relative volume
+    if (rvol < 1.5) continue; // Must be 1.5x+ relative volume
 
     const atr = profile.atr_20d || 0.025;
     const atrDollar = atr * sessionOpen;
@@ -1547,15 +1549,14 @@ export function generateHighRvolBreakoutSignals(date, dayData, context) {
       const moveFromOpen = currentPrice - sessionOpen;
       const moveATRs = Math.abs(moveFromOpen) / atrDollar;
 
-      // Need meaningful directional move (>= 0.5 ATR)
-      if (moveATRs < 0.5) continue;
+      // Need meaningful directional move (>= 0.3 ATR)
+      if (moveATRs < 0.3) continue;
 
       const direction = moveFromOpen > 0 ? 'CALL' : 'PUT';
 
-      // VWAP alignment
+      // VWAP alignment (soft bonus)
       const vwap = computeVWAP(bars);
-      if (direction === 'CALL' && currentPrice <= vwap) continue;
-      if (direction === 'PUT' && currentPrice >= vwap) continue;
+      const vwapAligned = (direction === 'CALL' && currentPrice > vwap) || (direction === 'PUT' && currentPrice < vwap);
 
       // SPY alignment
       const spyChange = getETFChange(etfMinuteBars, 'SPY', date, checkKey);
@@ -1573,7 +1574,7 @@ export function generateHighRvolBreakoutSignals(date, dayData, context) {
         engulfing = engulfResult.detected;
       }
 
-      // Confluence (soft -- RVOL 2x + VWAP alignment + 0.5 ATR move already filter heavily)
+      // Confluence (soft)
       const confluenceResult = checkConfluence(bars, direction, { vwap, currentPrice }, { minFactors: 2 });
 
       // Confidence
@@ -1585,7 +1586,7 @@ export function generateHighRvolBreakoutSignals(date, dayData, context) {
       if (rvol >= 3.0) confidence += 5;
       else confidence += 3;
       if (spyAligned) confidence += 3;
-      confidence += 3; // VWAP aligned (passed gate)
+      if (vwapAligned) confidence += 3; // VWAP soft bonus
       confidence += Math.max(0, confluenceResult.confirming * 2);
       confidence -= confluenceResult.opposing * 2;
       confidence += 4; // high RVOL bonus
