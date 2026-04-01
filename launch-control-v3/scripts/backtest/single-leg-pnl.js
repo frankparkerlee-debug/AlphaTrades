@@ -211,12 +211,8 @@ export function simulateSingleLeg(signal, bars, params) {
   let mfeOptionPnl = 0;  // best per-share P&L seen
   let maeOptionPnl = 0;  // worst per-share P&L seen
 
-  // Momentum tracking state
-  let consecutiveReversalBars = 0;
-  let consecutiveLowVolBars = 0;
+  // Trailing stop state
   let peakFavorableMove = 0; // best underlying move in favorable direction
-  const entryAreaVols = [];  // volumes of first 5 bars for baseline
-  let barsProcessed = 0;
 
   for (let i = 0; i < bars.length; i++) {
     const bar = bars[i];
@@ -224,7 +220,6 @@ export function simulateSingleLeg(signal, bars, params) {
     const minutesHeld = Math.round((barTime - entryTime) / 60000);
 
     if (minutesHeld < 0) continue; // bar before entry
-    barsProcessed++;
 
     // Current favorable move in the underlying
     const favorableMove = (bar.c - entryPrice) * mult;
@@ -239,15 +234,7 @@ export function simulateSingleLeg(signal, bars, params) {
     // Track peak favorable move on underlying
     peakFavorableMove = Math.max(peakFavorableMove, favorableMove);
 
-    // Build entry-area volume baseline (first 5 bars)
-    if (entryAreaVols.length < 5) {
-      entryAreaVols.push(bar.v || 0);
-    }
-
-    // ── Exit priority: STOP first, then TARGET, then TIME, then MOMENTUM ──
-    // Stops and targets are the primary exit mechanism. Momentum exits are
-    // a trailing protection that only fires after the trade has had time to
-    // develop AND the move is clearly failing.
+    // ── Exit priority: STOP → TARGET → TIME → TRAIL ──
 
     // 1. Protective stop (underlying price)
     const hitStop = direction === 'CALL'
@@ -281,48 +268,12 @@ export function simulateSingleLeg(signal, bars, params) {
       break;
     }
 
-    // 4. Momentum breakdown (trailing protection -- only after trade has developed)
-    // These are SECONDARY exits: they protect profits or cut losses when
-    // momentum is clearly dying, but only after enough bars to avoid noise.
-
-    // A. Reversal bars: 3+ consecutive bars closing against direction (after 10+ bars)
-    if (barsProcessed >= 10) {
-      const barAgainstDirection = direction === 'CALL'
-        ? (bar.c < bar.o)
-        : (bar.c > bar.o);
-      if (barAgainstDirection) {
-        consecutiveReversalBars++;
-      } else {
-        consecutiveReversalBars = 0;
-      }
-      if (consecutiveReversalBars >= 3) {
-        exitType = 'MOMENTUM_EXIT';
-        exitBar = bar;
-        holdMinutes = minutesHeld;
-        break;
-      }
-    }
-
-    // B. Volume exhaustion: 3+ consecutive bars below 40% of entry-area volume (after 12+ bars)
-    if (barsProcessed >= 12 && entryAreaVols.length >= 5) {
-      const baselineVol = entryAreaVols.reduce((s, v) => s + v, 0) / entryAreaVols.length;
-      if (baselineVol > 0 && (bar.v || 0) < baselineVol * 0.4) {
-        consecutiveLowVolBars++;
-      } else {
-        consecutiveLowVolBars = 0;
-      }
-      if (consecutiveLowVolBars >= 3) {
-        exitType = 'MOMENTUM_EXIT';
-        exitBar = bar;
-        holdMinutes = minutesHeld;
-        break;
-      }
-    }
-
-    // C. Favorable move reversal: price retraces 60%+ of peak move
-    //    (only after 10+ bars AND reaching meaningful move of 0.4 ATR)
-    if (barsProcessed >= 10 && peakFavorableMove >= 0.4 * atrDollar && favorableMove < peakFavorableMove * 0.4) {
-      exitType = 'MOMENTUM_EXIT';
+    // 4. Trailing stop (profit protection)
+    // Activates after trade reaches 0.3 ATR favorable. Exits when price
+    // retraces below 50% of peak move. Protects real profits without
+    // reacting to normal 1-min bar noise like the old MOMENTUM_EXIT did.
+    if (peakFavorableMove >= 0.3 * atrDollar && favorableMove < peakFavorableMove * 0.5) {
+      exitType = 'TRAIL';
       exitBar = bar;
       holdMinutes = minutesHeld;
       break;
