@@ -25,6 +25,12 @@ import { scanPowerHour } from './src/strategies/power-hour.js';
 import { scanPostMacro } from './src/strategies/post-macro.js';
 import { scanFailedBreakdown } from './src/strategies/failed-breakdown.js';
 import { scoreConvictionSetup } from './src/strategies/conviction-scorer.js';
+import {
+  generateORBBreakoutSignals,
+  generateGapFillSignals,
+  generatePowerHourMomentumSignals,
+  generateMomentumScalpSignals,
+} from './scripts/backtest/strategies/live-adapter.js';
 import { getRecentFlow } from './src/data/alpaca-streams.js';
 import { monitorOpenPositions } from './src/jobs/options-monitor.js';
 import { scoreContinuation } from './src/jobs/continuation-scorer.js';
@@ -2794,10 +2800,99 @@ async function startRestPoller() {
           }
           const levelData = { prevDayLows, prevDayHighs, todayLows, todayHighs, dailyBars, vwaps, intradayBars: intradayBarsMap };
 
-          // Old strategy scanners decommissioned — no documented edge (28.3% directional accuracy)
-          // New 7 research-backed strategies run via backtest pipeline only.
-          // Live scanners for new strategies will be built when backtest validates them.
-          const allStratSignals = [];
+          // ── LIVE STRATEGY SCANNERS ───────────────────────────────────
+          // Query today's minute bars from DB and run 4 validated strategies
+          let allStratSignals = [];
+          try {
+            const todayET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+            const todayStr = todayET.toISOString().split('T')[0];
+
+            const barsRes = await db.query(`
+              SELECT ticker, ts, open, high, low, close, volume
+              FROM lc_v3.bars
+              WHERE session = 'REGULAR'
+                AND DATE(ts AT TIME ZONE 'America/New_York') = CURRENT_DATE
+              ORDER BY ts
+            `);
+
+            // Build minuteBars[ticker][timeKey] format
+            const liveMins = {};
+            for (const row of barsRes.rows) {
+              const ticker = row.ticker;
+              const ts = new Date(row.ts);
+              const minuteKey = ts.toISOString().slice(0, 16);
+              if (!liveMins[ticker]) liveMins[ticker] = {};
+              liveMins[ticker][minuteKey] = {
+                o: parseFloat(row.open), h: parseFloat(row.high),
+                l: parseFloat(row.low), c: parseFloat(row.close),
+                v: parseInt(row.volume),
+              };
+            }
+
+            // ETF minute bars
+            const liveEtfMins = {};
+            for (const etf of ['SPY', 'QQQ', 'IWM']) {
+              liveEtfMins[etf] = liveMins[etf] || {};
+            }
+
+            // Reformat dailyBars from array to { [ticker]: { [date]: bar } }
+            const dailyBarsMap = {};
+            for (const [tkr, bars] of Object.entries(dailyBars)) {
+              dailyBarsMap[tkr] = {};
+              for (const bar of bars) {
+                const dateStr = new Date(bar.day).toISOString().split('T')[0];
+                dailyBarsMap[tkr][dateStr] = { o: bar.o, h: bar.h, l: bar.l, c: bar.c, v: bar.v };
+              }
+            }
+
+            const dayData = { minuteBars: liveMins, etfMinuteBars: liveEtfMins, dailyBars: dailyBarsMap, vixByTime: {}, tradingDays: [todayStr] };
+            const liveContext = { profiles, intelligence: {}, tickers: Object.keys(profiles) };
+
+            // Inject ETF profiles so strategies can scan them
+            for (const etf of ['SPY', 'QQQ', 'IWM']) {
+              if (!profiles[etf]) {
+                profiles[etf] = { ticker: etf, atr_20d: 0.012, atr_5d: 0.012, avg_volume_20d: 80000000, avg_volume: 80000000, options_liquidity_score: 1.0 };
+              }
+              if (liveEtfMins[etf] && !liveMins[etf]) liveMins[etf] = liveEtfMins[etf];
+            }
+
+            const stratFns = [
+              { name: 'ORB_BREAKOUT', fn: generateORBBreakoutSignals },
+              { name: 'GAP_FILL_REVERSION', fn: generateGapFillSignals },
+              { name: 'POWER_HOUR_MOMENTUM', fn: generatePowerHourMomentumSignals },
+              { name: 'MOMENTUM_SCALP', fn: generateMomentumScalpSignals },
+            ];
+
+            const barCount = Object.keys(liveMins).reduce((s, t) => s + Object.keys(liveMins[t]).length, 0);
+            console.log(`[LIVE-STRAT] ${Object.keys(liveMins).length} tickers, ${barCount} total bars for ${todayStr}`);
+
+            for (const sf of stratFns) {
+              try {
+                const signals = sf.fn(todayStr, dayData, liveContext);
+                for (const sig of signals) {
+                  allStratSignals.push({
+                    ticker: sig.ticker,
+                    direction: sig.direction,
+                    strategy: sig.strategy,
+                    confidence: sig.confidence,
+                    entry_price: sig.entryPrice,
+                    stop_price: sig.stopCondition?.value,
+                    t1_target: sig.targetCondition?.value,
+                    volume_ratio: sig.metadata?.volumeRatio,
+                    setup_factors: sig.metadata,
+                    note: sig.metadata?.pattern || null,
+                  });
+                }
+                if (signals.length > 0) console.log(`[LIVE-STRAT] ${sf.name}: ${signals.length} signals`);
+              } catch (stratErr) {
+                console.error(`[LIVE-STRAT] ${sf.name} error: ${stratErr.message}`);
+              }
+            }
+
+            console.log(`[LIVE-STRAT] Total: ${allStratSignals.length} strategy signals`);
+          } catch (liveStratErr) {
+            console.error('[LIVE-STRAT] Scanner error:', liveStratErr.message);
+          }
 
           // Diagnostic: log scanner inputs + outputs every 5th cycle
           if (continuationCycle % 5 === 0) {

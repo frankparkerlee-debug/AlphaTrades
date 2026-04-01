@@ -80,10 +80,10 @@ function timeDecayFactor(minutesHeld, holdDays, totalTradingMinutes) {
  * Estimate the current option value given the underlying's move and time elapsed.
  *
  * Simplified model:
- *   optionValue = premium * (1 + (favorableMove / atrDollar) * 0.6) * timeDecay
+ *   optionValue = premium * (1 + (favorableMove / atrDollar) * 1.0) * timeDecay
  *   clamped to [0, premium * 3]
  *
- * The 0.6 sensitivity factor means a 1-ATR favorable move adds ~60% to the
+ * The 1.0 sensitivity factor means a 1-ATR favorable move adds ~100% to the
  * option's value (before time decay). Capped at 3x to reflect realistic
  * single-day option gains on strong directional moves.
  *
@@ -94,7 +94,7 @@ function timeDecayFactor(minutesHeld, holdDays, totalTradingMinutes) {
  * @returns {number} estimated option value per share
  */
 function estimateOptionValue(premium, favorableMove, atrDollar, decay) {
-  const rawValue = premium * (1 + (favorableMove / atrDollar) * 0.6) * decay;
+  const rawValue = premium * (1 + (favorableMove / atrDollar) * 1.0) * decay;
   return Math.max(0, Math.min(premium * 3, rawValue));
 }
 
@@ -269,10 +269,10 @@ export function simulateSingleLeg(signal, bars, params) {
     }
 
     // 4. Trailing stop (profit protection)
-    // Activates after trade reaches 0.3 ATR favorable. Exits when price
+    // Activates after trade reaches 0.12 ATR favorable. Exits when price
     // retraces below 50% of peak move. Protects real profits without
     // reacting to normal 1-min bar noise like the old MOMENTUM_EXIT did.
-    if (peakFavorableMove >= 0.3 * atrDollar && favorableMove < peakFavorableMove * 0.5) {
+    if (peakFavorableMove >= 0.12 * atrDollar && favorableMove < peakFavorableMove * 0.5) {
       exitType = 'TRAIL';
       exitBar = bar;
       holdMinutes = minutesHeld;
