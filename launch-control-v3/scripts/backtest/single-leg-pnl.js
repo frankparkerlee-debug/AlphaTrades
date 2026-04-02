@@ -76,10 +76,10 @@ function estimateOptionValue(premium, favorableMove, atrDollar, decay) {
 
 // ── Option P&L Exit Thresholds ───────────────────────────────────────────────
 
-const OPTION_PROFIT_TARGET_PCT = 30;   // sell option at +30% gain
-const OPTION_TRAIL_ACTIVATE_PCT = 15;  // trail activates at +15%
+const OPTION_PROFIT_TARGET_PCT = 20;   // sell option at +20% gain (median MFE ~0.2 ATR ≈ 27% option gain)
+const OPTION_TRAIL_ACTIVATE_PCT = 10;  // trail activates at +10% (catch smaller real gains)
 const OPTION_TRAIL_GIVE_BACK = 0.50;   // exit when P&L drops to 50% of peak
-const OPTION_LOSS_CUT_PCT = -35;       // cut option at -35% loss
+const OPTION_LOSS_CUT_PCT = -25;       // cut option at -25% loss (tighter risk control)
 
 // ── Single-Leg Simulator ─────────────────────────────────────────────────────
 

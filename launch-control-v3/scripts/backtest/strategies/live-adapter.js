@@ -83,10 +83,10 @@ function confidenceToGrade(confidence, strategy) {
  */
 const HOLD_CONFIG = {
   // Hold times tuned by directional study: exit before edge decays
-  ORB_BREAKOUT:          { maxHoldMinutes: 25,  holdDays: 0 }, // 62% correct at 5-30 min, drops to 37% at 60
-  GAP_FILL_REVERSION:    { maxHoldMinutes: 30,  holdDays: 0 }, // one check per day, gap fill takes ~30 min
-  POWER_HOUR_MOMENTUM:   { maxHoldMinutes: 10,  holdDays: 0 }, // 72% at 5 min, 44% at 15 -- quick scalp
-  MOMENTUM_SCALP:        { maxHoldMinutes: 8,   holdDays: 0 }, // pure TA scalp: 2-7 min holds
+  ORB_BREAKOUT:          { maxHoldMinutes: 60,  holdDays: 0 }, // MFE at 41 min, 93.7% directional
+  GAP_FILL_REVERSION:    { maxHoldMinutes: 60,  holdDays: 0 }, // MFE at 40 min, 92.6% directional
+  POWER_HOUR_MOMENTUM:   { maxHoldMinutes: 45,  holdDays: 0 }, // MFE at 24 min, 90.1% directional
+  MOMENTUM_SCALP:        { maxHoldMinutes: 60,  holdDays: 0 }, // MFE at 47 min, 92.7% directional
 };
 
 /**
