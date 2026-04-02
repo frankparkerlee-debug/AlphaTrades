@@ -3687,6 +3687,32 @@ async function backfillContracts() {
     `);
     await db.query(`CREATE INDEX IF NOT EXISTS idx_bar_flow_ts ON lc_v3.bar_flow(ts DESC)`);
     console.log('[MIGRATE] lc_v3.bar_flow table ensured');
+
+    // option_snapshots table for option price time-series
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS lc_v3.option_snapshots (
+        id BIGSERIAL PRIMARY KEY,
+        paper_id UUID REFERENCES lc_v3.paper_trades(paper_id),
+        contract_symbol TEXT NOT NULL,
+        ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        mid NUMERIC,
+        bid NUMERIC,
+        ask NUMERIC,
+        spread NUMERIC,
+        delta NUMERIC,
+        gamma NUMERIC,
+        theta NUMERIC,
+        vega NUMERIC,
+        iv NUMERIC,
+        volume INTEGER,
+        open_interest INTEGER,
+        stock_price NUMERIC,
+        unrealized_pnl_pct NUMERIC
+      )
+    `);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_opt_snap_paper ON lc_v3.option_snapshots(paper_id, ts DESC)`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_opt_snap_contract ON lc_v3.option_snapshots(contract_symbol, ts DESC)`);
+    console.log('[MIGRATE] lc_v3.option_snapshots table ensured');
   } catch (err) {
     console.error('[MIGRATE] Greeks columns error:', err.message);
   }

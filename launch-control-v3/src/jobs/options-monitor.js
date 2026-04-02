@@ -145,6 +145,31 @@ export async function monitorOpenPositions(db) {
         trade.paper_id,
       ]);
 
+      // Persist option price snapshot for time-series analysis
+      await db.query(`
+        INSERT INTO lc_v3.option_snapshots
+          (paper_id, contract_symbol, mid, bid, ask, spread,
+           delta, gamma, theta, vega, iv, volume, open_interest,
+           stock_price, unrealized_pnl_pct)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+      `, [
+        trade.paper_id,
+        trade.entry_contract_symbol,
+        snap.mid,
+        snap.bid,
+        snap.ask,
+        snap.spread,
+        snap.delta,
+        snap.gamma,
+        snap.theta,
+        snap.vega,
+        currentIVPct,
+        snap.volume,
+        snap.oi,
+        currentStockPrice,
+        parseFloat(estimatedPnlPct.toFixed(2)),
+      ]);
+
       console.log(
         `[GREEKS] ${trade.ticker} delta=${snap.delta.toFixed(3)} iv=${currentIVPct.toFixed(1)}%` +
         ` spread=$${snap.spread.toFixed(2)} theta_decay=${thetaDecayPct.toFixed(1)}%` +

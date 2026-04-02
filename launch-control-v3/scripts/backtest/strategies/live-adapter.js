@@ -2645,6 +2645,22 @@ export function generateMomentumScalpSignals(date, dayData, context) {
       let targetPrice = 0;
       let patternConfidence = 0;
 
+      // ── Exhaustion gates: skip if price already extended ──────────────
+      // 1. VWAP distance gate: if price > 1.5% from VWAP, move is extended
+      const vwapDistPct = vwap > 0 ? Math.abs(currentPrice - vwap) / vwap * 100 : 0;
+      if (vwapDistPct > 1.5) continue;
+
+      // 2. Trend distance gate: if price moved > 2 ATR from session open, exhaustion likely
+      const moveFromOpen = Math.abs(currentPrice - sessionOpen);
+      if (atrDollar > 0 && moveFromOpen / atrDollar > 2.0) continue;
+
+      // 3. Recent move freshness: if last 5 bars moved > 1 ATR same direction, chasing
+      if (bars.length >= 6) {
+        const fiveBarsAgo = bars[bars.length - 6].c;
+        const recentMove = Math.abs(currentPrice - fiveBarsAgo);
+        if (atrDollar > 0 && recentMove / atrDollar > 1.0) continue;
+      }
+
       // ══════════════════════════════════════════════════════════════════════
       // PATTERN 1: LEVEL REJECTION
       // Price within 0.15% of a key level + rejection wick (>50% of bar is wick on level side)
