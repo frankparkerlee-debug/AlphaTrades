@@ -28,7 +28,6 @@ import { scoreConvictionSetup } from './src/strategies/conviction-scorer.js';
 import {
   generateORBBreakoutSignals,
   generateGapFillSignals,
-  generatePowerHourMomentumSignals,
   generateMomentumScalpSignals,
 } from './scripts/backtest/strategies/live-adapter.js';
 import { getRecentFlow } from './src/data/alpaca-streams.js';
@@ -2859,7 +2858,6 @@ async function startRestPoller() {
             const stratFns = [
               { name: 'ORB_BREAKOUT', fn: generateORBBreakoutSignals },
               { name: 'GAP_FILL_REVERSION', fn: generateGapFillSignals },
-              { name: 'POWER_HOUR_MOMENTUM', fn: generatePowerHourMomentumSignals },
               { name: 'MOMENTUM_SCALP', fn: generateMomentumScalpSignals },
             ];
 

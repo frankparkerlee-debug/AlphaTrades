@@ -43,12 +43,11 @@ import {
 const MAX_CONCURRENT_POSITIONS = 5;    // max open positions at once
 const MAX_DAILY_RISK_PCT       = 0.40; // max 40% of account at risk per day
 
-// 4 strategies — each with documented edge and TA-driven entries
+// Active strategies — POWER_HOUR SHELVE'd (23% WR, 0.34 PF, hogged all slots at A+)
 const STRATEGIES = [
-  { name: 'ORB_BREAKOUT',          fn: generateORBBreakoutSignals,       intraday: true },  // Zarattini et al. 2024
-  { name: 'GAP_FILL_REVERSION',    fn: generateGapFillSignals,           intraday: true },  // 89-93% small gap fill rate
-  { name: 'POWER_HOUR_MOMENTUM',   fn: generatePowerHourMomentumSignals, intraday: true },  // Swiss Finance Institute
-  { name: 'MOMENTUM_SCALP',        fn: generateMomentumScalpSignals,     intraday: true },  // TA scalp: level rejection, burst, continuation
+  { name: 'ORB_BREAKOUT',          fn: generateORBBreakoutSignals,       intraday: true },  // DEPLOY: 68% WR, 1.97 PF, MC 89.5%
+  { name: 'GAP_FILL_REVERSION',    fn: generateGapFillSignals,           intraday: true },  // 100% directional, tuning needed
+  { name: 'MOMENTUM_SCALP',        fn: generateMomentumScalpSignals,     intraday: true },  // 92.7% directional, was blocked by POWER_HOUR
 ];
 
 /**
@@ -470,39 +469,67 @@ function validateEntries(signals, rawMinuteBars) {
 // ── Portfolio Constraints ──────────────────────────────────────────────────────
 
 function applyPortfolioConstraints(signals, accountSize) {
-  // Sort by date first, then by grade quality (best first), then by time
+  // Round-robin by strategy then grade — ensures each strategy gets representation
   const gradeOrder = { 'A+': 0, 'A': 1, 'A-': 2, 'B+': 3, 'B': 4 };
-  const sorted = [...signals].sort((a, b) => {
-    if (a.date !== b.date) return a.date.localeCompare(b.date);
-    const ga = gradeOrder[a.grade] ?? 5;
-    const gb = gradeOrder[b.grade] ?? 5;
-    if (ga !== gb) return ga - gb; // higher grade first
-    return (a.time || '').localeCompare(b.time || '');
-  });
+
+  // Group by date, then by strategy
+  const byDateStrategy = {};
+  for (const sig of signals) {
+    const key = `${sig.date}:${sig.strategy}`;
+    if (!byDateStrategy[key]) byDateStrategy[key] = [];
+    byDateStrategy[key].push(sig);
+  }
+  // Sort each group by grade then time
+  for (const group of Object.values(byDateStrategy)) {
+    group.sort((a, b) => {
+      const ga = gradeOrder[a.grade] ?? 5;
+      const gb = gradeOrder[b.grade] ?? 5;
+      if (ga !== gb) return ga - gb;
+      return (a.time || '').localeCompare(b.time || '');
+    });
+  }
+
+  // Get all dates
+  const dates = [...new Set(signals.map(s => s.date))].sort();
+  const strategies = [...new Set(signals.map(s => s.strategy))];
 
   const accepted = [];
-  const activeByDate = {};  // date -> active count
-  const dailyRisk = {};     // date -> total risk dollars
+  const activeByDate = {};
+  const dailyRisk = {};
 
-  for (const sig of sorted) {
-    const date = sig.date;
+  for (const date of dates) {
     if (!activeByDate[date]) activeByDate[date] = 0;
     if (!dailyRisk[date]) dailyRisk[date] = 0;
 
-    // Max concurrent positions per day
-    if (activeByDate[date] >= MAX_CONCURRENT_POSITIONS) continue;
+    // Round-robin: take best signal from each strategy in turn
+    const cursors = {};
+    for (const strat of strategies) cursors[strat] = 0;
 
-    // Max daily risk
-    const tradeRisk = accountSize * (sig.sizePct || 0.10);
-    if (dailyRisk[date] + tradeRisk > accountSize * MAX_DAILY_RISK_PCT) continue;
+    let added = true;
+    while (added && activeByDate[date] < MAX_CONCURRENT_POSITIONS) {
+      added = false;
+      for (const strat of strategies) {
+        if (activeByDate[date] >= MAX_CONCURRENT_POSITIONS) break;
 
-    // One signal per ticker per strategy per day
-    const dupeKey = `${date}:${sig.ticker}:${sig.strategy}`;
-    if (accepted.some(a => `${a.date}:${a.ticker}:${a.strategy}` === dupeKey)) continue;
+        const group = byDateStrategy[`${date}:${strat}`] || [];
+        while (cursors[strat] < group.length) {
+          const sig = group[cursors[strat]];
+          cursors[strat]++;
 
-    activeByDate[date]++;
-    dailyRisk[date] += tradeRisk;
-    accepted.push(sig);
+          const tradeRisk = accountSize * (sig.sizePct || 0.10);
+          if (dailyRisk[date] + tradeRisk > accountSize * MAX_DAILY_RISK_PCT) continue;
+
+          const dupeKey = `${date}:${sig.ticker}:${sig.strategy}`;
+          if (accepted.some(a => `${a.date}:${a.ticker}:${a.strategy}` === dupeKey)) continue;
+
+          activeByDate[date]++;
+          dailyRisk[date] += tradeRisk;
+          accepted.push(sig);
+          added = true;
+          break;
+        }
+      }
+    }
   }
 
   return accepted;

@@ -2718,42 +2718,8 @@ export function generateMomentumScalpSignals(date, dayData, context) {
         }
       }
 
-      // ══════════════════════════════════════════════════════════════════════
-      // PATTERN 2: MOMENTUM BURST
-      // 5+ bars in tight range (consolidation), then current bar breaks out with
-      // large body (>70% of range) + volume spike (>1.5x avg)
-      // ══════════════════════════════════════════════════════════════════════
-      if (!pattern && bars.length >= 7) {
-        const consolBars = bars.slice(-7, -1); // 6 bars before current
-        const consolHigh = Math.max(...consolBars.map(b => b.h));
-        const consolLow = Math.min(...consolBars.map(b => b.l));
-        const consolRange = consolHigh - consolLow;
-
-        // Tight consolidation: range < 0.3% of price
-        if (consolRange > 0 && consolRange / currentPrice < 0.003) {
-          const body = Math.abs(currentBar.c - currentBar.o);
-          const barRange = currentBar.h - currentBar.l;
-
-          // Breakout bar: large body + breaks consolidation + volume
-          if (barRange > 0 && body / barRange >= 0.60 && volRatio >= 1.2) {
-            if (currentBar.c > consolHigh) {
-              direction = 'CALL';
-              pattern = 'MOMENTUM_BURST';
-              stopPrice = +consolLow.toFixed(2);
-              const risk = currentPrice - consolLow;
-              targetPrice = +(currentPrice + risk * 1.5).toFixed(2);
-              patternConfidence = 5;
-            } else if (currentBar.c < consolLow) {
-              direction = 'PUT';
-              pattern = 'MOMENTUM_BURST';
-              stopPrice = +consolHigh.toFixed(2);
-              const risk = consolHigh - currentPrice;
-              targetPrice = +(currentPrice - risk * 1.5).toFixed(2);
-              patternConfidence = 5;
-            }
-          }
-        }
-      }
+      // MOMENTUM_BURST removed — 32.7% WR, -$2,334 over 49 trades.
+      // Tight consolidation (< 0.3%) puts stop too close to entry → 53% STOP rate.
 
       // ══════════════════════════════════════════════════════════════════════
       // PATTERN 3: TREND CONTINUATION
