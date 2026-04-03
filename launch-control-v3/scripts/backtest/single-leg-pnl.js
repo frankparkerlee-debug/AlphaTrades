@@ -86,10 +86,10 @@ function estimateOptionValue(premium, favorableMove, atrDollar, decay) {
 
 // ── Option P&L Exit Thresholds ───────────────────────────────────────────────
 
-const OPTION_PROFIT_TARGET_PCT = 20;   // sell option at +20% gain (median MFE ~0.2 ATR ≈ 27% option gain)
-const OPTION_TRAIL_ACTIVATE_PCT = 10;  // trail activates at +10% (catch smaller real gains)
-const OPTION_TRAIL_GIVE_BACK = 0.50;   // exit when P&L drops to 50% of peak
-const OPTION_LOSS_CUT_PCT = -25;       // cut option at -25% loss (tighter risk control)
+const OPTION_PROFIT_TARGET_PCT = 100;  // effectively disabled — let trail capture gains, not a fixed cap
+const OPTION_TRAIL_ACTIVATE_PCT = 8;   // trail activates early at +8% to protect any gain
+const OPTION_TRAIL_GIVE_BACK = 0.40;   // exit when P&L drops to 40% of peak (keep 60%)
+const OPTION_LOSS_CUT_PCT = -20;       // cut option at -20% loss (balanced with uncapped upside)
 
 // ── Single-Leg Simulator ─────────────────────────────────────────────────────
 
@@ -241,7 +241,10 @@ export function simulateSingleLeg(signal, bars, params) {
       exitType = 'TRAIL';
       exitBar = bar;
       holdMinutes = minutesHeld;
-      exitOptionValue = currentOptionValue;
+      // Exit at the trail level (stop-limit), not bar close.
+      // Peak was tracked from intra-bar high; exit should be where the trail triggers.
+      const trailLevelPct = peakOptionPnlPct * trailGiveBack;
+      exitOptionValue = premium * (1 + trailLevelPct / 100);
       break;
     }
 

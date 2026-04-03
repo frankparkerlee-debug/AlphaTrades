@@ -710,6 +710,7 @@ export function generateORBBreakoutSignals(date, dayData, context) {
         spy_aligned: spyAligned,
         vwap_aligned: true,
         confluence: confluenceResult.confirming,
+        exitOverrides: { momentumStall: true },
         ..._orbEnrich,
       }));
       break; // FIRST breakout only
@@ -1157,6 +1158,7 @@ export function generateGapFillSignals(date, dayData, context) {
       spy_aligned: spyAligned,
       vwap_aligned: vwap > 0,
       confluence: confluenceResult.confirming,
+      exitOverrides: { momentumStall: true },
       ..._gfEnrich,
     }));
   }
@@ -2779,10 +2781,10 @@ export function generateMomentumScalpSignals(date, dayData, context) {
         candle_type: candleAnalysis.type,
         confluence: etfAlignCount,
         exitOverrides: {
-          targetPct: 15,          // take quick profits on ETF scalps
-          trailActivatePct: 5,    // protect any gain early
-          trailGiveBack: 0.30,    // keep 70% of peak (tight trail)
-          lossCutPct: -12,        // cut fast on ETFs
+          targetPct: 100,         // no fixed cap — let gamma run on big moves
+          trailActivatePct: 5,    // protect any gain early on ETF scalps
+          trailGiveBack: 0.35,    // keep 65% of peak (tighter than stocks)
+          lossCutPct: -10,        // cut fast on ETFs — small premium, quick decisions
           momentumStall: true,    // exit on 2 bars against when in profit
         },
         ..._msEnrich,
