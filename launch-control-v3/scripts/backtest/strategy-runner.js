@@ -516,7 +516,10 @@ function applyPortfolioConstraints(signals, accountSize) {
           const sig = group[cursors[strat]];
           cursors[strat]++;
 
-          const tradeRisk = accountSize * (sig.sizePct || 0.10);
+          // Risk = position size * max loss %. ETF scalps with tight cuts have lower real risk.
+          const posnSize = accountSize * (sig.sizePct || 0.10);
+          const lossCutPct = Math.abs(sig.exitOverrides?.lossCutPct ?? 20) / 100;
+          const tradeRisk = posnSize * lossCutPct;
           if (dailyRisk[date] + tradeRisk > accountSize * MAX_DAILY_RISK_PCT) continue;
 
           const dupeKey = `${date}:${sig.ticker}:${sig.strategy}`;
