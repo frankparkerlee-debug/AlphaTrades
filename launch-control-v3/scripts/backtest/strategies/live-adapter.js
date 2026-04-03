@@ -215,6 +215,7 @@ function buildSignal(strategy, date, timeKey, ticker, direction, confidence, ent
     signalType: strategy,
     composite: confidence,
     scores: { confluence: liveSignal.confluence || 0 },
+    exitOverrides: liveSignal.exitOverrides || null,
     metadata: { ...liveSignal },
   };
 }
@@ -2593,48 +2594,67 @@ export function generateZeroDTEScalpSignals(date, dayData, context) {
  *   - Target: 0.2-0.3% or 1.5:1 R:R
  *   - Max 3 signals per ticker per day, max 10 total (top by confidence)
  */
+/**
+ * ETF Trend Continuation — 0DTE scalp on SPY, QQQ, IWM
+ *
+ * Focused exclusively on major ETFs for maximum liquidity, tight spreads,
+ * and 0DTE gamma. Trades TREND_CONTINUATION pattern: established trend →
+ * orderly pullback on declining volume → continuation candle.
+ *
+ * Why ETFs: institutional flow drives persistent trends, massive OI for
+ * fills, 0DTE options available daily, gamma asymmetry maximized.
+ */
 export function generateMomentumScalpSignals(date, dayData, context) {
   const { minuteBars, etfMinuteBars } = dayData;
-  const { profiles, tickers } = context;
+  const { profiles } = context;
   const signals = [];
-  const tickerCounts = {};
+
+  // ETFs only — max liquidity, 0DTE available daily
+  const ETF_TICKERS = ['SPY', 'QQQ', 'IWM'];
+  const ETF_DEFAULTS = {
+    SPY: { atr: 0.012, ticker: 'SPY' },
+    QQQ: { atr: 0.015, ticker: 'QQQ' },
+    IWM: { atr: 0.013, ticker: 'IWM' },
+  };
   const MAX_PER_TICKER = 3;
-  const MAX_TOTAL = 10;
+  const MAX_TOTAL = 9;  // 3 per ETF max
 
-  // Check every 5 bars for faster pattern detection
+  // Check every 3 bars — ETFs have clean 1-min bars, scan tighter
   const CHECK_OFFSETS = [];
-  for (let i = 15; i <= 370; i += 5) CHECK_OFFSETS.push(i);
+  for (let i = 15; i <= 370; i += 3) CHECK_OFFSETS.push(i);
 
-  for (const ticker of tickers) {
-    const profile = profiles[ticker];
-    if (!profile) continue;
+  for (const ticker of ETF_TICKERS) {
+    // ETF bars may be in minuteBars (DB) or etfMinuteBars (API fallback)
+    const tickerMinutes = minuteBars[ticker] || (etfMinuteBars && etfMinuteBars[ticker]) || {};
+    const barSource = minuteBars[ticker] ? minuteBars : (etfMinuteBars || {});
 
-    const allKeys = getMinuteKeys(minuteBars, ticker, date);
+    const allKeys = getMinuteKeys(barSource, ticker, date);
     if (allKeys.length < 20) continue;
 
-    const tickerMinutes = minuteBars[ticker] || {};
-    const atr = profile.atr_20d || profile.atr_5d || 0.025;
+    const profile = profiles[ticker] || ETF_DEFAULTS[ticker];
+    const atr = profile.atr_20d || profile.atr_5d || ETF_DEFAULTS[ticker].atr;
     const sessionOpen = tickerMinutes[allKeys[0]]?.o;
     if (!sessionOpen) continue;
     const atrDollar = atr * sessionOpen;
 
-    // Precompute key levels once per ticker
     const prevBar = findPrevDayBar(dayData.dailyBars || {}, ticker, date);
-    const or = computeOpeningRange(minuteBars, ticker, date, 5);
+    const or = computeOpeningRange(barSource, ticker, date, 5);
+
+    let tickerCount = 0;
 
     for (const offset of CHECK_OFFSETS) {
       if (offset >= allKeys.length) continue;
-      if ((tickerCounts[ticker] || 0) >= MAX_PER_TICKER) break;
+      if (tickerCount >= MAX_PER_TICKER) break;
 
       const checkKey = allKeys[offset];
-      const bars = getBarsUpTo(minuteBars, ticker, date, checkKey);
+      const bars = getBarsUpTo(barSource, ticker, date, checkKey);
       if (bars.length < 10) continue;
 
       const currentBar = bars[bars.length - 1];
       const currentPrice = currentBar.c;
       const vwap = computeVWAP(bars);
 
-      // Volume context: current bar vs recent 10-bar avg
+      // Volume context
       const recent10 = bars.slice(-11, -1);
       const avgVol10 = recent10.reduce((s, b) => s + (b.v || 0), 0) / recent10.length;
       const volRatio = avgVol10 > 0 ? (currentBar.v || 0) / avgVol10 : 1;
@@ -2645,99 +2665,25 @@ export function generateMomentumScalpSignals(date, dayData, context) {
       let targetPrice = 0;
       let patternConfidence = 0;
 
-      // ── Exhaustion gates: skip if price already extended ──────────────
-      // 1. VWAP distance gate: if price > 1.5% from VWAP, move is extended
+      // ── Exhaustion gate (relaxed for ETFs — they trend more persistently) ──
       const vwapDistPct = vwap > 0 ? Math.abs(currentPrice - vwap) / vwap * 100 : 0;
-      if (vwapDistPct > 1.5) continue;
-
-      // 2. Trend distance gate: if price moved > 2 ATR from session open, exhaustion likely
-      const moveFromOpen = Math.abs(currentPrice - sessionOpen);
-      if (atrDollar > 0 && moveFromOpen / atrDollar > 2.0) continue;
-
-      // 3. Recent move freshness: if last 5 bars moved > 1 ATR same direction, chasing
-      if (bars.length >= 6) {
-        const fiveBarsAgo = bars[bars.length - 6].c;
-        const recentMove = Math.abs(currentPrice - fiveBarsAgo);
-        if (atrDollar > 0 && recentMove / atrDollar > 1.0) continue;
-      }
+      if (vwapDistPct > 2.0) continue;  // 2% for ETFs (was 1.5% for stocks)
 
       // ══════════════════════════════════════════════════════════════════════
-      // PATTERN 1: LEVEL REJECTION
-      // Price within 0.15% of a key level + rejection wick (>50% of bar is wick on level side)
+      // TREND CONTINUATION
+      // 7-bar trend with higher lows (CALL) or lower highs (PUT),
+      // 2-bar pullback on declining volume, continuation trigger candle.
       // ══════════════════════════════════════════════════════════════════════
-      if (!pattern) {
-        const levels = [];
-        if (vwap > 0) levels.push({ level: vwap, source: 'vwap' });
-        if (prevBar) {
-          if (prevBar.h > 0) levels.push({ level: prevBar.h, source: 'prev_high' });
-          if (prevBar.l > 0) levels.push({ level: prevBar.l, source: 'prev_low' });
-        }
-        if (or) {
-          levels.push({ level: or.high, source: 'or_high' });
-          levels.push({ level: or.low, source: 'or_low' });
-        }
-        // Session high/low
-        const sessHigh = Math.max(...bars.map(b => b.h));
-        const sessLow = Math.min(...bars.map(b => b.l));
-        if (isFinite(sessHigh)) levels.push({ level: sessHigh, source: 'sess_high' });
-        if (isFinite(sessLow)) levels.push({ level: sessLow, source: 'sess_low' });
+      if (bars.length >= 10) {
+        const trendWindow = bars.slice(-10, -3);
+        const pullbackWindow = bars.slice(-3, -1);
+        const triggerBar = bars[bars.length - 1];
 
-        for (const lv of levels) {
-          const dist = Math.abs(currentPrice - lv.level) / lv.level;
-          if (dist > 0.003) continue; // within 0.3% of level
-
-          const barRange = currentBar.h - currentBar.l;
-          if (barRange <= 0) continue;
-
-          // Rejection wick: price approached from below (lower wick small, upper wick large = PUT)
-          // or from above (upper wick small, lower wick large = CALL)
-          const upperWick = currentBar.h - Math.max(currentBar.o, currentBar.c);
-          const lowerWick = Math.min(currentBar.o, currentBar.c) - currentBar.l;
-
-          // Price approached level from below -> rejection = PUT (short)
-          if (currentPrice >= lv.level && upperWick > barRange * 0.40) {
-            direction = 'PUT';
-            pattern = 'LEVEL_REJECTION';
-            // Stop just above the wick high
-            stopPrice = +(currentBar.h + atrDollar * 0.05).toFixed(2);
-            const risk = stopPrice - currentPrice;
-            targetPrice = +(currentPrice - risk * 1.5).toFixed(2);
-            patternConfidence = lv.source === 'vwap' ? 5 : 3;
-            break;
-          }
-          // Price approached level from above -> rejection = CALL (long)
-          if (currentPrice <= lv.level && lowerWick > barRange * 0.40) {
-            direction = 'CALL';
-            pattern = 'LEVEL_REJECTION';
-            stopPrice = +(currentBar.l - atrDollar * 0.05).toFixed(2);
-            const risk = currentPrice - stopPrice;
-            targetPrice = +(currentPrice + risk * 1.5).toFixed(2);
-            patternConfidence = lv.source === 'vwap' ? 5 : 3;
-            break;
-          }
-        }
-      }
-
-      // MOMENTUM_BURST removed — 32.7% WR, -$2,334 over 49 trades.
-      // Tight consolidation (< 0.3%) puts stop too close to entry → 53% STOP rate.
-
-      // ══════════════════════════════════════════════════════════════════════
-      // PATTERN 3: TREND CONTINUATION
-      // 5+ bars making higher lows (CALL) or lower highs (PUT),
-      // then 1-2 bar pullback on declining volume, then continuation candle.
-      // ══════════════════════════════════════════════════════════════════════
-      if (!pattern && bars.length >= 10) {
-        const trendWindow = bars.slice(-10, -3); // bars -10 to -4 (7 bars for trend)
-        const pullbackWindow = bars.slice(-3, -1); // bars -3 and -2 (pullback)
-        const triggerBar = bars[bars.length - 1]; // current bar (continuation trigger)
-
-        // Check for uptrend: higher lows in trend window
         let hlCount = 0;
         for (let t = 1; t < trendWindow.length; t++) {
           if (trendWindow[t].l >= trendWindow[t - 1].l) hlCount++;
         }
 
-        // Check for downtrend: lower highs in trend window
         let lhCount = 0;
         for (let t = 1; t < trendWindow.length; t++) {
           if (trendWindow[t].h <= trendWindow[t - 1].h) lhCount++;
@@ -2746,19 +2692,16 @@ export function generateMomentumScalpSignals(date, dayData, context) {
         const trendHigh = Math.max(...trendWindow.map(b => b.h));
         const trendLow = Math.min(...trendWindow.map(b => b.l));
 
-        // Pullback check: 1-2 bars moving against trend on lower volume
         const trendAvgVol = trendWindow.reduce((s, b) => s + (b.v || 0), 0) / trendWindow.length;
         const pbAvgVol = pullbackWindow.reduce((s, b) => s + (b.v || 0), 0) / pullbackWindow.length;
-        const pbVolDecline = trendAvgVol > 0 && pbAvgVol < trendAvgVol * 1.0; // pullback vol <= trend vol
+        const pbVolDecline = trendAvgVol > 0 && pbAvgVol < trendAvgVol * 1.0;
 
-        // Uptrend continuation (3+ of 6 higher lows)
+        // Uptrend continuation
         if (hlCount >= 3 && pbVolDecline) {
           const pbLow = Math.min(...pullbackWindow.map(b => b.l));
-          // Pullback should not retrace more than 50% of the trend move
           const trendMove = trendHigh - trendLow;
           const pbDepth = trendHigh - pbLow;
           if (trendMove > 0 && pbDepth < trendMove * 0.5) {
-            // Trigger: current bar closes above pullback high
             const pbHigh = Math.max(...pullbackWindow.map(b => b.h));
             if (triggerBar.c > pbHigh && triggerBar.c > triggerBar.o) {
               direction = 'CALL';
@@ -2771,7 +2714,7 @@ export function generateMomentumScalpSignals(date, dayData, context) {
           }
         }
 
-        // Downtrend continuation (3+ of 6 lower highs)
+        // Downtrend continuation
         if (!pattern && lhCount >= 3 && pbVolDecline) {
           const pbHigh = Math.max(...pullbackWindow.map(b => b.h));
           const trendMove = trendHigh - trendLow;
@@ -2790,50 +2733,63 @@ export function generateMomentumScalpSignals(date, dayData, context) {
         }
       }
 
-      // ── No pattern matched ──
       if (!pattern || !direction) continue;
 
-      // ── VWAP alignment (soft bonus, not gate -- level rejection may scalp against VWAP) ──
+      // ── VWAP alignment ──
       const vwapAligned = vwap > 0 && (
         (direction === 'CALL' && currentPrice >= vwap) ||
         (direction === 'PUT' && currentPrice <= vwap)
       );
 
-      // ── SPY alignment (soft bonus) ──
-      const spyChange = getETFChange(etfMinuteBars, 'SPY', date, checkKey);
-      const spyAligned = (direction === 'CALL' && spyChange > 0) || (direction === 'PUT' && spyChange < 0);
+      // ── Cross-ETF alignment: other major ETFs confirming direction ──
+      const otherETFs = ETF_TICKERS.filter(e => e !== ticker);
+      let etfAlignCount = 0;
+      for (const other of otherETFs) {
+        const change = getETFChange(etfMinuteBars, other, date, checkKey)
+                    || getETFChange(barSource, other, date, checkKey);
+        if ((direction === 'CALL' && change > 0) || (direction === 'PUT' && change < 0)) etfAlignCount++;
+      }
+      const crossETFAligned = etfAlignCount >= 1;  // at least 1 other ETF confirms
 
       // Candle quality
       const candleAnalysis = analyzeCandle(currentBar);
 
-      // Confidence
-      let confidence = 62;
-      confidence += patternConfidence; // pattern-specific bonus (3-5)
+      // Confidence — higher base for ETFs (liquidity + structural edge)
+      let confidence = 68;
+      confidence += patternConfidence;
       if (candleAnalysis.type.includes('MARUBOZU')) confidence += 5;
       else if (candleAnalysis.type.includes('STRONG')) confidence += 3;
       else confidence += 1;
       if (volRatio >= 2.0) confidence += 4;
       else if (volRatio >= 1.3) confidence += 2;
       if (vwapAligned) confidence += 3;
-      if (spyAligned) confidence += 3;
+      if (crossETFAligned) confidence += 4;  // cross-ETF confirmation is strong
+      if (etfAlignCount >= 2) confidence += 2;  // all 3 ETFs aligned = extra
       confidence = Math.max(60, Math.min(95, confidence));
 
-      tickerCounts[ticker] = (tickerCounts[ticker] || 0) + 1;
+      tickerCount++;
 
       const _msEnrich = enrichMetadata(bars, ticker, date, currentPrice, vwap, sessionOpen, atrDollar, etfMinuteBars, checkKey);
       signals.push(buildSignal('MOMENTUM_SCALP', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
         pattern,
         vol_ratio: +volRatio.toFixed(2),
         vwap_aligned: vwapAligned,
-        spy_aligned: spyAligned,
+        cross_etf_aligned: crossETFAligned,
+        etf_align_count: etfAlignCount,
         candle_type: candleAnalysis.type,
-        confluence: 0,
+        confluence: etfAlignCount,
+        exitOverrides: {
+          targetPct: 15,          // take quick profits on ETF scalps
+          trailActivatePct: 5,    // protect any gain early
+          trailGiveBack: 0.30,    // keep 70% of peak (tight trail)
+          lossCutPct: -12,        // cut fast on ETFs
+          momentumStall: true,    // exit on 2 bars against when in profit
+        },
         ..._msEnrich,
       }));
     }
   }
 
-  // Cap at top 10 by confidence
   signals.sort((a, b) => b.composite - a.composite);
   return signals.slice(0, MAX_TOTAL);
 }

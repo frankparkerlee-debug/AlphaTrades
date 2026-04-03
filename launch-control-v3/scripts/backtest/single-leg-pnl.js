@@ -25,12 +25,22 @@ import {
 
 /**
  * Estimate ATM option premium when no market quote is available.
+ * Scales by DTE: 0DTE options have almost no time value (pure gamma premium),
+ * while multi-day options carry significant time value.
+ *
+ * Calibration:
+ *   0DTE mid-session: ~0.15-0.20x daily move (mostly gamma, minimal theta)
+ *   1DTE: ~0.30x daily move
+ *   2DTE+: ~0.40x daily move (standard Black-Scholes approximation)
+ *
  * @param {number} atr - ATR as decimal (e.g., 0.025 for 2.5%)
  * @param {number} entryPrice - underlying price at entry
+ * @param {number} holdDays - 0 for 0DTE, 1 for 1DTE, etc.
  * @returns {number} estimated premium per share
  */
-function estimatePremium(atr, entryPrice) {
-  return atr * entryPrice * 0.4;
+function estimatePremium(atr, entryPrice, holdDays = 0) {
+  const dteMultiplier = holdDays === 0 ? 0.18 : holdDays === 1 ? 0.30 : 0.40;
+  return atr * entryPrice * dteMultiplier;
 }
 
 // ── Theta Decay ──────────────────────────────────────────────────────────────
@@ -104,6 +114,7 @@ export function simulateSingleLeg(signal, bars, params) {
     accountSize = 7500,
     sizePct = 0.10,
     oiEstimate = 200,
+    exitOverrides = null,  // per-strategy exit tuning
   } = params;
 
   const direction = signal.direction;
@@ -113,7 +124,7 @@ export function simulateSingleLeg(signal, bars, params) {
   const mult = direction === 'CALL' ? 1 : -1;
 
   // ── Premium ────────────────────────────────────────────────────────────────
-  const premium = premiumParam != null ? premiumParam : estimatePremium(atr, entryPrice);
+  const premium = premiumParam != null ? premiumParam : estimatePremium(atr, entryPrice, holdDays);
 
   // ── Time parameters ────────────────────────────────────────────────────────
   const totalTradingMinutes = holdDays === 0 ? 390 : (holdDays + 1) * 390;
@@ -142,13 +153,20 @@ export function simulateSingleLeg(signal, bars, params) {
     signal.time.length <= 16 ? signal.time + ':00Z' : signal.time
   );
 
+  // ── Exit thresholds (allow per-strategy overrides) ─────────────────────────
+  const profitTargetPct = exitOverrides?.targetPct ?? OPTION_PROFIT_TARGET_PCT;
+  const trailActivatePct = exitOverrides?.trailActivatePct ?? OPTION_TRAIL_ACTIVATE_PCT;
+  const trailGiveBack = exitOverrides?.trailGiveBack ?? OPTION_TRAIL_GIVE_BACK;
+  const lossCutPct = exitOverrides?.lossCutPct ?? OPTION_LOSS_CUT_PCT;
+  const momentumStall = exitOverrides?.momentumStall ?? false;
+
   // Debug: log first trade
   if (!simulateSingleLeg._logged) {
     simulateSingleLeg._logged = true;
     const firstBar = bars[0];
     console.log(`[SIM-DEBUG] signal.time=${signal.time} bars=${bars.length} premium=$${premium.toFixed(2)} maxHold=${maxHoldMinutes}min`);
     console.log(`[SIM-DEBUG] entry=${entryPrice} direction=${direction} atrDollar=${atrDollar.toFixed(2)} stopPrice=${stopPrice}`);
-    console.log(`[SIM-DEBUG] exits: TARGET=+${OPTION_PROFIT_TARGET_PCT}% TRAIL=+${OPTION_TRAIL_ACTIVATE_PCT}%→${OPTION_TRAIL_GIVE_BACK*100}% CUT=${OPTION_LOSS_CUT_PCT}%`);
+    console.log(`[SIM-DEBUG] exits: TARGET=+${profitTargetPct}% TRAIL=+${trailActivatePct}%→${trailGiveBack*100}% CUT=${lossCutPct}%${momentumStall ? ' +STALL' : ''}`);
   }
 
   // ── Scan bars for exit conditions ──────────────────────────────────────────
@@ -208,19 +226,18 @@ export function simulateSingleLeg(signal, bars, params) {
       break;
     }
 
-    // 2. Option profit target: sell at +30% (using bar high for favorable)
-    if (bestPnlPct >= OPTION_PROFIT_TARGET_PCT) {
+    // 2. Option profit target
+    if (bestPnlPct >= profitTargetPct) {
       exitType = 'TARGET';
       exitBar = bar;
       holdMinutes = minutesHeld;
-      // Exit at the target percentage, not the peak
-      exitOptionValue = premium * (1 + OPTION_PROFIT_TARGET_PCT / 100);
+      exitOptionValue = premium * (1 + profitTargetPct / 100);
       break;
     }
 
-    // 3. Option trailing stop: was up 15%+, now close P&L below 50% of peak
-    if (peakOptionPnlPct >= OPTION_TRAIL_ACTIVATE_PCT &&
-        currentPnlPct < peakOptionPnlPct * OPTION_TRAIL_GIVE_BACK) {
+    // 3. Option trailing stop
+    if (peakOptionPnlPct >= trailActivatePct &&
+        currentPnlPct < peakOptionPnlPct * trailGiveBack) {
       exitType = 'TRAIL';
       exitBar = bar;
       holdMinutes = minutesHeld;
@@ -228,13 +245,32 @@ export function simulateSingleLeg(signal, bars, params) {
       break;
     }
 
-    // 4. Option loss cut: cut at -35%
+    // 3b. Momentum stall: if we were up and 2 consecutive bars closed against us, exit
+    //     Mimics scalper reading price action — don't wait for full reversal
+    if (momentumStall && peakOptionPnlPct > 0 && i >= 2) {
+      const prevBar = bars[i - 1];
+      const prevPrevBar = bars[i - 2];
+      if (prevBar && prevPrevBar) {
+        const barAgainst = (direction === 'CALL')
+          ? (bar.c < bar.o && prevBar.c < prevBar.o)     // 2 red bars for CALL
+          : (bar.c > bar.o && prevBar.c > prevBar.o);     // 2 green bars for PUT
+        if (barAgainst && currentPnlPct > -5) {  // only if not already deeply underwater
+          exitType = 'STALL';
+          exitBar = bar;
+          holdMinutes = minutesHeld;
+          exitOptionValue = currentOptionValue;
+          break;
+        }
+      }
+    }
+
+    // 4. Option loss cut
     const worstPnlPct = premium > 0 ? ((worstOptionValue - premium) / premium) * 100 : 0;
-    if (worstPnlPct <= OPTION_LOSS_CUT_PCT) {
+    if (worstPnlPct <= lossCutPct) {
       exitType = 'CUT';
       exitBar = bar;
       holdMinutes = minutesHeld;
-      exitOptionValue = premium * (1 + OPTION_LOSS_CUT_PCT / 100);
+      exitOptionValue = premium * (1 + lossCutPct / 100);
       break;
     }
 

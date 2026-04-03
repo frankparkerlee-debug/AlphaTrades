@@ -712,6 +712,7 @@ export function simulateAllSpreads(signals, rawMinuteBars, opts = {}) {
         break;
       case 'SINGLE_LEG':
         params.premium = signal.premium || null;
+        params.exitOverrides = signal.exitOverrides || null;
         result = simulateSingleLeg(signal, remaining, params);
         break;
       default:
