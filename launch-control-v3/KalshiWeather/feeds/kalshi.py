@@ -28,21 +28,60 @@ class KalshiClient:
         self.private_key = self._load_private_key()
 
     def _load_private_key(self):
-        """Load RSA private key from env var (inline PEM)."""
-        pem_data = None
-
-        if KALSHI_PRIVATE_KEY:
-            # Inline PEM (newlines encoded as \\n)
-            pem_data = KALSHI_PRIVATE_KEY.replace("\\n", "\n").encode()
-
-        if not pem_data:
+        """Load RSA private key from env var (inline PEM or raw base64)."""
+        raw = KALSHI_PRIVATE_KEY
+        if not raw:
             log.warning("No Kalshi private key configured — auth disabled")
             return None
 
+        # Debug: show what format we received (masked)
+        masked = raw[:50].replace("\n", "\\n") + "..."
+        log.info(f"Private key input ({len(raw)} chars): {masked}")
+
+        # Step 1: Replace literal \n with real newlines
+        key_str = raw.replace("\\n", "\n")
+
+        # Step 2: If missing PEM header, wrap it
+        if "-----BEGIN" not in key_str:
+            # Strip any whitespace and try to wrap as PKCS8 PEM
+            clean = key_str.replace("\n", "").replace("\r", "").replace(" ", "")
+            lines = [clean[i:i+64] for i in range(0, len(clean), 64)]
+            key_str = "-----BEGIN PRIVATE KEY-----\n" + "\n".join(lines) + "\n-----END PRIVATE KEY-----\n"
+            log.info("Added PEM header/footer (assuming PKCS8)")
+
+        pem_data = key_str.encode()
+
+        # Step 3: Try PEM loading
         try:
-            return serialization.load_pem_private_key(pem_data, password=None)
+            key = serialization.load_pem_private_key(pem_data, password=None)
+            log.info("Private key loaded (PEM)")
+            return key
         except Exception as e:
-            log.error(f"Failed to load private key: {e}")
+            log.warning(f"PEM load failed: {e}")
+
+        # Step 3b: Try RSA-specific PEM header
+        if "BEGIN PRIVATE KEY" in key_str and "BEGIN RSA PRIVATE KEY" not in key_str:
+            rsa_pem = key_str.replace("BEGIN PRIVATE KEY", "BEGIN RSA PRIVATE KEY").replace("END PRIVATE KEY", "END RSA PRIVATE KEY")
+            try:
+                key = serialization.load_pem_private_key(rsa_pem.encode(), password=None)
+                log.info("Private key loaded (RSA PEM)")
+                return key
+            except Exception as e:
+                log.warning(f"RSA PEM load failed: {e}")
+
+        # Step 4: Try DER fallback (raw base64 decoded)
+        try:
+            clean = raw.replace("\\n", "").replace("\n", "").replace("\r", "").replace(" ", "")
+            # Strip PEM headers if present
+            for tag in ["-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----",
+                        "-----BEGIN RSA PRIVATE KEY-----", "-----END RSA PRIVATE KEY-----"]:
+                clean = clean.replace(tag.replace(" ", ""), "")
+            der_data = base64.b64decode(clean)
+            key = serialization.load_der_private_key(der_data, password=None)
+            log.info("Private key loaded (DER fallback)")
+            return key
+        except Exception as e:
+            log.error(f"All key loading methods failed. DER error: {e}")
             return None
 
     def _sign(self, timestamp_ms: str, method: str, path: str) -> str:
