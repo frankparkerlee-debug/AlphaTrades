@@ -439,19 +439,47 @@ app.get('/api/paper-trades/open', async (req, res) => {
   try {
     const result = await db.query(`
       SELECT paper_id, signal_id, ticker, direction, strategy, grade,
-             entry_time, entry_stock_price, entry_contract_symbol, entry_contract_mid,
-             current_stock_price, current_contract_est, unrealized_pnl_pct,
+             entry_time, entry_stock_price,
+             entry_contract_symbol, entry_contract_mid,
+             entry_contract_strike, entry_contract_expiry,
+             entry_contract_delta, entry_contract_iv,
+             current_stock_price, current_contract_mid, unrealized_pnl_pct,
              peak_pnl_pct, max_adverse_pnl_pct, status,
              hit_t1, hit_t2, hit_stop,
              current_delta, current_iv, current_spread, cumulative_theta,
              continuation_action, continuation_reason, continuation_details,
              continuation_scored_at, greeks_updated_at, last_updated,
-             auto_traded
+             auto_traded, position_size_pct
       FROM lc_v3.paper_trades
       WHERE status IN ('OPEN', 'WEAKENING')
       ORDER BY entry_time DESC
     `);
-    res.json(result.rows);
+
+    // Format for clarity: "NVDA C 173.5 APR 6 @ $0.75 → now $1.12 (+49%)"
+    const trades = result.rows.map(t => {
+      const entryMid = parseFloat(t.entry_contract_mid) || 0;
+      const currentMid = parseFloat(t.current_contract_mid) || 0;
+      const pnlPct = parseFloat(t.unrealized_pnl_pct) || 0;
+      const strike = parseFloat(t.entry_contract_strike) || 0;
+      const expiry = t.entry_contract_expiry || '';
+      const expiryLabel = expiry ? new Date(expiry + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+
+      return {
+        ...t,
+        // Human-readable contract label
+        contract_label: t.entry_contract_symbol
+          ? `${t.ticker} ${t.direction === 'CALL' ? 'C' : 'P'} ${strike} ${expiryLabel}`
+          : null,
+        entry_premium: entryMid,
+        current_premium: currentMid > 0 ? currentMid : null,
+        pnl_pct: pnlPct,
+        pnl_display: currentMid > 0
+          ? `$${entryMid.toFixed(2)} → $${currentMid.toFixed(2)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%)`
+          : `$${entryMid.toFixed(2)} (awaiting quote)`,
+      };
+    });
+
+    res.json(trades);
   } catch (err) {
     res.json([]);
   }
@@ -3468,6 +3496,14 @@ async function startRestPoller() {
   setTimeout(poll, 5000);
   setInterval(poll, 15000);
   console.log('[LC v3] REST poller started — scoring every 15s');
+
+  // Auto-start paper trading engine (single-leg options)
+  try {
+    await startAutoTrader();
+    console.log('[LC v3] Auto-trader started (paper, single-leg options)');
+  } catch (atErr) {
+    console.error('[LC v3] Auto-trader failed to start:', atErr.message);
+  }
 }
 
 // Strategy → minimum DTE for options contract selection
@@ -3644,6 +3680,9 @@ async function backfillContracts() {
       ['current_iv', 'NUMERIC'],
       ['current_spread', 'NUMERIC'],
       ['cumulative_theta', 'NUMERIC'],
+      ['current_contract_mid', 'NUMERIC'],
+      ['unrealized_pnl_pct', 'NUMERIC'],
+      ['final_pnl_dollars', 'NUMERIC'],
       ['greeks_updated_at', 'TIMESTAMPTZ'],
     ];
     for (const [col, type] of paperCols) {

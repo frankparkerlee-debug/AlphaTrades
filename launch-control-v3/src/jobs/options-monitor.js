@@ -128,20 +128,27 @@ export async function monitorOpenPositions(db) {
       const estimatedPnlPct = entryMid > 0 ? (estimatedPnl / entryMid) * 100 : 0;
       const thetaDecayPct   = entryMid > 0 ? (thetaDecay / entryMid) * 100 : 0;
 
-      // Update paper_trades with current greeks
+      // Unrealized P&L from actual contract price
+      const unrealizedPnlFromMid = entryMid > 0 ? ((snap.mid - entryMid) / entryMid) * 100 : 0;
+
+      // Update paper_trades with current greeks + contract price
       await db.query(`
         UPDATE lc_v3.paper_trades SET
           current_delta = $1,
           current_iv = $2,
           current_spread = $3,
           cumulative_theta = $4,
+          current_contract_mid = $5,
+          unrealized_pnl_pct = $6,
           greeks_updated_at = NOW()
-        WHERE paper_id = $5
+        WHERE paper_id = $7
       `, [
         parseFloat(snap.delta.toFixed(4)),
         parseFloat(currentIVPct.toFixed(2)),
         parseFloat(snap.spread.toFixed(4)),
         parseFloat(cumulativeTheta.toFixed(4)),
+        parseFloat(snap.mid.toFixed(4)),
+        parseFloat(unrealizedPnlFromMid.toFixed(2)),
         trade.paper_id,
       ]);
 

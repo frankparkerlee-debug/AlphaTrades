@@ -1,95 +1,104 @@
 /**
- * Auto-Trader Engine
+ * Auto-Trader Engine — Single-Leg Options
  *
- * Fully autonomous execution engine for the 5-strategy system.
- * Runs as a worker loop on the server — no human intervention needed.
+ * Buys ATM 0DTE options on Alpaca paper trading based on strategy signals.
+ * Uses backtest-validated exit model: trail, momentum stall, loss cut, time.
  *
  * Lifecycle:
- *   1. Strategy scanner detects signal
- *   2. Contract selector finds spread legs
+ *   1. Strategy scanner fires signal → written to lc_v3.signals
+ *   2. Contract selector finds ATM 0DTE option
  *   3. Risk manager approves trade
- *   4. Order placed via Alpaca API
- *   5. Fill tracked, position monitored
- *   6. Auto-exit on target/stop/time
- *   7. P&L recorded, risk state updated
+ *   4. Limit order placed at mid via Alpaca paper API
+ *   5. Fill tracked, position monitored every 15s
+ *   6. Auto-exit: trail (+8% activate, keep 60%), -20% cut, 45min time, stall
+ *   7. P&L recorded to paper_trades, risk state updated
  *
- * Inspired by mm-engine/engine.py state machine: IDLE → PENDING → HOLDING → IDLE
+ * State machine: IDLE → PENDING_ENTRY → OPEN → PENDING_EXIT → CLOSED
  */
 
 import { query } from '../data/db.js';
 import {
-  submitSpreadOrder, submitIronCondorOrder,
-  getOrder, getPositions, closePosition, getAccount,
-  selectSpreadContracts,
+  submitOptionOrder, getOrder, getPositions, closePosition,
+  getAccount, cancelOrder, cancelAllOrders, closeAllPositions,
 } from './alpaca-orders.js';
-import { selectOptionsContract } from '../options/contract-selector.js';
+import { selectOptionsContract, fetchContractQuote } from '../options/contract-selector.js';
 import {
   checkPreTrade, recordTrade, checkKillSwitch,
   updatePositionCount, resetDaily, isMarketHours, getDailyState,
-  manualHalt,
+  manualHalt, resume,
 } from './risk-manager.js';
-import { getSpreadWidth, POSITION_SIZES, allInCost } from '../../scripts/backtest/execution-model.js';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-const CYCLE_SECONDS       = 30;     // check every 30 seconds
-const ORDER_TTL_SECONDS   = 60;     // cancel unfilled orders after 60s
-const POSITION_CHECK_INTERVAL = 60; // check positions every 60s
+const CYCLE_SECONDS     = 15;     // monitor every 15s (matches poll interval)
+const ORDER_TTL_SECONDS = 45;     // cancel unfilled limit orders after 45s
 const DRY_RUN = process.env.AUTO_TRADE_DRY_RUN === 'true';
+const ACCOUNT_SIZE = parseFloat(process.env.ACCOUNT_SIZE || '7500');
+
+// ── Backtest-Validated Exit Thresholds ────────────────────────────────────────
+// These match single-leg-pnl.js defaults and per-strategy overrides
+
+const DEFAULT_EXITS = {
+  targetPct: 100,          // effectively disabled — trail captures gains
+  trailActivatePct: 8,     // trail activates at +8%
+  trailGiveBack: 0.40,     // exit when P&L drops to 40% of peak (keep 60%)
+  lossCutPct: -20,         // cut at -20% loss
+  maxHoldMinutes: 45,      // time backstop
+};
+
+// Per-strategy exit overrides (from backtest validation)
+const STRATEGY_EXITS = {
+  ORB_BREAKOUT: {
+    ...DEFAULT_EXITS,
+    maxHoldMinutes: 60,
+  },
+  GAP_FILL_REVERSION: {
+    ...DEFAULT_EXITS,
+    maxHoldMinutes: 120,
+  },
+  MOMENTUM_SCALP: {
+    targetPct: 100,
+    trailActivatePct: 20,   // trail after meaningful gain
+    trailGiveBack: 0.35,    // keep 65% of peak
+    lossCutPct: -15,         // tighter cut for scalps
+    maxHoldMinutes: 45,
+  },
+};
+
+// Position sizing: 10% of account per trade (1-2 contracts on 0DTE)
+const SIZE_PCT = 0.10;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
-const openTrades = new Map();   // tradeId -> trade state
+const openTrades = new Map();   // tradeId -> TradeState
 let startingEquity = 0;
 let running = false;
 let cycleTimer = null;
-
-// ── Trade State Machine ───────────────────────────────────────────────────────
-
-/**
- * @typedef {Object} TradeState
- * @property {string} id - unique trade ID
- * @property {string} strategy - A1-B2 strategy name
- * @property {string} ticker
- * @property {string} direction - CALL / PUT / NEUTRAL
- * @property {string} spreadType - DEBIT_VERTICAL / CREDIT_VERTICAL / IRON_CONDOR
- * @property {string} state - PENDING_ENTRY / OPEN / PENDING_EXIT / CLOSED
- * @property {Object} entryOrder - Alpaca order object
- * @property {Object} exitOrder - Alpaca order object (when exiting)
- * @property {number} entryTime - timestamp
- * @property {number} maxHoldMinutes
- * @property {number} holdDays
- * @property {Object} stopCondition
- * @property {Object} targetCondition
- * @property {number} entryPrice - underlying at entry
- * @property {number} atr
- * @property {Object} spreadDetails - legs, width, cost
- */
 
 // ── Engine Lifecycle ──────────────────────────────────────────────────────────
 
 /**
  * Start the auto-trader engine.
- * Called from server.js on startup.
+ * Called from server.js on startup — runs automatically during market hours.
  */
 export async function startAutoTrader() {
   if (running) return;
   running = true;
 
-  console.log(`[AUTO-TRADER] Starting${DRY_RUN ? ' (DRY RUN)' : ''}...`);
+  console.log(`[AUTO-TRADER] Starting${DRY_RUN ? ' (DRY RUN)' : ' (PAPER)'}...`);
 
   try {
     const account = await getAccount();
-    startingEquity = parseFloat(account.equity || account.portfolio_value || 7500);
+    startingEquity = parseFloat(account.equity || account.portfolio_value || ACCOUNT_SIZE);
     console.log(`[AUTO-TRADER] Account equity: $${startingEquity.toFixed(2)}`);
   } catch (err) {
-    console.error(`[AUTO-TRADER] Failed to get account: ${err.message}`);
-    startingEquity = 7500;
+    console.error(`[AUTO-TRADER] Account fetch failed: ${err.message} — using default $${ACCOUNT_SIZE}`);
+    startingEquity = ACCOUNT_SIZE;
   }
 
   resetDaily();
   cycleTimer = setInterval(runCycle, CYCLE_SECONDS * 1000);
-  console.log(`[AUTO-TRADER] Running every ${CYCLE_SECONDS}s`);
+  console.log(`[AUTO-TRADER] Running every ${CYCLE_SECONDS}s | Exits: trail +8%→60%, cut -20%, max 45min`);
 }
 
 /**
@@ -109,23 +118,25 @@ async function runCycle() {
   if (!running || !isMarketHours()) return;
 
   try {
-    // 1. Check open positions for exits
-    await checkOpenPositions();
+    // 1. Monitor open positions for exits
+    await monitorOpenPositions();
 
-    // 2. Check for new signals from the scoring engine
-    await checkForNewSignals();
-
-    // 3. Check pending orders for fills
+    // 2. Check pending orders for fills / TTL
     await checkPendingOrders();
 
-    // 4. Kill switch check
-    const account = await getAccount();
-    const equity = parseFloat(account.equity || account.portfolio_value || startingEquity);
-    const kill = checkKillSwitch(equity, startingEquity);
-    if (kill.trigger) {
-      console.error(`[AUTO-TRADER] ${kill.reason}`);
-      await emergencyFlatten();
-    }
+    // 3. Pick up new signals
+    await checkForNewSignals();
+
+    // 4. Kill switch
+    try {
+      const account = await getAccount();
+      const equity = parseFloat(account.equity || account.portfolio_value || startingEquity);
+      const kill = checkKillSwitch(equity, startingEquity);
+      if (kill.trigger) {
+        console.error(`[AUTO-TRADER] ${kill.reason}`);
+        await emergencyFlatten();
+      }
+    } catch { /* account check can fail transiently */ }
 
     updatePositionCount(openTrades.size);
   } catch (err) {
@@ -136,11 +147,9 @@ async function runCycle() {
 // ── Signal Processing ─────────────────────────────────────────────────────────
 
 /**
- * Check for new signals that haven't been auto-traded yet.
- * Reads from lc_v3.signals table where auto_traded is false.
+ * Check for new strategy signals that haven't been auto-traded yet.
  */
 async function checkForNewSignals() {
-  // Get recent unprocessed signals from DB
   let signals;
   try {
     const res = await query(`
@@ -149,12 +158,13 @@ async function checkForNewSignals() {
         AND status = 'ACTIVE'
         AND (auto_traded IS NULL OR auto_traded = false)
         AND grade IN ('A+', 'A', 'A-', 'B+')
+        AND strategy IS NOT NULL
       ORDER BY composite_raw DESC
-      LIMIT 3
+      LIMIT 5
     `);
     signals = res.rows;
   } catch {
-    return; // signals table might not have auto_traded column yet
+    return;
   }
 
   if (!signals || signals.length === 0) return;
@@ -165,32 +175,16 @@ async function checkForNewSignals() {
 }
 
 /**
- * Process a single signal — determine strategy, select contracts, place order.
+ * Process a single signal — select ATM 0DTE contract, place limit order.
  */
 async function processSignal(signal) {
   const ticker = signal.ticker;
   const direction = signal.direction;
+  const strategy = signal.strategy || 'UNKNOWN';
   const grade = signal.grade || 'B+';
   const entryPrice = parseFloat(signal.price_at_signal || 0);
-  const atr = parseFloat(signal.atr_multiple || 0.025) * entryPrice;
 
   if (!entryPrice || entryPrice <= 0) return;
-
-  // Determine spread type based on signal context
-  const spreadType = determineSpreadType(signal);
-  const spreadWidth = getSpreadWidth(entryPrice);
-  const sizePct = POSITION_SIZES[grade] || 0.075;
-
-  // Risk check
-  const account = await getAccount();
-  const accountBalance = parseFloat(account.equity || account.portfolio_value || 7500);
-  const tradeRisk = accountBalance * sizePct;
-
-  const riskCheck = checkPreTrade(accountBalance, tradeRisk, openTrades.size);
-  if (!riskCheck.allowed) {
-    console.log(`[AUTO-TRADER] Signal blocked: ${riskCheck.reason}`);
-    return;
-  }
 
   // Dedupe: don't enter same ticker+direction if already open
   for (const [, trade] of openTrades) {
@@ -199,34 +193,89 @@ async function processSignal(signal) {
     }
   }
 
-  // Select contracts
-  console.log(`[AUTO-TRADER] Processing: ${ticker} ${direction} ${grade} ${spreadType}`);
+  // Risk check
+  const accountBalance = startingEquity;
+  const tradeAllocation = accountBalance * SIZE_PCT;
+  const tradeRisk = tradeAllocation * (Math.abs((STRATEGY_EXITS[strategy] || DEFAULT_EXITS).lossCutPct) / 100);
+
+  const riskCheck = checkPreTrade(accountBalance, tradeRisk, openTrades.size);
+  if (!riskCheck.allowed) {
+    console.log(`[AUTO-TRADER] ${ticker} ${strategy} blocked: ${riskCheck.reason}`);
+    return;
+  }
+
+  // Select ATM 0DTE contract
+  console.log(`[AUTO-TRADER] Selecting contract: ${ticker} ${direction} ${strategy} grade=${grade}`);
 
   try {
-    const { snapshots, expiry } = await selectOptionsContract(ticker, direction, grade, 1);
-    if (!snapshots || Object.keys(snapshots).length < 2) {
-      console.log(`[AUTO-TRADER] Not enough contracts for ${ticker} spread`);
+    const contract = await selectOptionsContract(ticker, direction, grade, entryPrice, 0, { minDTE: 0 });
+
+    if (!contract) {
+      console.log(`[AUTO-TRADER] No viable contract for ${ticker} ${direction}`);
       return;
     }
 
-    const spread = selectSpreadContracts(snapshots, entryPrice, direction, spreadWidth);
-    if (!spread) {
-      console.log(`[AUTO-TRADER] No viable spread found for ${ticker}`);
+    // Position sizing: how many contracts can we buy?
+    const premiumPerContract = contract.mid * 100; // per share * 100 shares
+    if (premiumPerContract <= 0) {
+      console.log(`[AUTO-TRADER] ${ticker} contract mid is $0 — skipping`);
       return;
     }
+    const contracts = Math.max(1, Math.floor(tradeAllocation / premiumPerContract));
 
-    // Place the order
-    await placeSpreadTrade({
-      signal,
+    const exits = STRATEGY_EXITS[strategy] || DEFAULT_EXITS;
+    const tradeId = `${ticker}-${direction}-${Date.now()}`;
+
+    console.log(
+      `[AUTO-TRADER] ${DRY_RUN ? '[DRY] ' : ''}BUY ${contracts}x ${contract.symbol} ` +
+      `@ $${contract.mid.toFixed(2)} ($${(premiumPerContract * contracts).toFixed(0)} total) | ` +
+      `${strategy} | exits: trail +${exits.trailActivatePct}%→${exits.trailGiveBack*100}%, cut ${exits.lossCutPct}%`
+    );
+
+    let orderId = null;
+
+    if (!DRY_RUN) {
+      try {
+        const order = await submitOptionOrder(
+          contract.symbol,
+          contracts,
+          'buy',
+          'limit',
+          contract.mid  // limit at mid price
+        );
+        orderId = order.id;
+        console.log(`[AUTO-TRADER] Order submitted: ${orderId}`);
+      } catch (err) {
+        console.error(`[AUTO-TRADER] Order failed for ${ticker}: ${err.message}`);
+        return;
+      }
+    }
+
+    // Track the trade
+    openTrades.set(tradeId, {
+      id: tradeId,
+      strategy,
       ticker,
       direction,
+      state: DRY_RUN ? 'OPEN' : 'PENDING_ENTRY',
+      orderId,
+      contractSymbol: contract.symbol,
+      contracts,
+      entryTime: Date.now(),
+      entryPrice,                    // underlying price at signal
+      entryPremium: contract.mid,    // option premium at entry
+      fillPrice: DRY_RUN ? contract.mid : null,
       grade,
-      entryPrice,
-      atr: atr / entryPrice,
-      spreadType,
-      spread,
-      sizePct,
-      accountBalance,
+      // Exit thresholds (from backtest validation)
+      exits,
+      // Trail state
+      peakPnlPct: 0,
+      // For DB recording
+      signalId: signal.signal_id,
+      strike: contract.strike,
+      expiry: contract.expiry,
+      delta: contract.delta,
+      iv: contract.iv,
     });
 
     // Mark signal as auto-traded
@@ -239,170 +288,77 @@ async function processSignal(signal) {
   }
 }
 
-/**
- * Place a spread trade.
- */
-async function placeSpreadTrade(params) {
-  const { signal, ticker, direction, grade, entryPrice, atr, spreadType, spread, sizePct, accountBalance } = params;
-  const contracts = Math.max(1, Math.floor((accountBalance * sizePct) / (spread.actualWidth * 100)));
-
-  const tradeId = `${ticker}-${direction}-${Date.now()}`;
-  const isCredit = spreadType === 'CREDIT_VERTICAL' || spreadType === 'IRON_CONDOR';
-  const netPrice = isCredit ? spread.netCredit : spread.netDebit;
-
-  console.log(
-    `[AUTO-TRADER] ${DRY_RUN ? '[DRY RUN] ' : ''}Placing ${spreadType}: ` +
-    `${ticker} ${direction} | ${spread.longSymbol} / ${spread.shortSymbol} | ` +
-    `${contracts}x | net ${isCredit ? 'credit' : 'debit'} $${netPrice.toFixed(2)}`
-  );
-
-  if (DRY_RUN) {
-    // Record as paper trade
-    await recordPaperTrade(params, tradeId);
-    return;
-  }
-
-  try {
-    const orderResult = await submitSpreadOrder(
-      spread.longSymbol, spread.shortSymbol,
-      contracts, netPrice,
-      isCredit ? 'credit' : 'debit'
-    );
-
-    if (!orderResult.success) {
-      console.error(`[AUTO-TRADER] Order failed: ${orderResult.error}`);
-      return;
-    }
-
-    // Track the trade
-    openTrades.set(tradeId, {
-      id: tradeId,
-      strategy: signal.strategy || classifyStrategy(signal),
-      ticker,
-      direction,
-      spreadType,
-      state: 'PENDING_ENTRY',
-      entryOrder: orderResult.order || orderResult,
-      entryTime: Date.now(),
-      maxHoldMinutes: getMaxHold(spreadType),
-      holdDays: spreadType === 'CREDIT_VERTICAL' || spreadType === 'IRON_CONDOR' ? 5 : 0,
-      stopCondition: { type: 'ATR', value: 0.5 },
-      targetCondition: { type: 'ATR', value: 1.0 },
-      entryPrice,
-      atr,
-      grade,
-      contracts,
-      spreadDetails: spread,
-      netPrice,
-      isCredit,
-    });
-
-    console.log(`[AUTO-TRADER] Order submitted: ${tradeId}`);
-  } catch (err) {
-    console.error(`[AUTO-TRADER] Order placement failed: ${err.message}`);
-  }
-}
-
-// ── Position Monitoring ───────────────────────────────────────────────────────
+// ── Position Monitoring (Backtest-Validated Exits) ────────────────────────────
 
 /**
- * Check all open positions for exit conditions.
+ * Monitor all open positions for exit conditions.
+ * Uses the same exit logic as single-leg-pnl.js:
+ *   1. Loss cut (option P&L < -20%)
+ *   2. Trail stop (peak > +8%, current < peak * 40%)
+ *   3. Momentum stall (2 consecutive bars against after being up)
+ *   4. Time backstop (maxHoldMinutes)
+ *   5. Target (option P&L > +100%, effectively disabled)
  */
-async function checkOpenPositions() {
+async function monitorOpenPositions() {
   for (const [tradeId, trade] of openTrades) {
     if (trade.state !== 'OPEN') continue;
 
     try {
-      const positions = await getPositions();
-      const pos = positions.find(p =>
-        p.symbol === trade.spreadDetails?.longSymbol ||
-        p.symbol === trade.spreadDetails?.shortSymbol
-      );
+      // Get current option quote
+      const quote = await fetchContractQuote(trade.contractSymbol);
+      if (!quote || quote.mid <= 0) continue;
 
-      if (!pos) {
-        // Position no longer exists — likely stopped out or expired
-        trade.state = 'CLOSED';
-        recordTrade(0);
-        openTrades.delete(tradeId);
-        continue;
-      }
+      const currentMid = quote.mid;
+      const entryPremium = trade.fillPrice || trade.entryPremium;
+      if (!entryPremium || entryPremium <= 0) continue;
 
-      const currentPnl = parseFloat(pos.unrealized_pl || 0);
+      const pnlPct = ((currentMid - entryPremium) / entryPremium) * 100;
       const holdMinutes = (Date.now() - trade.entryTime) / 60000;
+      const exits = trade.exits;
 
-      // Time-based exit
-      if (trade.holdDays === 0 && holdMinutes > trade.maxHoldMinutes) {
-        console.log(`[AUTO-TRADER] TIME EXIT: ${trade.ticker} after ${Math.round(holdMinutes)}min`);
-        await exitTrade(trade, 'TIME');
-        continue;
+      // Update peak P&L for trailing
+      trade.peakPnlPct = Math.max(trade.peakPnlPct, pnlPct);
+
+      let exitReason = null;
+
+      // 1. Loss cut
+      if (pnlPct <= exits.lossCutPct) {
+        exitReason = 'CUT';
+      }
+      // 2. Trail stop
+      else if (trade.peakPnlPct >= exits.trailActivatePct &&
+               pnlPct < trade.peakPnlPct * exits.trailGiveBack) {
+        exitReason = 'TRAIL';
+      }
+      // 3. Target (effectively disabled at 100%)
+      else if (pnlPct >= exits.targetPct) {
+        exitReason = 'TARGET';
+      }
+      // 4. Time backstop
+      else if (holdMinutes >= exits.maxHoldMinutes) {
+        exitReason = 'TIME';
       }
 
-      // P&L-based exit for credit spreads: close at 50% of credit
-      if (trade.isCredit && currentPnl > 0) {
-        const maxProfit = trade.netPrice * trade.contracts * 100;
-        if (currentPnl >= maxProfit * 0.50) {
-          console.log(`[AUTO-TRADER] TARGET EXIT: ${trade.ticker} credit spread at 50% profit`);
-          await exitTrade(trade, 'TARGET');
-          continue;
-        }
-      }
-
-      // Stop loss: 2x credit for credit spreads, spread value for debit
-      if (trade.isCredit && currentPnl < 0) {
-        const maxLoss = trade.netPrice * trade.contracts * 100 * 2;
-        if (Math.abs(currentPnl) >= maxLoss) {
-          console.log(`[AUTO-TRADER] STOP EXIT: ${trade.ticker} credit spread at 2x loss`);
-          await exitTrade(trade, 'STOP');
-          continue;
-        }
+      if (exitReason) {
+        const pnlDollars = (currentMid - entryPremium) * 100 * trade.contracts;
+        console.log(
+          `[AUTO-TRADER] EXIT ${exitReason}: ${trade.ticker} ${trade.direction} ${trade.strategy} | ` +
+          `P&L: ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}% ($${Math.round(pnlDollars)}) | ` +
+          `held ${Math.round(holdMinutes)}min | peak ${trade.peakPnlPct.toFixed(1)}%`
+        );
+        await exitTrade(trade, exitReason, currentMid);
       }
 
     } catch (err) {
-      console.error(`[AUTO-TRADER] Position check error for ${tradeId}: ${err.message}`);
+      console.error(`[AUTO-TRADER] Monitor error for ${trade.ticker}: ${err.message}`);
     }
   }
 }
 
-/**
- * Exit a trade by closing the position.
- */
-async function exitTrade(trade, reason) {
-  trade.state = 'PENDING_EXIT';
-
-  try {
-    if (!DRY_RUN) {
-      // Close both legs
-      if (trade.spreadDetails?.longSymbol) {
-        await closePosition(trade.spreadDetails.longSymbol).catch(() => {});
-      }
-      if (trade.spreadDetails?.shortSymbol) {
-        await closePosition(trade.spreadDetails.shortSymbol).catch(() => {});
-      }
-    }
-
-    // Calculate P&L from actual position data
-    const positions = DRY_RUN ? [] : await getPositions();
-    const longPos = positions.find(p => p.symbol === trade.spreadDetails?.longSymbol);
-    const shortPos = positions.find(p => p.symbol === trade.spreadDetails?.shortSymbol);
-    const pnl = (parseFloat(longPos?.unrealized_pl || 0)) + (parseFloat(shortPos?.unrealized_pl || 0));
-
-    trade.state = 'CLOSED';
-    recordTrade(pnl);
-
-    // Store in paper_trades for tracking
-    await storeTrade(trade, reason, pnl);
-
-    console.log(`[AUTO-TRADER] CLOSED: ${trade.ticker} ${trade.direction} | Reason: ${reason} | P&L: $${Math.round(pnl)}`);
-    openTrades.delete(trade.id);
-
-  } catch (err) {
-    console.error(`[AUTO-TRADER] Exit failed for ${trade.ticker}: ${err.message}`);
-    trade.state = 'OPEN'; // retry next cycle
-  }
-}
+// ── Order Management ──────────────────────────────────────────────────────────
 
 /**
- * Check pending orders for fills.
+ * Check pending entry orders for fills or TTL expiry.
  */
 async function checkPendingOrders() {
   for (const [tradeId, trade] of openTrades) {
@@ -410,14 +366,12 @@ async function checkPendingOrders() {
 
     const elapsed = (Date.now() - trade.entryTime) / 1000;
 
-    // TTL expired — cancel
+    // TTL expired — cancel unfilled order
     if (elapsed > ORDER_TTL_SECONDS) {
       console.log(`[AUTO-TRADER] Order TTL expired for ${trade.ticker} — canceling`);
       try {
-        const orderId = trade.entryOrder?.id || trade.entryOrder?.order?.id;
-        if (orderId && !DRY_RUN) {
-          const { cancelOrder } = await import('./alpaca-orders.js');
-          await cancelOrder(orderId);
+        if (trade.orderId && !DRY_RUN) {
+          await cancelOrder(trade.orderId);
         }
       } catch { /* already filled or canceled */ }
       openTrades.delete(tradeId);
@@ -426,38 +380,88 @@ async function checkPendingOrders() {
 
     // Check fill status
     try {
-      const orderId = trade.entryOrder?.id || trade.entryOrder?.order?.id;
-      if (!orderId) {
-        trade.state = 'OPEN'; // assume filled if no order ID (dry run)
+      if (!trade.orderId) {
+        trade.state = 'OPEN';
         continue;
       }
 
-      const order = await getOrder(orderId);
+      const order = await getOrder(trade.orderId);
       if (order.status === 'filled') {
         trade.state = 'OPEN';
-        trade.fillPrice = parseFloat(order.filled_avg_price || 0);
-        console.log(`[AUTO-TRADER] FILLED: ${trade.ticker} ${trade.direction} @ $${trade.fillPrice}`);
-      } else if (order.status === 'canceled' || order.status === 'expired') {
+        trade.fillPrice = parseFloat(order.filled_avg_price || trade.entryPremium);
+        trade.entryTime = Date.now(); // reset hold timer to fill time
+        console.log(
+          `[AUTO-TRADER] FILLED: ${trade.ticker} ${trade.direction} ${trade.strategy} | ` +
+          `${trade.contracts}x @ $${trade.fillPrice.toFixed(2)}`
+        );
+
+        // Record entry in paper_trades
+        await recordTradeEntry(trade);
+
+      } else if (order.status === 'canceled' || order.status === 'expired' || order.status === 'rejected') {
+        console.log(`[AUTO-TRADER] Order ${order.status}: ${trade.ticker}`);
         openTrades.delete(tradeId);
       }
     } catch (err) {
-      console.error(`[AUTO-TRADER] Order check failed: ${err.message}`);
+      console.error(`[AUTO-TRADER] Order check failed for ${trade.ticker}: ${err.message}`);
     }
+  }
+}
+
+/**
+ * Exit a trade — sell the option contract.
+ */
+async function exitTrade(trade, reason, currentMid) {
+  trade.state = 'PENDING_EXIT';
+
+  try {
+    if (!DRY_RUN) {
+      // Sell to close at market (fast exit)
+      try {
+        await closePosition(trade.contractSymbol);
+      } catch (closeErr) {
+        // If closePosition fails (no position found), try a sell order
+        console.warn(`[AUTO-TRADER] closePosition failed, trying sell order: ${closeErr.message}`);
+        try {
+          await submitOptionOrder(trade.contractSymbol, trade.contracts, 'sell', 'market');
+        } catch (sellErr) {
+          console.error(`[AUTO-TRADER] Sell order also failed: ${sellErr.message}`);
+        }
+      }
+    }
+
+    const entryPremium = trade.fillPrice || trade.entryPremium;
+    const pnlPerContract = (currentMid - entryPremium) * 100;
+    const totalPnl = pnlPerContract * trade.contracts;
+    const pnlPct = entryPremium > 0 ? ((currentMid - entryPremium) / entryPremium) * 100 : 0;
+
+    trade.state = 'CLOSED';
+    recordTrade(totalPnl);
+
+    // Record in paper_trades
+    await recordTradeExit(trade, reason, pnlPct, totalPnl);
+
+    console.log(
+      `[AUTO-TRADER] CLOSED: ${trade.ticker} ${trade.direction} ${trade.strategy} | ` +
+      `${reason} | ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}% ($${Math.round(totalPnl)})`
+    );
+
+    openTrades.delete(trade.id);
+
+  } catch (err) {
+    console.error(`[AUTO-TRADER] Exit failed for ${trade.ticker}: ${err.message}`);
+    trade.state = 'OPEN'; // retry next cycle
   }
 }
 
 // ── Emergency Controls ────────────────────────────────────────────────────────
 
-/**
- * Emergency flatten — close all positions.
- */
 async function emergencyFlatten() {
   console.error('[AUTO-TRADER] EMERGENCY FLATTEN — closing all positions');
   manualHalt('Emergency flatten triggered');
 
   if (!DRY_RUN) {
     try {
-      const { closeAllPositions, cancelAllOrders } = await import('./alpaca-orders.js');
       await cancelAllOrders();
       await closeAllPositions();
     } catch (err) {
@@ -470,77 +474,62 @@ async function emergencyFlatten() {
   }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── DB Recording ──────────────────────────────────────────────────────────────
 
-function determineSpreadType(signal) {
-  // Determine spread type based on signal characteristics
-  const strategy = signal.strategy || '';
-  if (strategy.includes('REVERSAL') || strategy.includes('A3')) return 'CREDIT_VERTICAL';
-  if (strategy.includes('IV_PREMIUM') || strategy.includes('B1')) return 'IRON_CONDOR';
-  return 'DEBIT_VERTICAL'; // default for A1, A2, B2
-}
-
-function classifyStrategy(signal) {
-  const grade = signal.grade || 'B';
-  const freshness = signal.freshness || '';
-  if (freshness === 'FRESH') return 'A1_FRESH_MOMENTUM';
-  if (signal.cluster_context === 'PROPAGATION') return 'A2_CLUSTER_LAG';
-  return 'A1_FRESH_MOMENTUM'; // default
-}
-
-function getMaxHold(spreadType) {
-  switch (spreadType) {
-    case 'CREDIT_VERTICAL': return 30;
-    case 'IRON_CONDOR': return 0; // multi-day, checked by holdDays
-    case 'DEBIT_VERTICAL': return 45;
-    default: return 45;
-  }
-}
-
-async function recordPaperTrade(params, tradeId) {
+async function recordTradeEntry(trade) {
   try {
     await query(`
-      INSERT INTO lc_v3.paper_trades
-        (signal_id, ticker, direction, strategy, status, entry_time, entry_stock_price,
-         entry_contract_symbol, strike, position_size_pct, auto_traded)
-      VALUES ($1, $2, $3, $4, 'OPEN', NOW(), $5, $6, $7, $8, true)
+      INSERT INTO lc_v3.paper_trades (
+        signal_id, ticker, direction, strategy, status,
+        entry_stock_price, entry_contract_mid, entry_contract_symbol,
+        entry_contract_strike, entry_contract_expiry,
+        entry_contract_delta, entry_contract_iv,
+        position_size_pct, auto_traded
+      ) VALUES ($1,$2,$3,$4,'OPEN',$5,$6,$7,$8,$9,$10,$11,$12,TRUE)
     `, [
-      params.signal?.signal_id || tradeId,
-      params.ticker,
-      params.direction,
-      params.signal?.strategy || 'AUTO',
-      params.entryPrice,
-      params.spread?.longSymbol || '',
-      params.spread?.longStrike || 0,
-      params.sizePct,
-    ]);
-  } catch { /* paper_trades schema may differ */ }
-}
-
-async function storeTrade(trade, exitReason, pnl) {
-  try {
-    await query(`
-      INSERT INTO lc_v3.paper_trades
-        (signal_id, ticker, direction, strategy, status, entry_time, exit_time,
-         entry_stock_price, entry_contract_symbol, position_size_pct,
-         final_pnl_pct, outcome, exit_reason, auto_traded)
-      VALUES ($1, $2, $3, $4, 'CLOSED', $5, NOW(), $6, $7, $8, $9, $10, $11, true)
-      ON CONFLICT DO NOTHING
-    `, [
-      trade.id,
+      trade.signalId,
       trade.ticker,
       trade.direction,
       trade.strategy,
-      new Date(trade.entryTime),
       trade.entryPrice,
-      trade.spreadDetails?.longSymbol || '',
-      POSITION_SIZES[trade.grade] || 0.075,
-      pnl > 0 ? (pnl / (trade.entryPrice * trade.contracts * 100) * 100) : 0,
-      pnl > 0 ? 'WIN' : pnl < 0 ? 'LOSS' : 'FLAT',
-      exitReason,
+      trade.fillPrice || trade.entryPremium,
+      trade.contractSymbol,
+      trade.strike,
+      trade.expiry,
+      trade.delta,
+      trade.iv,
+      SIZE_PCT,
     ]);
   } catch (err) {
-    console.error(`[AUTO-TRADER] Store trade failed: ${err.message}`);
+    console.error(`[AUTO-TRADER] recordTradeEntry failed: ${err.message}`);
+  }
+}
+
+async function recordTradeExit(trade, exitReason, pnlPct, pnlDollars) {
+  try {
+    // Update the existing paper trade row
+    await query(`
+      UPDATE lc_v3.paper_trades SET
+        status = 'CLOSED',
+        exit_time = NOW(),
+        exit_reason = $1,
+        final_pnl_pct = $2,
+        final_pnl_dollars = $3,
+        outcome = $4
+      WHERE signal_id = $5
+        AND ticker = $6
+        AND status = 'OPEN'
+        AND auto_traded = TRUE
+    `, [
+      exitReason,
+      parseFloat(pnlPct.toFixed(2)),
+      Math.round(pnlDollars),
+      pnlPct > 0 ? 'WIN' : pnlPct < 0 ? 'LOSS' : 'FLAT',
+      trade.signalId,
+      trade.ticker,
+    ]);
+  } catch (err) {
+    console.error(`[AUTO-TRADER] recordTradeExit failed: ${err.message}`);
   }
 }
 
@@ -553,12 +542,20 @@ export function getAutoTraderStatus() {
   return {
     running,
     dryRun: DRY_RUN,
+    mode: 'SINGLE_LEG_OPTIONS',
     startingEquity,
     openTrades: Array.from(openTrades.values()).map(t => ({
-      id: t.id, ticker: t.ticker, direction: t.direction,
-      strategy: t.strategy, state: t.state, spreadType: t.spreadType,
-      entryPrice: t.entryPrice, entryTime: t.entryTime,
+      id: t.id,
+      ticker: t.ticker,
+      direction: t.direction,
+      strategy: t.strategy,
+      state: t.state,
+      contractSymbol: t.contractSymbol,
+      contracts: t.contracts,
+      entryPremium: t.fillPrice || t.entryPremium,
+      peakPnlPct: t.peakPnlPct,
       holdMinutes: Math.round((Date.now() - t.entryTime) / 60000),
+      exits: t.exits,
     })),
     risk: getDailyState(),
   };
