@@ -64,47 +64,63 @@ class SignalEngine:
         # 1. Get weather forecast
         forecasts = fetch_open_meteo(city_code)
         if not forecasts:
+            log.warning(f"{city_code}: weather fetch returned None")
             return []
+
+        log.info(f"{city_code}: weather OK — {len(forecasts)} days")
 
         # 2. Get Kalshi markets for this city's series
         series = city["series"]
         markets = self.kalshi.get_markets(series)
         if not markets:
-            log.debug(f"{city_code}: no open markets for {series}")
+            log.warning(f"{city_code}: 0 open markets for series={series}")
             return []
+
+        # Log sample tickers to verify format
+        sample_tickers = [m.get("ticker", "?") for m in markets[:3]]
+        log.info(f"{city_code}: {len(markets)} markets (e.g. {sample_tickers})")
 
         signals = []
 
         for date_str, model_temps in forecasts.items():
             mean_temp, spread = model_consensus(model_temps)
             if spread > 10:
-                log.debug(f"{city_code} {date_str}: model spread {spread}F too wide, skipping")
+                log.info(f"{city_code} {date_str}: model spread {spread}F too wide, skipping")
                 continue
+
+            log.info(f"{city_code} {date_str}: forecast={mean_temp:.1f}F spread={spread:.1f}F")
 
             # Find markets for this date
             date_markets = [m for m in markets if self._market_matches_date(m, date_str)]
+            log.info(f"{city_code} {date_str}: {len(date_markets)} markets match this date")
 
+            evaluated = 0
             for market in date_markets:
                 ticker = market.get("ticker", "")
-                # Extract threshold from ticker (e.g., KXHIGHNY-26APR05-T67 → 67)
                 threshold = self._parse_threshold(ticker)
                 if threshold is None:
+                    log.debug(f"  {ticker}: could not parse threshold")
                     continue
 
-                # Get market price
                 prices = self.kalshi.get_best_prices(ticker)
                 if not prices:
+                    log.debug(f"  {ticker}: no orderbook")
                     continue
 
-                market_price = prices["yes_ask"]  # cost to buy YES
+                market_price = prices["yes_ask"]
                 if market_price < MIN_BUY_PRICE or market_price > MAX_BUY_PRICE:
+                    log.debug(f"  {ticker}: price ${market_price:.2f} outside range ${MIN_BUY_PRICE}-${MAX_BUY_PRICE}")
                     continue
 
-                # Calculate model probability
                 model_prob = temp_probability(mean_temp, threshold, spread)
-
-                # Edge = model probability - market price
                 edge = model_prob - market_price
+                evaluated += 1
+
+                log.info(
+                    f"  {ticker}: >{threshold}F | model={model_prob:.0%} "
+                    f"mkt=${market_price:.2f} edge={edge:+.2f} "
+                    f"{'PASS' if edge >= MIN_EDGE_PCT else 'REJECT (edge<' + str(MIN_EDGE_PCT) + ')'}"
+                )
 
                 if edge >= MIN_EDGE_PCT:
                     sig = Signal(
@@ -116,12 +132,15 @@ class SignalEngine:
                         model_prob=model_prob,
                         market_price=market_price,
                         edge=edge,
-                        contracts=0,  # sized later by executor
+                        contracts=0,
                         forecast_mean=mean_temp,
                         spread=spread,
                     )
                     signals.append(sig)
                     log.info(f"SIGNAL: {sig}")
+
+            if evaluated == 0 and len(date_markets) > 0:
+                log.info(f"{city_code} {date_str}: {len(date_markets)} markets but 0 had valid orderbook/price")
 
         return signals
 
@@ -163,10 +182,19 @@ class SignalEngine:
         except ValueError:
             return False
 
-    def _parse_threshold(self, ticker: str) -> int | None:
-        """Extract temperature threshold from ticker. KXHIGHNY-26APR05-T67 → 67."""
+    def _parse_threshold(self, ticker: str) -> float | None:
+        """
+        Extract temperature threshold from ticker.
+        T-type: KXHIGHNY-26APR05-T67 → 67 (above threshold)
+        B-type: KXHIGHNY-26APR05-B66.5 → 66.5 (bucket midpoint)
+        """
         parts = ticker.split("-")
         for part in parts:
             if part.startswith("T") and part[1:].isdigit():
                 return int(part[1:])
+            if part.startswith("B"):
+                try:
+                    return float(part[1:])
+                except ValueError:
+                    continue
         return None

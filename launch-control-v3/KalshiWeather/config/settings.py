@@ -39,7 +39,7 @@ DAILY_LOSS_LIMIT_PCT = 0.15      # halt at -15% daily ($75)
 # ── Signal Thresholds ──────────────────────────────────────────────────────────
 
 # Buy contracts priced $0.10-0.15 where model says true prob >= 60%
-MIN_EDGE_PCT = 0.45              # model_prob - market_price >= 45 cents (e.g., 60% - 15c)
+MIN_EDGE_PCT = 0.15              # model_prob - market_price >= 15 cents (e.g., 30% - 15c)
 MIN_BUY_PRICE = 0.05             # don't buy below $0.05 (too illiquid)
 MAX_BUY_PRICE = 0.20             # don't buy above $0.20 (not enough edge)
 TARGET_SELL_PRICE = 0.40         # sell when market reprices to $0.40+
@@ -53,27 +53,13 @@ MODEL_UPDATE_HOURS = [0, 6, 12, 18]  # GFS update times (UTC)
 
 # ── Cities ─────────────────────────────────────────────────────────────────────
 
+# Only cities with confirmed active Kalshi temperature markets
 CITIES = {
     "NY":  {"name": "New York",      "lat": 40.71,  "lon": -74.01, "series": "KXHIGHNY"},
     "CHI": {"name": "Chicago",       "lat": 41.88,  "lon": -87.63, "series": "KXHIGHCHI"},
     "MIA": {"name": "Miami",         "lat": 25.76,  "lon": -80.19, "series": "KXHIGHMIA"},
     "LAX": {"name": "Los Angeles",   "lat": 34.05,  "lon": -118.24,"series": "KXHIGHLAX"},
     "DEN": {"name": "Denver",        "lat": 39.74,  "lon": -104.99,"series": "KXHIGHDEN"},
-    "ATL": {"name": "Atlanta",       "lat": 33.75,  "lon": -84.39, "series": "KXHIGHATL"},
-    "DFW": {"name": "Dallas",        "lat": 32.78,  "lon": -96.80, "series": "KXHIGHDFW"},
-    "SEA": {"name": "Seattle",       "lat": 47.61,  "lon": -122.33,"series": "KXHIGHSEA"},
-    "BOS": {"name": "Boston",        "lat": 42.36,  "lon": -71.06, "series": "KXHIGHBOS"},
-    "PHX": {"name": "Phoenix",       "lat": 33.45,  "lon": -112.07,"series": "KXHIGHPHX"},
-    "MSP": {"name": "Minneapolis",   "lat": 44.98,  "lon": -93.27, "series": "KXHIGHMSP"},
-    "DTW": {"name": "Detroit",       "lat": 42.33,  "lon": -83.05, "series": "KXHIGHDTW"},
-    "PHL": {"name": "Philadelphia",  "lat": 39.95,  "lon": -75.17, "series": "KXHIGHPHL"},
-    "IAH": {"name": "Houston",       "lat": 29.76,  "lon": -95.37, "series": "KXHIGHIAH"},
-    "DCA": {"name": "Washington DC", "lat": 38.91,  "lon": -77.04, "series": "KXHIGHDCA"},
-    "SFO": {"name": "San Francisco", "lat": 37.77,  "lon": -122.42,"series": "KXHIGHSFO"},
-    "ORD": {"name": "Chicago OHare", "lat": 41.97,  "lon": -87.90, "series": "KXHIGHORD"},
-    "STL": {"name": "St. Louis",     "lat": 38.63,  "lon": -90.20, "series": "KXHIGHSTL"},
-    "CLE": {"name": "Cleveland",     "lat": 41.50,  "lon": -81.69, "series": "KXHIGHCLE"},
-    "PDX": {"name": "Portland",      "lat": 45.52,  "lon": -122.68,"series": "KXHIGHPDX"},
 }
 
 # ── Weather Models ─────────────────────────────────────────────────────────────
