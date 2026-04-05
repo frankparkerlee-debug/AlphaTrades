@@ -11,11 +11,14 @@ Usage:
     python main.py --test       # test data sources
 """
 
+import os
 import sys
 import time
 import logging
 import argparse
 from datetime import datetime
+
+os.makedirs("logs", exist_ok=True)
 
 from config.settings import SCAN_INTERVAL_SECONDS, STARTING_CAPITAL, TRADING_MODE
 from feeds.kalshi import KalshiClient
