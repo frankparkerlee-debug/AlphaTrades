@@ -1,6 +1,7 @@
 """
-Configuration for Kalshi Weather Arbitrage Bot.
-All thresholds calibrated for $500 starting capital.
+Configuration for Kalshi Weather — Last Mile Strategy.
+Buy near-certain temperature contracts ($0.80-$0.95) on resolution day
+when both GFS + ECMWF predict temp well above threshold. Hold to settlement.
 """
 
 import os
@@ -31,20 +32,20 @@ STATE_DIR = os.getenv("STATE_DIR", "./logs")
 # ── Capital & Risk ─────────────────────────────────────────────────────────────
 
 STARTING_CAPITAL = float(os.getenv("STARTING_CAPITAL", "500"))
-MAX_POSITION_PCT = 0.10          # 10% of capital per signal ($50)
-MAX_CONTRACTS_PER_BUCKET = 50    # max contracts per temperature bucket
+MAX_POSITION_PCT = 0.15          # 15% of capital per signal
+MAX_CONTRACTS_PER_BUCKET = 25    # fill cap from Kalshi trade tape data
 MAX_OPEN_POSITIONS = 15          # across all cities
-DAILY_LOSS_LIMIT_PCT = 0.15      # halt at -15% daily ($75)
+DAILY_LOSS_LIMIT_PCT = 0.10      # halt at -10% daily (tighter for high-cost contracts)
 
-# ── Signal Thresholds ──────────────────────────────────────────────────────────
+# ── Last Mile Signal Thresholds ───────────────────────────────────────────────
 
-# Buy contracts priced $0.10-0.15 where model says true prob >= 60%
-MIN_EDGE_PCT = 0.15              # model_prob - market_price >= 15 cents (e.g., 30% - 15c)
-MIN_BUY_PRICE = 0.05             # don't buy below $0.05 (too illiquid)
-MAX_BUY_PRICE = 0.20             # don't buy above $0.20 (not enough edge)
-TARGET_SELL_PRICE = 0.40         # sell when market reprices to $0.40+
-MAX_HOLD_MINUTES = 90            # time backstop
-LADDER_BUCKETS = 4               # buy 3-4 adjacent temperature buckets per signal
+# Buy contracts priced $0.80-$0.95 where forecast is well above threshold
+MIN_BUY_PRICE = 0.80             # only buy near-certain contracts
+MAX_BUY_PRICE = 0.95             # don't overpay (leaves room for profit)
+MIN_FORECAST_OFFSET = 4          # forecast must be >= 4F above threshold
+MAX_MODEL_SPREAD = 6             # models must agree within 6F
+EARLY_EXIT_PRICE = 0.97          # optional early exit if bid hits $0.97
+LADDER_BUCKETS = 3               # buy up to 3 adjacent buckets per city+date
 
 # ── Scan Interval ──────────────────────────────────────────────────────────────
 

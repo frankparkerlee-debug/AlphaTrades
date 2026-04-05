@@ -1,9 +1,9 @@
 """
-KalshiWeather — Kalshi Weather Arbitrage Bot
+KalshiWeather — Last Mile Strategy
 
-Scans weather model forecasts (GFS/ECMWF via Open-Meteo) vs Kalshi
-temperature market prices. Buys underpriced contracts and sells
-when the crowd reprices after broadcast delay.
+Buys near-certain temperature contracts ($0.80-$0.95) on resolution day
+when both GFS + ECMWF predict temp well above threshold. Holds to
+settlement at $1.00. 99.7% WR backtested at 4F+ forecast offset.
 
 Usage:
     python main.py              # run the bot

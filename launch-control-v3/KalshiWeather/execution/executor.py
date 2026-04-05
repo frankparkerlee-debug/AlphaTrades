@@ -1,17 +1,17 @@
 """
-Order execution and position management for Kalshi weather trades.
-Handles sizing, entry, monitoring, and exit.
+Order execution for Kalshi weather — Last Mile strategy.
+Buys near-certain contracts and holds to settlement ($1.00 payout).
+Only exits early if bid hits $0.97+ (lock in profit) or contract drops
+below $0.50 (rare model failure — cut loss).
 """
 
 import logging
-import time
 from datetime import datetime
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from config.settings import (
     STARTING_CAPITAL, MAX_POSITION_PCT, MAX_CONTRACTS_PER_BUCKET,
-    MAX_OPEN_POSITIONS, DAILY_LOSS_LIMIT_PCT, TARGET_SELL_PRICE,
-    MAX_HOLD_MINUTES,
+    MAX_OPEN_POSITIONS, DAILY_LOSS_LIMIT_PCT, EARLY_EXIT_PRICE,
 )
 from feeds.kalshi import KalshiClient
 from strategy.signals import Signal
@@ -25,13 +25,14 @@ class Position:
     ticker: str
     city_code: str
     date: str
-    threshold: int
-    side: str           # "yes" or "no"
+    threshold: float
+    side: str           # "yes"
     contracts: int
     entry_price: float  # avg cost per contract
     entry_time: datetime
+    forecast_offset: float = 0.0  # how far forecast was above threshold
     order_id: str = ""
-    status: str = "open"  # open, closed, expired
+    status: str = "open"  # open, closed, settled
     exit_price: float = 0.0
     exit_time: datetime = None
     pnl: float = 0.0
@@ -44,13 +45,9 @@ class Position:
     def hold_minutes(self) -> float:
         return (datetime.now() - self.entry_time).total_seconds() / 60
 
-    @property
-    def current_pnl_at(self, current_price: float) -> float:
-        return (current_price - self.entry_price) * self.contracts
-
 
 class Executor:
-    """Manages order execution, position tracking, and exits."""
+    """Manages order execution for Last Mile strategy."""
 
     def __init__(self, kalshi: KalshiClient):
         self.kalshi = kalshi
@@ -74,8 +71,8 @@ class Executor:
 
     def size_order(self, signal: Signal) -> int:
         """
-        Determine contract count for a signal.
-        Max 10% of capital per position, capped at MAX_CONTRACTS_PER_BUCKET.
+        Size for Last Mile: contracts are expensive ($0.80-$0.95 each).
+        Max 15% of capital per position, capped at 25 contracts (fill cap).
         """
         if self.halted:
             return 0
@@ -95,7 +92,7 @@ class Executor:
         return count
 
     def enter(self, signal: Signal) -> Position | None:
-        """Place a buy order for a signal."""
+        """Place a buy order for a Last Mile signal."""
         count = self.size_order(signal)
         if count == 0:
             log.warning(f"Cannot size order for {signal.ticker}")
@@ -123,42 +120,56 @@ class Executor:
             contracts=count,
             entry_price=signal.market_price,
             entry_time=datetime.now(),
+            forecast_offset=signal.forecast_offset,
             order_id=order.get("order_id", ""),
         )
         self.positions.append(pos)
-        log.info(f"ENTERED: {count}x {signal.ticker} @ ${signal.market_price:.2f} (${pos.cost:.2f})")
+
+        expected_profit = count * (1.00 - signal.market_price)
+        log.info(
+            f"ENTERED: {count}x {signal.ticker} @ ${signal.market_price:.2f} "
+            f"(cost=${pos.cost:.2f}, expected profit=${expected_profit:.2f})"
+        )
         return pos
 
     def check_exits(self):
-        """Check all open positions for exit conditions."""
+        """
+        Last Mile exit logic:
+        1. EARLY EXIT: bid >= $0.97 — lock in profit without waiting for settlement
+        2. STOP LOSS: bid < $0.50 — model was wrong, cut losses (rare at 4F+ offset)
+        3. SETTLED: contract resolved — Kalshi auto-pays $1.00, mark position closed
+
+        Most positions will NOT exit early — they settle at $1.00 automatically.
+        """
         for pos in self.open_positions:
             prices = self.kalshi.get_best_prices(pos.ticker)
             if not prices:
+                # Check if market has settled (no orderbook = likely resolved)
+                if pos.hold_minutes > 480:  # 8+ hours, likely settled
+                    self._mark_settled(pos)
                 continue
 
             current_bid = prices["yes_bid"]
-            hold_min = pos.hold_minutes
 
-            exit_reason = None
+            # 1. Early exit: lock in profit at $0.97+
+            if current_bid >= EARLY_EXIT_PRICE:
+                self._exit_position(pos, current_bid, "EARLY_EXIT")
+                continue
 
-            # 1. Target hit: market repriced to $0.40+
-            if current_bid >= TARGET_SELL_PRICE:
-                exit_reason = "TARGET"
+            # 2. Stop loss: model failure (extremely rare at 4F+ offset)
+            if current_bid < 0.50 and pos.hold_minutes > 30:
+                self._exit_position(pos, current_bid, "STOP_LOSS")
+                continue
 
-            # 2. Time backstop
-            elif hold_min >= MAX_HOLD_MINUTES:
-                exit_reason = "TIME"
-
-            # 3. Stop loss: if price drops to near zero (<$0.02)
-            elif current_bid <= 0.02 and hold_min > 5:
-                exit_reason = "STOP"
-
-            if exit_reason:
-                self._exit_position(pos, current_bid, exit_reason)
+            # 3. Normal: hold to settlement (no action needed)
+            log.debug(
+                f"  {pos.ticker}: bid=${current_bid:.2f} "
+                f"held {pos.hold_minutes:.0f}min — holding to settlement"
+            )
 
     def _exit_position(self, pos: Position, exit_price: float, reason: str):
-        """Sell a position."""
-        result = self.kalshi.place_order(
+        """Sell a position early."""
+        self.kalshi.place_order(
             ticker=pos.ticker,
             side="yes",
             action="sell",
@@ -179,16 +190,33 @@ class Executor:
             f"P&L: ${pos.pnl:+.2f} | held {pos.hold_minutes:.0f}min"
         )
 
-        # Check daily loss limit
+        self._check_daily_limit()
+
+    def _mark_settled(self, pos: Position):
+        """Mark a position as settled (Kalshi auto-paid $1.00)."""
+        pos.status = "settled"
+        pos.exit_price = 1.00
+        pos.exit_time = datetime.now()
+        pos.pnl = (1.00 - pos.entry_price) * pos.contracts
+        self.daily_pnl += pos.pnl
+        self.closed_positions.append(pos)
+
+        log.info(
+            f"SETTLED: {pos.ticker} | "
+            f"${pos.entry_price:.2f} -> $1.00 | "
+            f"P&L: ${pos.pnl:+.2f} | held {pos.hold_minutes:.0f}min"
+        )
+
+    def _check_daily_limit(self):
+        """Halt if daily loss limit is breached."""
         if self.daily_pnl <= -(self.capital * DAILY_LOSS_LIMIT_PCT):
             self.halted = True
-            log.error(f"DAILY LOSS LIMIT HIT: ${self.daily_pnl:.2f} — halting")
+            log.error(f"DAILY LOSS LIMIT HIT: ${self.daily_pnl:.2f} -- halting")
 
     def reset_daily(self):
         """Reset daily P&L (call at start of trading day)."""
         self.daily_pnl = 0.0
         self.halted = False
-        # Update capital from Kalshi balance
         balance = self.kalshi.get_balance()
         if balance is not None:
             self.capital = balance
@@ -199,6 +227,7 @@ class Executor:
         closed = self.closed_positions
         wins = [p for p in closed if p.pnl > 0]
         losses = [p for p in closed if p.pnl <= 0]
+        settled = [p for p in closed if p.status == "settled"]
 
         return {
             "capital": self.capital,
@@ -208,6 +237,7 @@ class Executor:
             "total_trades": len(closed),
             "wins": len(wins),
             "losses": len(losses),
+            "settled": len(settled),
             "win_rate": len(wins) / max(len(closed), 1),
             "daily_pnl": self.daily_pnl,
             "total_pnl": sum(p.pnl for p in closed),
