@@ -500,6 +500,8 @@ body::after {
 .locked-cell-value.stop { color: var(--red); }
 .locked-cell-value.t1 { color: var(--green); }
 .locked-cell-value.t2 { color: var(--green2); }
+.signal-metrics { display: flex; gap: 8px; padding: 3px 0; font-family: var(--mono); font-size: 9px; }
+.signal-metrics .metric { color: var(--text3); background: var(--bg3); padding: 1px 5px; border-radius: 2px; border: 1px solid var(--border); }
 .current-price-row { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding: 4px 6px; background: var(--bg3); border-radius: 3px; border: 1px solid var(--border); }
 .current-price-label { font-family: var(--mono); font-size: 9px; font-weight: 600; color: var(--text3); letter-spacing: 0.5px; }
 .current-price-value { font-family: var(--mono); font-size: 13px; font-weight: 700; }
@@ -934,6 +936,7 @@ function buildIntelBar(s) {
 }
 
 function parseStrategy(s) {
+  // Prefer direct strategy column (now populated), fallback to headline parse
   if (s.strategy) return s.strategy;
   const hl = s.news_headline || '';
   const m = hl.match(/strategy=(\w+)/);
@@ -952,6 +955,7 @@ function buildStratBanner(strategy) {
     EXTREME_REVERSAL:      { cls: 'strat-extreme', label: 'EXTREME REVERSAL',   hold: 'DAY · 120M MAX' },
     EOD_MEAN_REVERSION:    { cls: 'strat-eod',     label: 'EOD REVERSION',      hold: 'DAY · 30M MAX' },
     HIGH_RVOL_BREAKOUT:    { cls: 'strat-rvol',    label: 'HIGH RVOL BREAKOUT', hold: 'DAY · 90M MAX' },
+    MOMENTUM_SCALP:        { cls: 'strat-scalp',   label: 'MOMENTUM SCALP',     hold: 'DAY · 30M MAX' },
     // Swing trades
     PEAD_DRIFT:            { cls: 'strat-pead',    label: 'PEAD DRIFT',         hold: 'SWING · 5D MAX' },
     SECTOR_LAGGARD:        { cls: 'strat-laggard', label: 'SECTOR LAGGARD',     hold: 'SWING · 3D MAX' },
@@ -1209,6 +1213,11 @@ function buildCard(s) {
       <div class="pillar"><div class="pillar-score">${s.score_market??'—'}</div><div class="pillar-label">MKT</div></div>
       <div class="pillar"><div class="pillar-score">${s.score_timing??'—'}</div><div class="pillar-label">TIME</div></div>
     </div>
+    <div class="signal-metrics">
+      ${s.atr_multiple!=null ? `<span class="metric">${s.atr_multiple.toFixed(2)}x ATR</span>` : ''}
+      ${s.relative_volume!=null ? `<span class="metric">${s.relative_volume.toFixed(1)}x RVOL</span>` : ''}
+      ${s.price_at_signal!=null ? `<span class="metric">$${s.price_at_signal.toFixed(2)}</span>` : ''}
+    </div>
     <div class="tags">${tags.join('')}${s.confirmation_count > 1 ? `<span class="tag" style="background:rgba(245,158,11,0.15);color:var(--amber);border:1px solid var(--amber)">x${s.confirmation_count}</span>` : ''}</div>
     ${propCtx}
     ${s.news_headline ? (() => {
@@ -1238,9 +1247,16 @@ function buildCard(s) {
     ${contract}
     ${strategy ? buildLockedTargets(s) : ''}
     <div class="current-price-row">
-      <span class="current-price-label">CURRENT</span>
+      <span class="current-price-label">STOCK</span>
       <span><span class="current-price-value" id="cp-${s.signal_id}">--</span><span class="current-price-pnl" id="cpnl-${s.signal_id}"></span></span>
     </div>
+    ${hasContract ? `<div class="current-price-row" style="border-top:1px solid var(--border);padding-top:4px">
+      <span class="current-price-label" style="color:var(--amber)">CONTRACT</span>
+      <span>
+        <span class="current-price-value" id="ccp-${s.signal_id}" style="color:var(--text2)">--</span>
+        <span class="current-price-pnl" id="ccpnl-${s.signal_id}"></span>
+      </span>
+    </div>` : ''}
     ${buildHoldInstruction(strategy, s.created_at)}
     ${(() => {
       const gradeSize = {'A+':0.20,'A':0.15,'A-':0.10,'B+':0.07,'B':0.05}[s.grade] || 0.05;
@@ -1734,6 +1750,37 @@ function updateClock() {
     new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:'America/New_York'})+' ET';
 }
 
+// ── LIVE CONTRACT PRICE UPDATER ───────────────────────────────────
+async function updateContractPrices() {
+  try {
+    const resp = await fetch('/api/contract-prices');
+    if (!resp.ok) return;
+    const contracts = await resp.json();
+    // Update each signal card's contract price
+    document.querySelectorAll('[id^="ccp-"]').forEach(el => {
+      const sigId = el.id.replace('ccp-', '');
+      const sig = signals.find(s => s.signal_id?.toString() === sigId);
+      if (!sig || !sig.contract_symbol) return;
+      const quote = contracts[sig.contract_symbol];
+      if (!quote || !quote.mid) return;
+      // Show live mid price
+      el.textContent = '$' + quote.mid.toFixed(2);
+      // Show bid/ask spread on hover
+      el.title = `Bid $${quote.bid.toFixed(2)} / Ask $${quote.ask.toFixed(2)} | \u0394 ${quote.delta} IV ${quote.iv}%`;
+      // Compute P&L vs entry mid
+      const entryMid = sig.contract_mid;
+      if (!entryMid || entryMid <= 0) return;
+      const pnlPct = ((quote.mid - entryMid) / entryMid * 100);
+      const pnlEl = document.getElementById('ccpnl-' + sigId);
+      if (pnlEl) {
+        pnlEl.textContent = `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%`;
+        pnlEl.style.color = pnlPct >= 0 ? 'var(--green)' : 'var(--red)';
+      }
+      el.style.color = pnlPct >= 0 ? 'var(--green)' : 'var(--red)';
+    });
+  } catch { /* non-fatal */ }
+}
+
 // ── LIVE PRICE UPDATER FOR LOCKED TARGETS ──────────────────────────
 async function updateCurrentPrices() {
   try {
@@ -1802,9 +1849,10 @@ async function updateCurrentPrices() {
 }
 
 // ── INIT ──────────────────────────────────────────────────────────
-loadAll().then(() => updateCurrentPrices());
-setInterval(() => loadAll().then(() => updateCurrentPrices()), 8000);
+loadAll().then(() => { updateCurrentPrices(); updateContractPrices(); });
+setInterval(() => loadAll().then(() => { updateCurrentPrices(); updateContractPrices(); }), 8000);
 setInterval(updateCurrentPrices, 5000);
+setInterval(updateContractPrices, 12000); // options quotes every 12s (rate limited server-side)
 setInterval(updateClock, 1000);
 updateClock();
 </script>

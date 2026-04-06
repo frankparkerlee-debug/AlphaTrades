@@ -258,7 +258,7 @@ app.get('/api/signals', async (req, res) => {
     const result = await db.query(`
       SELECT
         s.signal_id, s.ticker, s.direction, s.grade, s.status,
-        s.composite_raw, s.signal_tier,
+        s.composite_raw, s.signal_tier, s.strategy,
         s.score_price_action, s.score_volume, s.score_news,
         s.score_market, s.score_timing,
         s.position_size_pct, s.position_size_dollars,
@@ -1969,6 +1969,67 @@ app.get('/api/prices', (req, res) => {
   res.json(merged);
 });
 
+// ── LIVE CONTRACT PRICES ──────────────────────────────────────────────────────
+// Returns live options contract bid/ask/mid for active signals
+let contractPriceCache = {};  // { contractSymbol: { bid, ask, mid, delta, iv, updatedAt } }
+let contractPriceFetchingAt = 0;
+
+app.get('/api/contract-prices', async (req, res) => {
+  // Rate limit: fetch at most every 10 seconds
+  if (Date.now() - contractPriceFetchingAt < 10000) {
+    return res.json(contractPriceCache);
+  }
+  contractPriceFetchingAt = Date.now();
+
+  try {
+    // Get active signals with contracts
+    const result = await db.query(`
+      SELECT signal_id, contract_symbol, contract_mid, contract_bid, contract_ask
+      FROM lc_v3.signals
+      WHERE status IN ('ACTIVE', 'WEAKENING', 'TARGET_ZONE')
+        AND contract_symbol IS NOT NULL
+      ORDER BY created_at DESC
+      LIMIT 20
+    `);
+
+    const symbols = [...new Set(result.rows.map(r => r.contract_symbol).filter(Boolean))];
+    const updated = {};
+
+    // Fetch live quotes in parallel (max 5 concurrent)
+    const batches = [];
+    for (let i = 0; i < symbols.length; i += 5) {
+      batches.push(symbols.slice(i, i + 5));
+    }
+
+    for (const batch of batches) {
+      const quotes = await Promise.all(
+        batch.map(sym => fetchContractQuote(sym).catch(() => null))
+      );
+      batch.forEach((sym, idx) => {
+        if (quotes[idx] && quotes[idx].mid > 0) {
+          updated[sym] = { ...quotes[idx], updatedAt: Date.now() };
+        }
+      });
+    }
+
+    // Merge into cache (keep stale entries for up to 5 min)
+    for (const [sym, data] of Object.entries(updated)) {
+      contractPriceCache[sym] = data;
+    }
+    // Prune stale entries
+    for (const sym of Object.keys(contractPriceCache)) {
+      if (Date.now() - contractPriceCache[sym].updatedAt > 300000) {
+        delete contractPriceCache[sym];
+      }
+    }
+
+    res.json(contractPriceCache);
+  } catch (err) {
+    console.error('[contract-prices]', err.message);
+    res.json(contractPriceCache); // return stale cache on error
+  }
+});
+
 // In-memory conviction scan state
 let convictionScan = { status: 'idle', results: null, started_at: null, completed_at: null, progress: null, error: null };
 
@@ -2883,10 +2944,11 @@ async function startRestPoller() {
               if (liveEtfMins[etf] && !liveMins[etf]) liveMins[etf] = liveEtfMins[etf];
             }
 
+            // 3 backtested strategies — POWER_HOUR SHELVE'd (23% WR, 0.34 PF)
             const stratFns = [
-              { name: 'ORB_BREAKOUT', fn: generateORBBreakoutSignals },
-              { name: 'GAP_FILL_REVERSION', fn: generateGapFillSignals },
-              { name: 'MOMENTUM_SCALP', fn: generateMomentumScalpSignals },
+              { name: 'ORB_BREAKOUT', fn: generateORBBreakoutSignals },         // DEPLOY: 68% WR, 1.97 PF
+              { name: 'GAP_FILL_REVERSION', fn: generateGapFillSignals },       // 100% directional
+              { name: 'MOMENTUM_SCALP', fn: generateMomentumScalpSignals },     // 92.7% directional
             ];
 
             const barCount = Object.keys(liveMins).reduce((s, t) => s + Object.keys(liveMins[t]).length, 0);
@@ -3172,7 +3234,10 @@ async function startRestPoller() {
               sig.note || null,
             ].filter(Boolean).join(' · ');
 
-            const expiryInterval = sig.strategy === 'CONSEC_BOUNCE' ? '2 days'
+            const expiryInterval = sig.strategy === 'ORB_BREAKOUT' ? '60 minutes'
+              : sig.strategy === 'GAP_FILL_REVERSION' ? '120 minutes'
+              : sig.strategy === 'MOMENTUM_SCALP' ? '30 minutes'
+              : sig.strategy === 'CONSEC_BOUNCE' ? '2 days'
               : sig.strategy === 'OVERNIGHT_CALENDAR' ? '18 hours'
               : sig.strategy === 'PRE_EARNINGS_PUT' ? `${(sig.exit_within_days || 22)} days`
               : sig.strategy === 'CREDIT_SPREAD' ? '3 days'
@@ -3207,18 +3272,22 @@ async function startRestPoller() {
             const insertRes = await db.query(`
               INSERT INTO lc_v3.signals (
                 ticker, direction, grade, status, composite_raw, signal_tier,
-                price_at_signal, news_headline,
+                price_at_signal, news_headline, strategy,
                 score_price_action, score_volume, score_news, score_market, score_timing,
+                relative_volume, atr_multiple,
                 first_seen_at, last_confirmed_at, confirmation_count,
                 peak_composite, peak_grade, composite_history, momentum_trend,
                 expires_at, created_at
-              ) VALUES ($1,$2,$12,$3,$4,'primary',$5,$6,
+              ) VALUES ($1,$2,$14,$3,$4,'primary',$5,$6,$13,
                 $7,$8,$9,$10,$11,
-                NOW(), NOW(), 1, $4, $12, '[]'::jsonb, 'NEW',
+                $15,$16,
+                NOW(), NOW(), 1, $4, $14, '[]'::jsonb, 'NEW',
                 NOW() + INTERVAL '${expiryInterval}', NOW())
               RETURNING signal_id
             `, [sig.ticker, sig.direction, signalStatus, compositeRaw, sig.entry_price, signalNote,
-                stratPA, stratVOL, stratNEWS, stratMKT, stratTIM, grade]);
+                stratPA, stratVOL, stratNEWS, stratMKT, stratTIM, grade,
+                sig.strategy,
+                sig.volume_ratio || null, sig.setup_factors?.atrMultiple || null]);
 
             const newSignalId = insertRes.rows[0]?.signal_id;
             console.log(`[STRATEGY] ${sig.ticker} ${sig.direction} ${sig.strategy} ${sig.confidence}% ${signalStatus === 'PAPER_ONLY' ? '(PAPER)' : ''}`);
@@ -3508,7 +3577,11 @@ async function startRestPoller() {
 
 // Strategy → minimum DTE for options contract selection
 const STRATEGY_MIN_DTE = {
-  // Income playbook (0DTE preferred)
+  // Active strategies (3 backtested)
+  ORB_BREAKOUT: 0,
+  GAP_FILL_REVERSION: 0,
+  MOMENTUM_SCALP: 0,
+  // Legacy (kept for history)
   GAP_REVERSAL: 0,
   GAP_UP_REVERSAL: 0,
   SECTOR_ROTATION_BOUNCE: 0,
@@ -3516,15 +3589,13 @@ const STRATEGY_MIN_DTE = {
   RELATIVE_WEAKNESS_PUT: 0,
   OPENING_RANGE_BREAKOUT: 0,
   VWAP_RECLAIM: 0,
-  // Alpha playbook
   CAPITULATION_BOUNCE: 1,
   CONSEC_BOUNCE: 3,
   PRE_EARNINGS_PUT: 7,
-  POWER_HOUR: 0,             // 0DTE, expiring today
-  CORRELATION_CASCADE: 1,    // cascade may take hours
-  POST_MACRO: 1,             // post-macro trend runs all day
-  FAILED_BREAKDOWN: 0,       // traps resolve fast
-  // Disabled (spreads)
+  POWER_HOUR: 0,
+  CORRELATION_CASCADE: 1,
+  POST_MACRO: 1,
+  FAILED_BREAKDOWN: 0,
   VOL_DROP_PUT: 2,
   OVERNIGHT_CALENDAR: 1,
   CREDIT_SPREAD: 2,
