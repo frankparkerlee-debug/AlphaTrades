@@ -232,6 +232,61 @@ a { color: inherit; text-decoration: none; }
 .dot.unknown { background: var(--text4); }
 
 .empty { padding: 20px 0; text-align: center; color: var(--text4); font-family: var(--mono); font-size: 10px; letter-spacing: 1px; }
+
+/* AI INSIGHTS */
+.ai-card { background: linear-gradient(135deg, #111a24, #0f1620); border-color: #2a3a4e; }
+.ai-head {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap;
+}
+.ai-bias {
+  font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 1.5px;
+  padding: 4px 10px; border-radius: 3px;
+}
+.ai-bias.bullish { background: #065f4640; color: var(--green2); border: 1px solid var(--green); }
+.ai-bias.bearish { background: #7f1d1d40; color: var(--red2); border: 1px solid var(--red); }
+.ai-bias.mixed   { background: #92400e40; color: var(--amber2); border: 1px solid var(--amber); }
+.ai-bias.neutral { background: var(--bg3); color: var(--text2); border: 1px solid var(--border2); }
+.ai-conf { font-family: var(--mono); font-size: 9px; color: var(--text3); letter-spacing: 1px; }
+.ai-headline { font-size: 14px; font-weight: 600; color: var(--text1); line-height: 1.4; margin-bottom: 8px; }
+.ai-thesis { font-size: 12px; color: var(--text2); line-height: 1.55; margin-bottom: 12px; }
+.ai-section-label {
+  font-family: var(--mono); font-size: 8px; font-weight: 700; letter-spacing: 1.5px;
+  color: var(--text3); text-transform: uppercase; margin: 12px 0 6px;
+}
+.ai-list { list-style: none; padding: 0; margin: 0; }
+.ai-list li {
+  padding: 4px 0 4px 14px; position: relative;
+  font-size: 12px; color: var(--text2); line-height: 1.45;
+}
+.ai-list li::before {
+  content: '›'; position: absolute; left: 2px; top: 4px;
+  color: var(--amber); font-family: var(--mono); font-weight: 700;
+}
+.ai-trades { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+.ai-trade {
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 4px;
+  padding: 9px 11px;
+}
+.ai-trade-head { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; flex-wrap: wrap; }
+.ai-trade-tk { font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--amber); letter-spacing: 1px; }
+.ai-trade-dir { font-family: var(--mono); font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 2px; letter-spacing: 1px; }
+.ai-trade-dir.call { background: #065f4640; color: var(--green); border: 1px solid var(--green); }
+.ai-trade-dir.put  { background: #7f1d1d40; color: var(--red); border: 1px solid var(--red); }
+.ai-trade-setup { font-family: var(--mono); font-size: 8px; color: var(--text3); letter-spacing: 1px; }
+.ai-trade-conv  { font-family: var(--mono); font-size: 8px; padding: 1px 5px; border-radius: 2px; letter-spacing: 1px; margin-left: auto; }
+.ai-trade-conv.high   { background: #065f4640; color: var(--green); border: 1px solid var(--green); }
+.ai-trade-conv.medium { background: #92400e40; color: var(--amber); border: 1px solid var(--amber); }
+.ai-trade-conv.low    { background: var(--bg3); color: var(--text3); border: 1px solid var(--border2); }
+.ai-trade-rat { font-size: 11px; color: var(--text2); line-height: 1.4; }
+
+.ai-refresh {
+  font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: 1px;
+  padding: 4px 9px; border-radius: 3px; border: 1px solid var(--amber);
+  background: transparent; color: var(--amber); cursor: pointer; transition: all 0.15s;
+}
+.ai-refresh:hover { background: var(--amber); color: #000; }
+.ai-refresh:disabled { opacity: 0.4; cursor: wait; }
+.ai-meta { font-family: var(--mono); font-size: 9px; color: var(--text4); letter-spacing: 1px; margin-left: auto; }
 </style>
 </head>
 <body>
@@ -273,6 +328,20 @@ a { color: inherit; text-decoration: none; }
       <div class="pulse-meta-item"><span class="pulse-meta-label">VIX</span><span class="pulse-meta-val" id="pulseVix">&mdash;</span></div>
       <div class="pulse-meta-item"><span class="pulse-meta-label">REGIME</span><span class="pulse-meta-val" id="pulseRegime">&mdash;</span></div>
       <div class="pulse-meta-item"><span class="pulse-meta-label">MACRO</span><span class="pulse-meta-val" id="pulseMacro">&mdash;</span></div>
+    </div>
+  </div>
+
+  <!-- AI INSIGHTS -->
+  <div class="card ai-card span-12">
+    <div class="card-title">
+      <span>AI Market Brief</span>
+      <span style="display:flex;gap:8px;align-items:center">
+        <span class="ai-meta" id="aiMeta">&mdash;</span>
+        <button class="ai-refresh" id="aiRefresh" onclick="loadInsights(true)">REFRESH</button>
+      </span>
+    </div>
+    <div id="aiContent">
+      <div class="empty">click REFRESH to generate insights from current news + tape</div>
     </div>
   </div>
 
@@ -398,8 +467,11 @@ function renderPulse(d) {
     }).join('');
   }
   document.getElementById('pulseVix').textContent    = d.pulse?.vix != null ? Number(d.pulse.vix).toFixed(2) : '—';
-  document.getElementById('pulseRegime').textContent = d.pulse?.regime || '—';
-  document.getElementById('pulseMacro').textContent  = d.pulse?.macroToday || 'NONE';
+  const regimeLabel = d.pulse?.regime?.label || d.pulse?.regime || '—';
+  const regimeEl = document.getElementById('pulseRegime');
+  regimeEl.textContent = regimeLabel;
+  regimeEl.title = d.pulse?.regime?.note || '';
+  document.getElementById('pulseMacro').textContent  = d.pulse?.macroLabel || d.pulse?.macroToday || 'NONE';
   document.getElementById('pulseMeta').textContent   = 'updated ' + new Date(d.generatedAt).toLocaleTimeString('en-US', { hour12: false });
 }
 
@@ -535,6 +607,89 @@ async function loadResearch() {
   }
 }
 
+// ── AI INSIGHTS ────────────────────────────────────────────────────────────
+function renderInsights(payload) {
+  const c = document.getElementById('aiContent');
+  const meta = document.getElementById('aiMeta');
+  if (payload?.error) {
+    c.innerHTML = '<div class="empty">' + escapeHtml(payload.error) + '</div>';
+    meta.textContent = 'error';
+    return;
+  }
+  const ins = payload?.insights;
+  if (!ins) { c.innerHTML = '<div class="empty">no insights</div>'; meta.textContent = '—'; return; }
+
+  const biasCls = (ins.bias || 'neutral').toLowerCase();
+  const confTxt = ins.confidence ? 'CONF ' + ins.confidence : '';
+
+  let html = '<div class="ai-head">' +
+    '<span class="ai-bias ' + biasCls + '">' + escapeHtml(ins.bias || 'NEUTRAL') + '</span>' +
+    (confTxt ? '<span class="ai-conf">' + escapeHtml(confTxt) + '</span>' : '') +
+    '</div>';
+
+  if (ins.headline) html += '<div class="ai-headline">' + escapeHtml(ins.headline) + '</div>';
+  if (ins.thesis)   html += '<div class="ai-thesis">' + escapeHtml(ins.thesis) + '</div>';
+
+  if (Array.isArray(ins.key_drivers) && ins.key_drivers.length) {
+    html += '<div class="ai-section-label">Key Drivers</div><ul class="ai-list">' +
+      ins.key_drivers.map(d => '<li>' + escapeHtml(d) + '</li>').join('') + '</ul>';
+  }
+
+  if (Array.isArray(ins.risks) && ins.risks.length) {
+    html += '<div class="ai-section-label">Risks</div><ul class="ai-list">' +
+      ins.risks.map(d => '<li>' + escapeHtml(d) + '</li>').join('') + '</ul>';
+  }
+
+  if (Array.isArray(ins.trade_ideas) && ins.trade_ideas.length) {
+    html += '<div class="ai-section-label">Trade Ideas</div><div class="ai-trades">' +
+      ins.trade_ideas.map(t => {
+        const dirCls = (t.direction || '').toLowerCase() === 'put' ? 'put' : 'call';
+        const convCls = (t.conviction || 'low').toLowerCase();
+        return '<div class="ai-trade">' +
+          '<div class="ai-trade-head">' +
+            '<span class="ai-trade-tk">' + escapeHtml(t.ticker || '?') + '</span>' +
+            '<span class="ai-trade-dir ' + dirCls + '">' + escapeHtml(t.direction || '') + '</span>' +
+            (t.setup ? '<span class="ai-trade-setup">' + escapeHtml(t.setup) + '</span>' : '') +
+            '<span class="ai-trade-conv ' + convCls + '">' + escapeHtml((t.conviction || 'LOW').toUpperCase()) + '</span>' +
+          '</div>' +
+          '<div class="ai-trade-rat">' + escapeHtml(t.rationale || '') + '</div>' +
+        '</div>';
+      }).join('') +
+      '</div>';
+  } else {
+    html += '<div class="ai-section-label">Trade Ideas</div><div class="empty">no high-conviction setups right now</div>';
+  }
+
+  c.innerHTML = html;
+  const ts = payload.generatedAt ? new Date(payload.generatedAt).toLocaleTimeString('en-US', { hour12: false }) : '';
+  meta.textContent = ts + (payload.cached ? ' · cached' : '') + (payload.model ? ' · ' + payload.model : '');
+}
+
+async function loadInsights(force) {
+  const btn = document.getElementById('aiRefresh');
+  const c = document.getElementById('aiContent');
+  btn.disabled = true;
+  if (force) c.innerHTML = '<div class="empty">analyzing market context...</div>';
+  try {
+    // peek=1 on initial load (returns cached only, never calls Claude)
+    const url = force ? '/api/research/insights?force=1' : '/api/research/insights?peek=1';
+    const r = await fetch(url, { cache: 'no-store' });
+    const j = await r.json();
+    if (!r.ok) {
+      renderInsights({ error: j.error || ('HTTP ' + r.status) });
+    } else if (j.empty) {
+      // peek with no cached payload — leave the placeholder, just clear meta
+      document.getElementById('aiMeta').textContent = 'click REFRESH to generate';
+    } else {
+      renderInsights(j);
+    }
+  } catch (err) {
+    renderInsights({ error: err.message });
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 document.querySelectorAll('[data-mover]').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('[data-mover]').forEach(b => b.classList.remove('on'));
@@ -553,6 +708,7 @@ document.querySelectorAll('[data-newsfilter]').forEach(btn => {
 });
 
 loadResearch();
+loadInsights(false);
 setInterval(loadResearch, REFRESH_MS);
 </script>
 </body>

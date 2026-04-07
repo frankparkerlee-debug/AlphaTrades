@@ -301,130 +301,287 @@ function snapPctVsRef(snap, todayET) {
   return (px - ref) / ref;
 }
 
+// Build the research aggregate. Extracted so /api/research and the AI insights
+// endpoint can both reuse the same data without re-querying Alpaca twice.
+async function buildResearchAggregate() {
+  const { getAllNews } = await import('./src/data/state.js');
+  const { classifyRegime } = await import('./src/scoring/intelligence.js');
+  const alpacaHdrs = {
+    'APCA-API-KEY-ID':     process.env.ALPACA_API_KEY,
+    'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY,
+  };
+  const dataUrl = process.env.ALPACA_DATA_URL || 'https://data.alpaca.markets';
+
+  const todayET = (() => {
+    const et = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    return `${et.getFullYear()}-${String(et.getMonth() + 1).padStart(2, '0')}-${String(et.getDate()).padStart(2, '0')}`;
+  })();
+
+  // Sector + index + watchlist symbols we always need fresh quotes for
+  const sectorSyms  = RESEARCH_SECTOR_ETFS.map(s => s.sym);
+  const indexSyms   = RESEARCH_INDEX_ETFS.map(s => s.sym);
+  const allRefSyms  = Array.from(new Set([...sectorSyms, ...indexSyms, ...RESEARCH_WATCHLIST]));
+
+  let refSnaps = {};
+  try {
+    const r = await axios.get(`${dataUrl}/v2/stocks/snapshots`, {
+      headers: alpacaHdrs,
+      params: { symbols: allRefSyms.join(','), feed: ALPACA_FEED },
+      timeout: 8000,
+    });
+    refSnaps = r.data || {};
+  } catch (err) {
+    // Non-fatal — fall back to whatever the poller cached
+  }
+
+  // Combine with the polled equity snapshots so we can compute movers across
+  // the full universe without an extra round trip.
+  const polled = global.latestSnaps || {};
+  const allSnaps = { ...polled, ...refSnaps };
+
+  // ── PULSE ──────────────────────────────────────────────────────────────
+  const indexes = RESEARCH_INDEX_ETFS.map(({ sym, label }) => {
+    const snap = allSnaps[sym];
+    return {
+      symbol: sym,
+      label,
+      price: pickSnapPrice(snap) || null,
+      changePct: snapPctVsRef(snap, todayET),
+    };
+  });
+
+  // VIX: prefer cached value from the poller; if missing (outside RTH), fetch live
+  let vix = global.marketContext?.vix ?? null;
+  if (vix == null) {
+    try {
+      const vixRes = await axios.get(`${dataUrl}/v2/stocks/VIX/bars/latest`, {
+        headers: alpacaHdrs, params: { feed: 'iex' }, timeout: 5000,
+      });
+      vix = vixRes.data?.bar?.c || null;
+    } catch (e) { vix = null; }
+  }
+
+  // Regime: compute fresh from current SPY/QQQ snapshots so it works pre/post-market
+  const spyPct = snapPctVsRef(allSnaps.SPY, todayET) || 0;
+  const qqqPct = snapPctVsRef(allSnaps.QQQ, todayET) || 0;
+  const regimeObj = classifyRegime({ spyPct, qqqPct }, vix ?? 18, []);
+  const regime = {
+    label:  regimeObj?.regime    || 'NEUTRAL',
+    note:   regimeObj?.regimeNote || '',
+    sizeMult: regimeObj?.sizeMult ?? 1.0,
+  };
+
+  // ── SECTOR HEAT MAP ────────────────────────────────────────────────────
+  const sectors = RESEARCH_SECTOR_ETFS.map(({ sym, label }) => {
+    const snap = allSnaps[sym];
+    return {
+      symbol: sym,
+      label,
+      price: pickSnapPrice(snap) || null,
+      changePct: snapPctVsRef(snap, todayET),
+    };
+  }).sort((a, b) => (b.changePct || 0) - (a.changePct || 0));
+
+  // ── WATCHLIST ──────────────────────────────────────────────────────────
+  const watchlist = RESEARCH_WATCHLIST.map((sym) => {
+    const snap = allSnaps[sym];
+    return {
+      symbol: sym,
+      price: pickSnapPrice(snap) || null,
+      changePct: snapPctVsRef(snap, todayET),
+      volume: snap?.dailyBar?.v || null,
+    };
+  });
+
+  // ── TOP MOVERS (from polled equity universe) ───────────────────────────
+  const moversAll = Object.entries(polled)
+    .map(([sym, snap]) => ({
+      symbol: sym,
+      price: pickSnapPrice(snap),
+      changePct: snapPctVsRef(snap, todayET),
+      volume: snap?.dailyBar?.v || 0,
+    }))
+    .filter(m => m.changePct != null && m.price && m.volume > 100000);
+  const gainers = [...moversAll].sort((a, b) => b.changePct - a.changePct).slice(0, 10);
+  const losers  = [...moversAll].sort((a, b) => a.changePct - b.changePct).slice(0, 10);
+  const mostActive = [...moversAll].sort((a, b) => b.volume - a.volume).slice(0, 10);
+
+  // ── NEWS FEED ──────────────────────────────────────────────────────────
+  const news = getAllNews(50).map(n => ({
+    ticker:    n.ticker,
+    headline:  n.headline,
+    catalyst:  n.catalyst || null,
+    polarity:  typeof n.polarity === 'number' ? n.polarity : null,
+    timestamp: n.timestamp,
+    source:    n.source || null,
+    url:       n.url || null,
+  }));
+
+  // ── MACRO / CALENDAR ───────────────────────────────────────────────────
+  const todayMacro = isHighImpactMacroDay();
+  const upcomingMacro = MACRO_EVENTS_2026
+    .filter(e => e.date >= todayET)
+    .slice(0, 8);
+  const nextMacro = upcomingMacro.find(e => e.date > todayET) || null;
+  const macroLabel = todayMacro
+    ? `${todayMacro} TODAY`
+    : nextMacro
+      ? `Next: ${nextMacro.event} ${nextMacro.date}`
+      : 'NONE';
+
+  // ── STREAM HEALTH ──────────────────────────────────────────────────────
+  const streamHealth = {
+    bars:           global.streamStatus?.bars   || 'unknown',
+    news:           global.streamStatus?.news   || 'unknown',
+    lastSnapshotAt: global.latestSnapsAt        || null,
+  };
+
+  return {
+    generatedAt: new Date().toISOString(),
+    todayET,
+    pulse: {
+      indexes,
+      vix,
+      regime,
+      macroToday: todayMacro,
+      macroLabel,
+    },
+    sectors,
+    watchlist,
+    movers: { gainers, losers, mostActive },
+    news,
+    macro: { today: todayMacro, next: nextMacro, upcoming: upcomingMacro },
+    streamHealth,
+  };
+}
+
 app.get('/api/research', async (req, res) => {
   try {
-    const { getAllNews } = await import('./src/data/state.js');
-    const alpacaHdrs = {
-      'APCA-API-KEY-ID':     process.env.ALPACA_API_KEY,
-      'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY,
-    };
-    const dataUrl = process.env.ALPACA_DATA_URL || 'https://data.alpaca.markets';
+    const data = await buildResearchAggregate();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
-    const todayET = (() => {
-      const et = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-      return `${et.getFullYear()}-${String(et.getMonth() + 1).padStart(2, '0')}-${String(et.getDate()).padStart(2, '0')}`;
-    })();
+// ── AI INSIGHTS (Claude) ─────────────────────────────────────────────────────
+// Uses the same aggregate as /api/research and asks Claude for a directional
+// read + 2-4 trade ideas grounded in the news/sentiment/sector posture.
+// Cached for 5 minutes so the dashboard refresh button can't accidentally spam.
+let researchInsightsCache = { at: 0, payload: null };
+const RESEARCH_INSIGHTS_TTL_MS = 5 * 60 * 1000;
 
-    // Sector + index + watchlist symbols we always need fresh quotes for
-    const sectorSyms  = RESEARCH_SECTOR_ETFS.map(s => s.sym);
-    const indexSyms   = RESEARCH_INDEX_ETFS.map(s => s.sym);
-    const allRefSyms  = Array.from(new Set([...sectorSyms, ...indexSyms, ...RESEARCH_WATCHLIST]));
+app.get('/api/research/insights', async (req, res) => {
+  try {
+    const force = req.query.force === '1';
+    const peek  = req.query.peek === '1';
 
-    let refSnaps = {};
-    try {
-      const r = await axios.get(`${dataUrl}/v2/stocks/snapshots`, {
-        headers: alpacaHdrs,
-        params: { symbols: allRefSyms.join(','), feed: ALPACA_FEED },
-        timeout: 8000,
-      });
-      refSnaps = r.data || {};
-    } catch (err) {
-      // Non-fatal — fall back to whatever the poller cached
+    // Cached payload (still fresh) — return immediately, no API call
+    if (!force && researchInsightsCache.payload && (Date.now() - researchInsightsCache.at) < RESEARCH_INSIGHTS_TTL_MS) {
+      return res.json({ ...researchInsightsCache.payload, cached: true });
     }
 
-    // Combine with the polled equity snapshots so we can compute movers across
-    // the full universe without an extra round trip.
-    const polled = global.latestSnaps || {};
-    const allSnaps = { ...polled, ...refSnaps };
+    // peek mode: don't call Claude, just report whether a cached payload exists
+    if (peek) {
+      return res.json({ insights: null, cached: false, empty: true });
+    }
 
-    // ── PULSE ──────────────────────────────────────────────────────────────
-    const indexes = RESEARCH_INDEX_ETFS.map(({ sym, label }) => {
-      const snap = allSnaps[sym];
-      return {
-        symbol: sym,
-        label,
-        price: pickSnapPrice(snap) || null,
-        changePct: snapPctVsRef(snap, todayET),
-      };
-    });
-    const vix = global.marketContext?.vix ?? null;
-    const regime = global.currentRegime || null;
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
+    }
 
-    // ── SECTOR HEAT MAP ────────────────────────────────────────────────────
-    const sectors = RESEARCH_SECTOR_ETFS.map(({ sym, label }) => {
-      const snap = allSnaps[sym];
-      return {
-        symbol: sym,
-        label,
-        price: pickSnapPrice(snap) || null,
-        changePct: snapPctVsRef(snap, todayET),
-      };
-    }).sort((a, b) => (b.changePct || 0) - (a.changePct || 0));
+    const data = await buildResearchAggregate();
 
-    // ── WATCHLIST ──────────────────────────────────────────────────────────
-    const watchlist = RESEARCH_WATCHLIST.map((sym) => {
-      const snap = allSnaps[sym];
-      return {
-        symbol: sym,
-        price: pickSnapPrice(snap) || null,
-        changePct: snapPctVsRef(snap, todayET),
-        volume: snap?.dailyBar?.v || null,
-      };
-    });
-
-    // ── TOP MOVERS (from polled equity universe) ───────────────────────────
-    const moversAll = Object.entries(polled)
-      .map(([sym, snap]) => ({
-        symbol: sym,
-        price: pickSnapPrice(snap),
-        changePct: snapPctVsRef(snap, todayET),
-        volume: snap?.dailyBar?.v || 0,
-      }))
-      .filter(m => m.changePct != null && m.price && m.volume > 100000);
-    const gainers = [...moversAll].sort((a, b) => b.changePct - a.changePct).slice(0, 10);
-    const losers  = [...moversAll].sort((a, b) => a.changePct - b.changePct).slice(0, 10);
-    const mostActive = [...moversAll].sort((a, b) => b.volume - a.volume).slice(0, 10);
-
-    // ── NEWS FEED ──────────────────────────────────────────────────────────
-    const news = getAllNews(50).map(n => ({
-      ticker:    n.ticker,
-      headline:  n.headline,
-      catalyst:  n.catalyst || null,
-      polarity:  typeof n.polarity === 'number' ? n.polarity : null,
-      timestamp: n.timestamp,
-      source:    n.source || null,
-      url:       n.url || null,
-    }));
-
-    // ── MACRO / CALENDAR ───────────────────────────────────────────────────
-    const todayMacro = isHighImpactMacroDay();
-    const upcomingMacro = MACRO_EVENTS_2026
-      .filter(e => e.date >= todayET)
-      .slice(0, 8);
-
-    // ── STREAM HEALTH ──────────────────────────────────────────────────────
-    const streamHealth = {
-      bars:           global.streamStatus?.bars   || 'unknown',
-      news:           global.streamStatus?.news   || 'unknown',
-      lastSnapshotAt: global.latestSnapsAt        || null,
+    // Build a compact context payload — we don't want to push the full news
+    // dump into the prompt (cost + irrelevant noise).
+    const compact = {
+      asOf: data.generatedAt,
+      pulse: {
+        regime: data.pulse.regime,
+        vix: data.pulse.vix,
+        macro: data.pulse.macroLabel,
+        indexes: data.pulse.indexes.map(i => ({
+          sym: i.symbol, chg: i.changePct != null ? +(i.changePct * 100).toFixed(2) : null,
+        })),
+      },
+      sectors: data.sectors.map(s => ({
+        sym: s.symbol, label: s.label,
+        chg: s.changePct != null ? +(s.changePct * 100).toFixed(2) : null,
+      })),
+      gainers: data.movers.gainers.slice(0, 8).map(m => ({
+        sym: m.symbol, chg: +(m.changePct * 100).toFixed(2),
+      })),
+      losers: data.movers.losers.slice(0, 8).map(m => ({
+        sym: m.symbol, chg: +(m.changePct * 100).toFixed(2),
+      })),
+      news: data.news.slice(0, 25).map(n => ({
+        ticker: n.ticker, headline: n.headline, polarity: n.polarity, catalyst: n.catalyst,
+      })),
     };
 
-    res.json({
-      generatedAt: new Date().toISOString(),
-      todayET,
-      pulse: {
-        indexes,
-        vix,
-        regime,
-        macroToday: todayMacro,
-      },
-      sectors,
-      watchlist,
-      movers: { gainers, losers, mostActive },
-      news,
-      macro: { today: todayMacro, upcoming: upcomingMacro },
-      streamHealth,
+    const Anthropic = (await import('@anthropic-ai/sdk')).default;
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+    const prompt = `You are a senior options trading analyst writing a real-time market briefing for a discretionary scalper trading single-leg directional options on a $5-7.5K cash account.
+
+Analyze the snapshot below and produce a structured JSON response. Focus on what the news flow + sector posture + tape are saying about *direction* over the next 1-5 trading hours. Be opinionated. Do not hedge. If conviction is low, say so.
+
+CONTEXT:
+${JSON.stringify(compact, null, 2)}
+
+Respond with ONLY a JSON object in this exact shape (no markdown, no commentary):
+
+{
+  "headline": "<one punchy sentence summarizing the day's setup>",
+  "bias": "<BULLISH | BEARISH | MIXED | NEUTRAL>",
+  "confidence": "<LOW | MEDIUM | HIGH>",
+  "thesis": "<2-3 sentences explaining the directional read using the news/sectors/movers as evidence>",
+  "key_drivers": ["<bullet>", "<bullet>", "<bullet>"],
+  "risks": ["<what could invalidate this view>", "<another risk>"],
+  "trade_ideas": [
+    {
+      "ticker": "<symbol>",
+      "direction": "<CALL | PUT>",
+      "setup": "<one of: ORB_BREAKOUT, VWAP_BOUNCE, FIRST_PULLBACK, GAP_FILL_REVERSION, POWER_HOUR_MOMENTUM, SR_BOUNCE, MACRO_REACTION>",
+      "rationale": "<one sentence why — cite specific news/move/sector>",
+      "conviction": "<LOW | MEDIUM | HIGH>"
+    }
+  ]
+}
+
+Rules:
+- Provide 2-4 trade ideas, all directional single-leg.
+- Only suggest tickers with documented news flow OR a clear sector/index tape signal — never make up catalysts.
+- If no quality setups exist, return an empty trade_ideas array and say so in the thesis.
+- "bias" reflects the broad market, not a single ticker.
+- Be specific: cite tickers and percentages from the context.`;
+
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 1500,
+      messages: [{ role: 'user', content: prompt }],
     });
+
+    const text = response.content?.[0]?.text || '';
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) {
+      return res.status(502).json({ error: 'Claude returned no JSON', raw: text.slice(0, 500) });
+    }
+    let insights;
+    try {
+      insights = JSON.parse(match[0]);
+    } catch (e) {
+      return res.status(502).json({ error: 'Failed to parse Claude JSON', raw: text.slice(0, 500) });
+    }
+
+    const payload = {
+      generatedAt: new Date().toISOString(),
+      model: 'claude-sonnet-4-6',
+      contextAsOf: data.generatedAt,
+      insights,
+    };
+    researchInsightsCache = { at: Date.now(), payload };
+    res.json({ ...payload, cached: false });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
