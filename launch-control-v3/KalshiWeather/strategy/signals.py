@@ -205,11 +205,13 @@ class SignalEngine:
 
                     edge = effective_prob - cost
 
-                    # Require minimum edge for value plays (cheaper contracts)
-                    if cost < 0.80 and edge < MIN_EDGE:
+                    # Require positive edge always; require larger edge for value plays
+                    # (cheaper contracts have lower base certainty so demand bigger margin)
+                    min_required_edge = MIN_EDGE if cost < 0.80 else 0.03
+                    if edge < min_required_edge:
                         log.info(
                             f"  {ticker}: {label} BUY {side.upper()} @ ${cost:.2f} "
-                            f"edge={edge:+.2f} < {MIN_EDGE} (insufficient value edge)"
+                            f"edge={edge:+.3f} < {min_required_edge:.2f} required"
                         )
                         continue
 

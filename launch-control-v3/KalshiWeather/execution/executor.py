@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from config.settings import (
     STARTING_CAPITAL, MAX_POSITION_PCT, MAX_CONTRACTS_PER_BUCKET,
     MAX_OPEN_POSITIONS, DAILY_LOSS_LIMIT_PCT, EARLY_EXIT_PRICE,
-    STOP_LOSS_PCT,
+    STOP_LOSS_PCT, DRY_RUN,
 )
 from feeds.kalshi import KalshiClient
 from strategy.signals import Signal
@@ -101,19 +101,26 @@ class Executor:
 
         side = getattr(signal, "side", "yes")
 
-        result = self.kalshi.place_order(
-            ticker=signal.ticker,
-            side=side,
-            action="buy",
-            count=count,
-            price=signal.market_price,
-        )
+        if DRY_RUN:
+            log.info(
+                f"[DRY_RUN] Would BUY {count}x {signal.ticker} {side} @ "
+                f"${signal.market_price:.2f} (cost=${count * signal.market_price:.2f})"
+            )
+            order = {"order_id": f"DRY_{signal.ticker}_{int(datetime.now().timestamp())}"}
+        else:
+            result = self.kalshi.place_order(
+                ticker=signal.ticker,
+                side=side,
+                action="buy",
+                count=count,
+                price=signal.market_price,
+            )
 
-        if not result or "order" not in result:
-            log.error(f"Order failed for {signal.ticker}")
-            return None
+            if not result or "order" not in result:
+                log.error(f"Order failed for {signal.ticker}")
+                return None
 
-        order = result["order"]
+            order = result["order"]
         pos = Position(
             ticker=signal.ticker,
             city_code=signal.city_code,

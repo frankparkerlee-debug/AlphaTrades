@@ -173,6 +173,10 @@ class KalshiClient:
         """
         Get best bid/ask for YES side.
         Returns {"yes_bid": float, "yes_ask": float, "spread": float}.
+
+        Kalshi returns orderbook entries in ascending price order, so the
+        BEST bid (highest) is at the END of the list, not the beginning.
+        Use max() to be robust against any sort order.
         """
         book = self.get_orderbook(ticker)
         if not book:
@@ -181,10 +185,12 @@ class KalshiClient:
         yes_bids = book.get("yes_dollars", [])
         no_bids = book.get("no_dollars", [])
 
-        # YES best bid = highest YES bid price
-        yes_bid = float(yes_bids[0][0]) if yes_bids else 0
-        # YES best ask = 1 - highest NO bid (since YES + NO = $1)
-        yes_ask = (1.0 - float(no_bids[0][0])) if no_bids else 1.0
+        # Best YES bid = HIGHEST YES bid (most aggressive YES buyer)
+        yes_bid = max((float(b[0]) for b in yes_bids), default=0.0)
+        # Best NO bid = HIGHEST NO bid (most aggressive NO buyer)
+        # YES ask = 1 - best NO bid (cheapest way to buy YES)
+        best_no_bid = max((float(b[0]) for b in no_bids), default=0.0)
+        yes_ask = round(1.0 - best_no_bid, 4) if no_bids else 1.0
         spread = yes_ask - yes_bid
 
         return {

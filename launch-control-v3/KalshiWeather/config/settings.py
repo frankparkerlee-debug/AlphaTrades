@@ -21,6 +21,10 @@ KALSHI_DEMO_URL = "https://demo-api.kalshi.co/trade-api/v2"
 PAPER_TRADING = os.getenv("PAPER_TRADING", "false").lower() == "true"
 TRADING_MODE = "paper" if PAPER_TRADING else "live"
 
+# DRY_RUN: connect to production market data but DO NOT place orders
+# Use this to verify the bot is working before going live with real money
+DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
+
 # ── Anthropic ──────────────────────────────────────────────────────────────────
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
@@ -43,8 +47,8 @@ DAILY_LOSS_LIMIT_PCT = 0.10      # halt at -10% daily (tighter for high-cost con
 #   1. Last Mile: $0.80-$0.95 (near-certain, hold to settlement at $1.00)
 #   2. Value Edge: $0.30-$0.79 (clear model-vs-market disagreement, big upside)
 # Both require forecast offset >= MIN_FORECAST_OFFSET from threshold
-MIN_BUY_PRICE = 0.30             # widened to capture value edge opportunities
-MAX_BUY_PRICE = 0.95             # cap at near-certain ceiling
+MIN_BUY_PRICE = 0.20             # widened to capture deep value edge opportunities
+MAX_BUY_PRICE = 0.97             # near-certain ceiling (allow $0.96-$0.97 last mile fills)
 MIN_FORECAST_OFFSET = 4          # forecast must be >= 4F from threshold
 MIN_EDGE = 0.40                  # model_prob - cost must exceed this for value plays
 MAX_MODEL_SPREAD = 6             # models must agree within 6F
