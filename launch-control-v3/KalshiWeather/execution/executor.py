@@ -194,13 +194,19 @@ class Executor:
 
     def _exit_position(self, pos: Position, exit_price: float, reason: str):
         """Sell a position early."""
-        self.kalshi.place_order(
-            ticker=pos.ticker,
-            side=pos.side,
-            action="sell",
-            count=pos.contracts,
-            price=exit_price,
-        )
+        if DRY_RUN:
+            log.info(
+                f"[DRY_RUN] Would SELL {pos.contracts}x {pos.ticker} {pos.side} "
+                f"@ ${exit_price:.2f} ({reason})"
+            )
+        else:
+            self.kalshi.place_order(
+                ticker=pos.ticker,
+                side=pos.side,
+                action="sell",
+                count=pos.contracts,
+                price=exit_price,
+            )
 
         pos.status = "closed"
         pos.exit_price = exit_price

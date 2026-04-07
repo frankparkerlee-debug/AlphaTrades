@@ -56,6 +56,17 @@ def run_bot():
     else:
         log.warning("Could not fetch Kalshi balance — using default")
 
+    # Diagnostic: list real positions Kalshi has on record so we can see
+    # any positions the bot didn't open (manual trades, pre-existing, or
+    # leaked sells from before the DRY_RUN exit fix)
+    real_positions = kalshi.get_positions()
+    if real_positions:
+        log.info(f"Kalshi reports {len(real_positions)} real position(s):")
+        for p in real_positions:
+            log.info(f"  REAL: {p}")
+    else:
+        log.info("Kalshi reports 0 real positions")
+
     cycle = 0
     last_signals = []
 
