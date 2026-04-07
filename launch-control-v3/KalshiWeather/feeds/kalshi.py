@@ -8,6 +8,7 @@ import time
 import uuid
 import logging
 import requests
+from urllib.parse import urlparse
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
@@ -24,6 +25,9 @@ class KalshiClient:
 
     def __init__(self):
         self.base_url = KALSHI_DEMO_URL if TRADING_MODE == "paper" else KALSHI_BASE_URL
+        # Kalshi signs the full URL path, including the /trade-api/v2 prefix.
+        # Extract it once so every signed request can prepend it.
+        self._base_path = urlparse(self.base_url).path  # e.g. "/trade-api/v2"
         self.api_key = KALSHI_API_KEY
         self.private_key = self._load_private_key()
         log.info(f"Kalshi client initialized | mode={TRADING_MODE} | url={self.base_url}")
@@ -99,14 +103,19 @@ class KalshiClient:
         return base64.b64encode(signature).decode("utf-8")
 
     def _auth_headers(self, method: str, path: str) -> dict:
-        """Build authenticated request headers."""
+        """Build authenticated request headers.
+
+        Kalshi expects the signature to cover the full URL path including
+        the `/trade-api/v2` prefix, not just the endpoint portion.
+        """
         ts = str(int(time.time() * 1000))
         headers = {"Content-Type": "application/json"}
 
         if self.private_key and self.api_key:
+            full_path = f"{self._base_path}{path}"
             headers["KALSHI-ACCESS-KEY"] = self.api_key
             headers["KALSHI-ACCESS-TIMESTAMP"] = ts
-            headers["KALSHI-ACCESS-SIGNATURE"] = self._sign(ts, method, path)
+            headers["KALSHI-ACCESS-SIGNATURE"] = self._sign(ts, method, full_path)
 
         return headers
 
