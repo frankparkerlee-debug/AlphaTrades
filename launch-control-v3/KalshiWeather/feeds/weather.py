@@ -3,6 +3,7 @@ Weather data from Open-Meteo (primary) and NOAA (secondary).
 Fetches GFS + ECMWF model forecasts for temperature highs.
 """
 
+import time
 import requests
 import logging
 from datetime import datetime, timedelta
@@ -12,6 +13,39 @@ log = logging.getLogger("weather")
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 NOAA_POINTS_URL = "https://api.weather.gov/points"
+
+# Retry config for flaky Open-Meteo endpoints
+_RETRY_ATTEMPTS = 3
+_RETRY_BACKOFF = [1.0, 3.0, 6.0]  # seconds between attempts
+_RETRY_TIMEOUT = 15
+
+
+def _get_with_retry(url: str, params: dict, label: str) -> dict | None:
+    """GET with retries on 5xx errors and timeouts. Returns parsed JSON or None."""
+    last_err = None
+    for attempt in range(_RETRY_ATTEMPTS):
+        try:
+            resp = requests.get(url, params=params, timeout=_RETRY_TIMEOUT)
+            # Retry on 5xx (bad gateway, etc); raise otherwise
+            if 500 <= resp.status_code < 600:
+                last_err = f"{resp.status_code} {resp.reason}"
+                log.warning(f"{label}: attempt {attempt+1}/{_RETRY_ATTEMPTS} got {last_err}")
+            else:
+                resp.raise_for_status()
+                return resp.json()
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            last_err = f"{type(e).__name__}: {e}"
+            log.warning(f"{label}: attempt {attempt+1}/{_RETRY_ATTEMPTS} {last_err}")
+        except Exception as e:
+            # Non-retryable (4xx, JSON decode, etc)
+            log.error(f"{label} failed: {e}")
+            return None
+
+        if attempt < _RETRY_ATTEMPTS - 1:
+            time.sleep(_RETRY_BACKOFF[attempt])
+
+    log.error(f"{label} failed after {_RETRY_ATTEMPTS} attempts: {last_err}")
+    return None
 
 
 def fetch_open_meteo(city_code: str) -> dict | None:
@@ -33,12 +67,8 @@ def fetch_open_meteo(city_code: str) -> dict | None:
         "forecast_days": FORECAST_DAYS,
     }
 
-    try:
-        resp = requests.get(OPEN_METEO_URL, params=params, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        log.error(f"Open-Meteo failed for {city_code}: {e}")
+    data = _get_with_retry(OPEN_METEO_URL, params, f"Open-Meteo[{city_code}]")
+    if not data:
         return None
 
     daily = data.get("daily", {})
@@ -71,19 +101,15 @@ def fetch_open_meteo_simple(lat: float, lon: float, days: int = 2) -> dict | Non
         "forecast_days": days,
     }
 
-    try:
-        resp = requests.get(OPEN_METEO_URL, params=params, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        daily = data.get("daily", {})
-        return {
-            "dates": daily.get("time", []),
-            "highs": daily.get("temperature_2m_max", []),
-            "lows": daily.get("temperature_2m_min", []),
-        }
-    except Exception as e:
-        log.error(f"Open-Meteo simple fetch failed: {e}")
+    data = _get_with_retry(OPEN_METEO_URL, params, "Open-Meteo[simple]")
+    if not data:
         return None
+    daily = data.get("daily", {})
+    return {
+        "dates": daily.get("time", []),
+        "highs": daily.get("temperature_2m_max", []),
+        "lows": daily.get("temperature_2m_min", []),
+    }
 
 
 def fetch_noaa(lat: float, lon: float) -> dict | None:
