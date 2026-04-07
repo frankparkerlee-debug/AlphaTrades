@@ -5,7 +5,6 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { Pool } from 'pg';
 import cron from 'node-cron';
-import { readFileSync, existsSync } from 'fs';
 import { createServer } from 'http';
 import { selectOptionsContract, getOptionsVolume, fetchContractQuote } from './src/options/contract-selector.js';
 import { getNewsEvents, getTickerState } from './src/data/state.js';
@@ -24,7 +23,6 @@ import { scanVwapReclaim } from './src/strategies/vwap-reclaim.js';
 import { scanPowerHour } from './src/strategies/power-hour.js';
 import { scanPostMacro } from './src/strategies/post-macro.js';
 import { scanFailedBreakdown } from './src/strategies/failed-breakdown.js';
-import { scoreConvictionSetup } from './src/strategies/conviction-scorer.js';
 import {
   generateORBBreakoutSignals,
   generateGapFillSignals,
@@ -91,163 +89,7 @@ function isHighImpactMacroDay() {
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-// ── MM ENGINE (password-protected, registered BEFORE express.static) ────────
-
-function parseCookies(req) {
-  const cookies = {};
-  (req.headers.cookie || '').split(';').forEach(c => {
-    const [k, ...v] = c.trim().split('=');
-    if (k) cookies[k] = decodeURIComponent(v.join('='));
-  });
-  return cookies;
-}
-
-function mmAuth(req, res, next) {
-  const pw = process.env.MM_PASSWORD;
-  if (!pw) return res.status(503).json({ error: 'MM_PASSWORD not configured' });
-  const cookies = parseCookies(req);
-  if (cookies.mm_session === pw) return next();
-  return res.status(401).json({ error: 'Unauthorized' });
-}
-
-const MM_LOGIN_HTML = `<!DOCTYPE html><html lang="en"><head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Launch Control -- MM Engine</title>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<style>
-:root { --bg0:#060a0f; --bg1:#0b1118; --border:#1e2d3d; --amber:#f59e0b; --green:#10b981; --red:#ef4444; --text1:#e2e8f0; --text3:#6b7f94; --mono:'IBM Plex Mono',monospace; --sans:'IBM Plex Sans',sans-serif; }
-*{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;background:var(--bg0);color:var(--text1);font-family:var(--sans);font-size:13px}
-body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.025) 2px,rgba(0,0,0,0.025) 4px)}
-.login-box{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg1);border:1px solid var(--border);border-radius:4px;padding:32px;width:340px;text-align:center}
-.login-title{font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:2px;color:var(--text3);margin-bottom:20px}
-.login-input{width:100%;background:var(--bg0);border:1px solid var(--border);border-radius:3px;padding:10px 12px;color:var(--text1);font-family:var(--mono);font-size:13px;margin-bottom:12px;outline:none}
-.login-input:focus{border-color:var(--amber)}
-.login-btn{width:100%;background:rgba(245,158,11,0.1);border:1px solid var(--amber);border-radius:3px;padding:10px;color:var(--amber);font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:1px;cursor:pointer;text-transform:uppercase}
-.login-btn:hover{background:rgba(245,158,11,0.2)}
-.login-err{font-family:var(--mono);font-size:10px;color:var(--red);margin-top:10px;display:none}
-.login-warn{font-family:var(--mono);font-size:10px;color:var(--amber);margin-top:14px}
-</style></head><body>
-<div class="login-box">
-  <div class="login-title">MM ENGINE ACCESS</div>
-  <form method="POST" action="/mm/login">
-    <input class="login-input" type="password" name="password" placeholder="Password" autofocus>
-    <button class="login-btn" type="submit">AUTHENTICATE</button>
-  </form>
-  <div class="login-err" id="err">INVALID PASSWORD</div>
-</div>
-<script>if(location.search.includes('invalid'))document.getElementById('err').style.display='block';</script>
-</body></html>`;
-
-const MM_NOPASS_HTML = `<!DOCTYPE html><html lang="en"><head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Launch Control -- MM Engine</title>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<style>
-:root { --bg0:#060a0f; --bg1:#0b1118; --border:#1e2d3d; --amber:#f59e0b; --text1:#e2e8f0; --text3:#6b7f94; --mono:'IBM Plex Mono',monospace; --sans:'IBM Plex Sans',sans-serif; }
-*{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;background:var(--bg0);color:var(--text1);font-family:var(--sans);font-size:13px}
-body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.025) 2px,rgba(0,0,0,0.025) 4px)}
-.msg-box{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg1);border:1px solid var(--border);border-radius:4px;padding:32px;width:400px;text-align:center}
-.msg-title{font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:2px;color:var(--amber);margin-bottom:16px}
-.msg-body{font-family:var(--mono);font-size:11px;color:var(--text3);line-height:1.6}
-code{background:rgba(245,158,11,0.1);color:var(--amber);padding:2px 6px;border-radius:3px;font-size:11px}
-</style></head><body>
-<div class="msg-box">
-  <div class="msg-title">CONFIGURATION REQUIRED</div>
-  <div class="msg-body">The <code>MM_PASSWORD</code> environment variable is not set.<br><br>Add it in the Render dashboard under Environment Variables, then redeploy.</div>
-</div>
-</body></html>`;
-
-app.get('/mm', (req, res) => {
-  const pw = process.env.MM_PASSWORD;
-  if (!pw) return res.send(MM_NOPASS_HTML);
-  const cookies = parseCookies(req);
-  if (cookies.mm_session === pw) {
-    return res.sendFile(join(__dirname, 'templates', 'mm.html'));
-  }
-  res.send(MM_LOGIN_HTML);
-});
-
-app.post('/mm/login', (req, res) => {
-  const pw = process.env.MM_PASSWORD;
-  if (!pw) return res.send(MM_NOPASS_HTML);
-  if (req.body.password === pw) {
-    res.setHeader('Set-Cookie', `mm_session=${encodeURIComponent(pw)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`);
-    return res.redirect('/mm');
-  }
-  res.redirect('/mm?invalid=1');
-});
-
-// MM data directory — defaults to cwd, override with MM_DATA_DIR
-const mmDataDir = process.env.MM_DATA_DIR || process.cwd();
-
-function todayDateStr() {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }).replace(/-/g, '');
-}
-
-function readHeartbeat() {
-  const p = join(mmDataDir, 'data', 'heartbeat.json');
-  if (!existsSync(p)) return null;
-  try { return JSON.parse(readFileSync(p, 'utf-8')); } catch { return null; }
-}
-
-function readFillsToday() {
-  const dateStr = todayDateStr();
-  const jsonlPath = join(mmDataDir, 'data', `fills_${dateStr}.jsonl`);
-  if (existsSync(jsonlPath)) {
-    try {
-      const lines = readFileSync(jsonlPath, 'utf-8').trim().split('\n').filter(Boolean);
-      return lines.map(l => JSON.parse(l));
-    } catch { /* fall through to CSV */ }
-  }
-  const csvPath = join(mmDataDir, 'logs', `fills_${dateStr}.csv`);
-  if (!existsSync(csvPath)) return [];
-  try {
-    const lines = readFileSync(csvPath, 'utf-8').trim().split('\n');
-    if (lines.length < 2) return [];
-    const headers = lines[0].split(',');
-    return lines.slice(1).map(line => {
-      const vals = line.split(',');
-      const obj = {};
-      headers.forEach((h, i) => { obj[h.trim()] = (vals[i] || '').trim(); });
-      return obj;
-    });
-  } catch { return []; }
-}
-
-app.get('/api/mm/status', mmAuth, (req, res) => {
-  const hb = readHeartbeat();
-  const fills = readFillsToday();
-  const totalFills = fills.length;
-  const wins = fills.filter(f => f.win === true || f.win === 'True' || f.win === '1').length;
-  const adverse = fills.filter(f => f.adverse_selection === true || f.adverse_selection === 'True' || f.adverse_selection === '1').length;
-  const dailyPnl = fills.reduce((sum, f) => sum + (parseFloat(f.net_pnl) || 0), 0);
-  res.json({
-    daily_pnl: +dailyPnl.toFixed(2),
-    total_fills: totalFills,
-    win_rate: totalFills > 0 ? Math.round(wins / totalFills * 100) : null,
-    adverse_rate: totalFills > 0 ? Math.round(adverse / totalFills * 100) : null,
-    open_positions: hb?.positions?.length || 0,
-    kill_switch: hb ? 'OK' : null,
-    pdt_status: null,
-    rate_blocked: null,
-    data_fresh: hb ? true : null,
-    heartbeat_ts: hb?.timestamp || null,
-    engine_pid: hb?.engine_pid || null,
-  });
-});
-
-app.get('/api/mm/fills', mmAuth, (req, res) => {
-  res.json(readFillsToday());
-});
-
-app.get('/api/mm/positions', mmAuth, (req, res) => {
-  const hb = readHeartbeat();
-  res.json(hb?.positions || []);
-});
-
-// Static files AFTER /mm routes so they can't be intercepted
+// Static files
 app.use(express.static(join(__dirname, 'public')));
 
 // ── API ROUTES ────────────────────────────────────────────────────────────────
@@ -694,8 +536,7 @@ app.get('/api/debug/contract/:ticker/:direction', async (req, res) => {
 app.get('/api/debug/ticker-check/:ticker', async (req, res) => {
   try {
     const { ticker } = req.params;
-    const [conv, prof, volBl, barCount, recentBars] = await Promise.all([
-      db.query('SELECT ticker FROM lc_v3.conviction_universe WHERE ticker = $1', [ticker]),
+    const [prof, volBl, barCount, recentBars] = await Promise.all([
       db.query('SELECT ticker, atr_20d FROM lc_v3.equity_profiles WHERE ticker = $1', [ticker]),
       db.query('SELECT COUNT(*)::int as count FROM lc_v3.volume_baselines WHERE ticker = $1', [ticker]),
       db.query('SELECT COUNT(*)::int as count FROM lc_v3.bars WHERE ticker = $1 AND ts >= NOW() - INTERVAL \'3 days\'', [ticker]),
@@ -706,7 +547,6 @@ app.get('/api/debug/ticker-check/:ticker', async (req, res) => {
     ]);
     res.json({
       ticker,
-      in_conviction_universe: conv.rows.length > 0,
       in_equity_profiles: prof.rows.length > 0,
       equity_profile: prof.rows[0] || null,
       volume_baselines_count: volBl.rows[0]?.count || 0,
@@ -1348,92 +1188,6 @@ app.get('/api/seed-insider/status', (req, res) => {
   res.json({ running: insiderRunning, result: insiderResult });
 });
 
-// Seed conviction universe fundamentals
-let convictionRunning = false;
-let convictionResult = null;
-app.post('/api/seed-conviction', async (req, res) => {
-  if (convictionRunning) return res.json({ ok: false, error: 'Already running' });
-  convictionRunning = true;
-  convictionResult = null;
-  res.json({ ok: true, message: 'Conviction fundamentals seed started' });
-
-  const FMP_KEY = process.env.FMP_API_KEY;
-  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-  try {
-    const tickerRes = await db.query('SELECT ticker FROM lc_v3.conviction_universe ORDER BY ticker');
-    const tickers = tickerRes.rows.map(r => r.ticker);
-    console.log(`[CONV-FUND] ${tickers.length} tickers to process`);
-
-    let inserted = 0;
-    for (let i = 0; i < tickers.length; i += 5) {
-      const batch = tickers.slice(i, i + 5);
-      await Promise.all(batch.map(async (ticker) => {
-        try {
-          await sleep(400);
-          const [incRes, cfRes] = await Promise.all([
-            axios.get(`https://financialmodelingprep.com/stable/income-statement?symbol=${ticker}&period=quarter&limit=8&apikey=${FMP_KEY}`, { timeout: 15000 }),
-            axios.get(`https://financialmodelingprep.com/stable/cash-flow-statement?symbol=${ticker}&period=quarter&limit=8&apikey=${FMP_KEY}`, { timeout: 15000 }),
-          ]);
-          const income = incRes.data || [];
-          const cashflow = cfRes.data || [];
-          if (!Array.isArray(income) || income.length === 0) return;
-
-          const cfMap = {};
-          if (Array.isArray(cashflow)) {
-            for (const cf of cashflow) cfMap[cf.period] = cf;
-          }
-
-          for (const q of income) {
-            if (!q.period) continue;
-            const cf = cfMap[q.period] || {};
-            const grossMargin = q.revenue && q.revenue !== 0 ? parseFloat((q.grossProfit / q.revenue).toFixed(4)) : null;
-            const opMargin = q.revenue && q.revenue !== 0 ? parseFloat((q.operatingIncome / q.revenue).toFixed(4)) : null;
-
-            await db.query(`
-              INSERT INTO lc_v3.fundamentals (
-                ticker, period, revenue, gross_profit, operating_income, net_income,
-                free_cash_flow, gross_margin, operating_margin,
-                accounts_receivable, inventory, total_debt, cash_and_equivalents, reported_at
-              ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-              ON CONFLICT (ticker, period) DO UPDATE SET
-                revenue = EXCLUDED.revenue, gross_profit = EXCLUDED.gross_profit,
-                operating_income = EXCLUDED.operating_income, net_income = EXCLUDED.net_income,
-                free_cash_flow = EXCLUDED.free_cash_flow, gross_margin = EXCLUDED.gross_margin,
-                operating_margin = EXCLUDED.operating_margin, accounts_receivable = EXCLUDED.accounts_receivable,
-                inventory = EXCLUDED.inventory, total_debt = EXCLUDED.total_debt,
-                cash_and_equivalents = EXCLUDED.cash_and_equivalents, reported_at = EXCLUDED.reported_at
-            `, [
-              ticker, q.period, q.revenue ?? null, q.grossProfit ?? null,
-              q.operatingIncome ?? null, q.netIncome ?? null, cf.freeCashFlow ?? null,
-              grossMargin, opMargin, cf.accountsReceivables ?? null,
-              cf.inventory ?? null, cf.totalDebt ?? cf.netDebt ?? null,
-              cf.cashAtEndOfPeriod ?? null, q.date || null,
-            ]);
-            inserted++;
-          }
-          console.log(`[CONV-FUND] ${ticker} done`);
-        } catch (err) {
-          console.error(`[CONV-FUND] ${ticker} error: ${err.message}`);
-        }
-      }));
-
-      if ((i + 5) % 50 === 0) console.log(`[CONV-FUND] Progress: ${i + 5}/${tickers.length}, ${inserted} rows`);
-    }
-
-    convictionResult = { ok: true, tickers: tickers.length, rows: inserted };
-    console.log(`[CONV-FUND] Done — ${inserted} rows inserted for ${tickers.length} tickers`);
-  } catch (err) {
-    convictionResult = { ok: false, error: err.message };
-    console.error('[CONV-FUND] FATAL:', err.message);
-  } finally {
-    convictionRunning = false;
-  }
-});
-app.get('/api/seed-conviction/status', (req, res) => {
-  res.json({ running: convictionRunning, result: convictionResult });
-});
-
 // Backtest status
 let backtestError = null;
 app.get('/api/backtest/status', (req, res) => {
@@ -1948,8 +1702,6 @@ app.get('/api/analysis/iv-expansion', async (req, res) => {
   }
 });
 
-// ── CONVICTION SCANNER ───────────────────────────────────────────────────────
-
 // In-memory latest prices from poller (ticker → price)
 let latestPrices = {};
 
@@ -2028,136 +1780,6 @@ app.get('/api/contract-prices', async (req, res) => {
     console.error('[contract-prices]', err.message);
     res.json(contractPriceCache); // return stale cache on error
   }
-});
-
-// In-memory conviction scan state
-let convictionScan = { status: 'idle', results: null, started_at: null, completed_at: null, progress: null, error: null };
-
-app.get('/api/conviction', async (req, res) => {
-  // Return cached results if a scan has completed
-  if (convictionScan.status === 'complete' && convictionScan.results) {
-    return res.json(convictionScan.results);
-  }
-
-  try {
-    // Get tickers from equity_profiles UNION conviction_universe
-    const tickerRes = await db.query(`
-      SELECT ticker FROM lc_v3.equity_profiles
-      UNION
-      SELECT ticker FROM lc_v3.conviction_universe
-    `);
-    const tickers = tickerRes.rows.map(r => r.ticker);
-
-    // Score each ticker
-    const scored = [];
-    for (const ticker of tickers) {
-      try {
-        const result = await scoreConvictionSetup(ticker, db);
-        if (result.conviction_score >= 50 || result.recommendation === 'DEAL_RISK_PUT') {
-          scored.push(result);
-        }
-      } catch (err) {
-        console.error(`[CONVICTION] Error scoring ${ticker}:`, err.message);
-      }
-    }
-
-    // Sort by score desc, take top 20
-    scored.sort((a, b) => b.conviction_score - a.conviction_score);
-    const top20 = scored.slice(0, 20);
-
-    res.json({
-      results: top20,
-      total_scanned: tickers.length,
-      total_qualifying: scored.length,
-      scanned_at: new Date().toISOString(),
-    });
-  } catch (err) {
-    console.error('[CONVICTION]', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/conviction/scan', (req, res) => {
-  if (convictionScan.status === 'running') {
-    return res.json({ status: 'already_running', started_at: convictionScan.started_at, progress: convictionScan.progress });
-  }
-
-  convictionScan = { status: 'running', results: null, started_at: new Date().toISOString(), completed_at: null, progress: '0/?', error: null };
-  res.json({ status: 'started', started_at: convictionScan.started_at });
-
-  // Run in background
-  (async () => {
-    try {
-      const tickerRes = await db.query(`
-        SELECT ticker FROM lc_v3.equity_profiles
-        UNION
-        SELECT ticker FROM lc_v3.conviction_universe
-      `);
-      const tickers = tickerRes.rows.map(r => r.ticker);
-      const scored = [];
-      const errors = [];
-
-      // Process in batches of 3 with 500ms delay
-      for (let i = 0; i < tickers.length; i += 3) {
-        const batch = tickers.slice(i, i + 3);
-        convictionScan.progress = `${i}/${tickers.length}`;
-
-        const results = await Promise.allSettled(
-          batch.map(t => scoreConvictionSetup(t, db))
-        );
-
-        for (let j = 0; j < results.length; j++) {
-          if (results[j].status === 'rejected') {
-            errors.push({ ticker: batch[j], error: results[j].reason?.message });
-            continue;
-          }
-          const r = results[j].value;
-          if (r.recommendation === 'STRONG_PUT' || r.recommendation === 'MONITOR' || r.recommendation === 'DEAL_RISK_PUT') {
-            scored.push(r);
-            console.log(`[CONVICTION SCAN] ${r.ticker} score=${r.conviction_score} rec=${r.recommendation} thesis=${r.thesis} red_flags=${r.eight_k_red_flags?.length || 0}`);
-          }
-        }
-
-        if (i + 3 < tickers.length) await new Promise(r => setTimeout(r, 500));
-      }
-
-      scored.sort((a, b) => b.conviction_score - a.conviction_score);
-
-      convictionScan.status = 'complete';
-      convictionScan.completed_at = new Date().toISOString();
-      convictionScan.progress = `${tickers.length}/${tickers.length}`;
-      convictionScan.results = {
-        results: scored.slice(0, 30),
-        total_scanned: tickers.length,
-        total_qualifying: scored.length,
-        errors: errors.length,
-        scanned_at: convictionScan.completed_at,
-      };
-      console.log(`[CONVICTION SCAN] Complete: ${scored.length} qualifying out of ${tickers.length}, ${errors.length} errors`);
-    } catch (err) {
-      console.error('[CONVICTION SCAN] Fatal:', err);
-      convictionScan.status = 'error';
-      convictionScan.error = err.message;
-      convictionScan.completed_at = new Date().toISOString();
-    }
-  })();
-});
-
-app.get('/api/conviction/status', (req, res) => {
-  const resp = {
-    status: convictionScan.status,
-    started_at: convictionScan.started_at,
-    completed_at: convictionScan.completed_at,
-    progress: convictionScan.progress,
-    error: convictionScan.error,
-  };
-  if (convictionScan.status === 'complete' && convictionScan.results) {
-    resp.total_scanned = convictionScan.results.total_scanned;
-    resp.total_qualifying = convictionScan.results.total_qualifying;
-    resp.errors = convictionScan.results.errors;
-    resp.results = convictionScan.results.results;
-  }
-  res.json(resp);
 });
 
 // ── MULTI-STRATEGY BACKTEST ENDPOINTS ──────────────────────────────────────────
@@ -3237,7 +2859,6 @@ async function startRestPoller() {
               sig.exit_time ? `exitTime=${sig.exit_time}` : null,
               sig.range_pct != null ? `rangePct=${sig.range_pct}%` : null,
               sig.vix_level != null ? `vixLevel=${sig.vix_level}` : null,
-              sig.conviction_score != null ? `conviction=${sig.conviction_score}` : null,
               sig.earnings_date ? `earningsDate=${sig.earnings_date}` : null,
               sig.days_to_earnings != null ? `daysToER=${sig.days_to_earnings}` : null,
               sig.iv_rank != null ? `ivRank=${sig.iv_rank}%` : null,
