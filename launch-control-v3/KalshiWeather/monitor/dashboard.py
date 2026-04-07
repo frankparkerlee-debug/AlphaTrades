@@ -7,7 +7,7 @@ import os
 import logging
 from datetime import datetime
 
-from config.settings import CITIES
+from config.settings import CITIES, TRADING_MODE, DRY_RUN
 
 log = logging.getLogger("dashboard")
 
@@ -41,7 +41,12 @@ def _render_rich(executor, signals):
     stats = executor.get_stats()
 
     # Header
-    mode = "PAPER" if os.getenv("TRADING_MODE", "paper") == "paper" else "LIVE"
+    if DRY_RUN:
+        mode = "DRY_RUN"
+    elif TRADING_MODE == "live":
+        mode = "LIVE"
+    else:
+        mode = "PAPER"
     header = Text(f"  KalshiWeather | Kalshi Weather Arb | {mode} | {datetime.now().strftime('%H:%M:%S')}", style="bold white on blue")
     console.print(header)
     console.print()

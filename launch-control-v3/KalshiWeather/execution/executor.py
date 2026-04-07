@@ -94,12 +94,21 @@ class Executor:
 
     def enter(self, signal: Signal) -> Position | None:
         """Place a buy order for a Last Mile signal."""
+        side = getattr(signal, "side", "yes")
+
+        # Dedup: skip if we already have an open position on this ticker+side
+        for existing in self.open_positions:
+            if existing.ticker == signal.ticker and existing.side == side:
+                log.debug(
+                    f"Skip {signal.ticker} {side}: already holding "
+                    f"{existing.contracts}x @ ${existing.entry_price:.2f}"
+                )
+                return None
+
         count = self.size_order(signal)
         if count == 0:
             log.warning(f"Cannot size order for {signal.ticker}")
             return None
-
-        side = getattr(signal, "side", "yes")
 
         if DRY_RUN:
             log.info(
