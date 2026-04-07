@@ -13,12 +13,12 @@ load_dotenv()
 
 KALSHI_API_KEY = os.getenv("KALSHI_API_KEY", "")
 KALSHI_PRIVATE_KEY = os.getenv("KALSHI_PRIVATE_KEY", "")
-KALSHI_ENV = os.getenv("KALSHI_ENV", "demo")  # "demo" or "prod"
+KALSHI_ENV = os.getenv("KALSHI_ENV", "prod")  # "demo" or "prod"
 
 KALSHI_BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
 KALSHI_DEMO_URL = "https://demo-api.kalshi.co/trade-api/v2"
 
-PAPER_TRADING = os.getenv("PAPER_TRADING", "true").lower() == "true"
+PAPER_TRADING = os.getenv("PAPER_TRADING", "false").lower() == "true"
 TRADING_MODE = "paper" if PAPER_TRADING else "live"
 
 # ── Anthropic ──────────────────────────────────────────────────────────────────

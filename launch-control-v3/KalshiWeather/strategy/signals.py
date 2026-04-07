@@ -1,10 +1,19 @@
 """
 Signal Engine — Last Mile Strategy.
 Buy near-certain temperature contracts on resolution day when both weather
-models predict temp well above the contract threshold. Hold to settlement.
+models predict temp well above/below the contract threshold. Hold to settlement.
 
-Edge source: Contracts priced $0.80-$0.95 settle at $1.00 when YES.
-Backtest: 99.7% WR at 4F offset over 365 days, $500 → $4,355 in 6 months.
+Edge source: Contracts priced $0.80-$0.95 settle at $1.00 when correct.
+Backtest: 99.7% WR at 4F offset over 365 days, $500 -> $4,355 in 6 months.
+
+Market types:
+  - "above" (floor_strike only): YES = temp > threshold
+  - "below" (cap_strike only):   YES = temp < threshold
+  - brackets (both strikes):     skipped (range bets)
+
+For each directional market, we check BOTH sides:
+  - Buy YES if YES is the near-certain outcome at $0.80-$0.95
+  - Buy NO  if NO  is the near-certain outcome at $0.80-$0.95
 """
 
 import logging
@@ -25,27 +34,28 @@ class Signal:
 
     def __init__(self, city_code, date, ticker, threshold, direction,
                  model_prob, market_price, edge, contracts, forecast_mean,
-                 spread, forecast_offset):
+                 spread, forecast_offset, side="yes"):
         self.city_code = city_code
         self.date = date
         self.ticker = ticker
         self.threshold = threshold
-        self.direction = direction  # "above"
+        self.direction = direction  # "above" or "below"
         self.model_prob = model_prob
-        self.market_price = market_price
+        self.market_price = market_price  # effective cost to us
         self.edge = edge              # expected profit per contract ($1.00 - price)
         self.contracts = contracts
         self.forecast_mean = forecast_mean
         self.model_spread = spread
-        self.forecast_offset = forecast_offset  # how far above threshold
+        self.forecast_offset = forecast_offset  # abs distance from threshold
+        self.side = side              # "yes" or "no" (which side to buy)
         self.created_at = datetime.now()
 
     def __repr__(self):
         city = CITIES[self.city_code]["name"]
         return (
-            f"Signal({city} {self.date} >{self.threshold}F | "
-            f"forecast={self.forecast_mean:.0f}F (+{self.forecast_offset:.0f}F) "
-            f"mkt=${self.market_price:.2f} profit=${self.edge:.2f})"
+            f"Signal({city} {self.date} {self.ticker} BUY {self.side.upper()} | "
+            f"forecast={self.forecast_mean:.0f}F offset={self.forecast_offset:+.0f}F "
+            f"cost=${self.market_price:.2f} profit=${self.edge:.2f})"
         )
 
 
@@ -55,13 +65,26 @@ class SignalEngine:
     def __init__(self, kalshi: KalshiClient):
         self.kalshi = kalshi
 
+    def _classify_market(self, market: dict):
+        """
+        Classify a Kalshi temperature market.
+        Returns: ("above", threshold), ("below", threshold), or (None, None)
+        """
+        floor = market.get("floor_strike")
+        cap = market.get("cap_strike")
+
+        if floor is not None and cap is None:
+            return "above", float(floor)
+        elif cap is not None and floor is None:
+            return "below", float(cap)
+        else:
+            return None, None  # bracket or unknown
+
     def scan_city(self, city_code: str) -> list[Signal]:
         """
-        Last Mile scan for one city:
-        1. Fetch multi-model forecast (GFS + ECMWF)
-        2. Fetch Kalshi temperature markets
-        3. Find contracts where forecast is 4-6F+ above threshold
-        4. Buy contracts priced $0.80-$0.95 (hold to settlement at $1.00)
+        Last Mile scan for one city.
+        For each directional market, check both YES and NO sides for
+        near-certain outcomes priced $0.80-$0.95.
         """
         city = CITIES.get(city_code)
         if not city:
@@ -94,87 +117,119 @@ class SignalEngine:
 
         for date_str, model_temps in forecasts.items():
             if date_str not in target_dates:
-                log.debug(f"{city_code} {date_str}: skipping (not today/tomorrow)")
                 continue
 
             mean_temp, spread = model_consensus(model_temps)
 
-            # Models must agree
             if spread > MAX_MODEL_SPREAD:
                 log.info(f"{city_code} {date_str}: model spread {spread:.1f}F > {MAX_MODEL_SPREAD}F, skipping")
                 continue
 
             log.info(f"{city_code} {date_str}: forecast={mean_temp:.1f}F spread={spread:.1f}F")
 
-            # Find markets for this date
             date_markets = [m for m in markets if self._market_matches_date(m, date_str)]
             log.info(f"{city_code} {date_str}: {len(date_markets)} markets match")
 
             evaluated = 0
             for market in date_markets:
                 ticker = market.get("ticker", "")
-                threshold = self._parse_threshold(ticker)
-                if threshold is None:
-                    log.debug(f"  {ticker}: could not parse threshold")
-                    continue
 
-                # KEY: forecast must be well above threshold
-                forecast_offset = mean_temp - threshold
-                if forecast_offset < MIN_FORECAST_OFFSET:
-                    log.debug(
-                        f"  {ticker}: >{threshold}F | forecast {mean_temp:.0f}F "
-                        f"offset={forecast_offset:+.1f}F < {MIN_FORECAST_OFFSET}F required"
-                    )
-                    continue
+                mkt_type, threshold = self._classify_market(market)
+                if mkt_type is None:
+                    continue  # bracket
 
-                # Get market price
+                # Get orderbook
                 prices = self.kalshi.get_best_prices(ticker)
                 if not prices:
                     log.debug(f"  {ticker}: no orderbook")
                     continue
 
-                market_price = prices["yes_ask"]
-                evaluated += 1
+                yes_bid = prices["yes_bid"]
+                yes_ask = prices["yes_ask"]
 
-                # Must be in Last Mile range ($0.80-$0.95)
-                if market_price < MIN_BUY_PRICE or market_price > MAX_BUY_PRICE:
+                # Determine which side is near-certain based on forecast
+                # For "above" markets (YES = temp > threshold):
+                #   forecast >> threshold → YES near-certain → buy YES at yes_ask
+                #   forecast << threshold → NO near-certain  → buy NO at (1 - yes_bid)
+                # For "below" markets (YES = temp < threshold):
+                #   forecast << threshold → YES near-certain → buy YES at yes_ask
+                #   forecast >> threshold → NO near-certain  → buy NO at (1 - yes_bid)
+
+                offset = mean_temp - threshold  # positive = forecast above threshold
+
+                candidates = []
+
+                if mkt_type == "above":
+                    if offset >= MIN_FORECAST_OFFSET:
+                        # Forecast well above → YES is near-certain
+                        candidates.append(("yes", yes_ask, offset, "ABOVE_YES"))
+                    if offset <= -MIN_FORECAST_OFFSET:
+                        # Forecast well below → NO is near-certain
+                        no_cost = round(1.0 - yes_bid, 4) if yes_bid > 0 else 1.0
+                        candidates.append(("no", no_cost, abs(offset), "ABOVE_NO"))
+                elif mkt_type == "below":
+                    if offset <= -MIN_FORECAST_OFFSET:
+                        # Forecast well below threshold → YES (temp < threshold) near-certain
+                        candidates.append(("yes", yes_ask, abs(offset), "BELOW_YES"))
+                    if offset >= MIN_FORECAST_OFFSET:
+                        # Forecast well above threshold → NO (temp >= threshold) near-certain
+                        no_cost = round(1.0 - yes_bid, 4) if yes_bid > 0 else 1.0
+                        candidates.append(("no", no_cost, offset, "BELOW_NO"))
+
+                if not candidates:
                     log.debug(
-                        f"  {ticker}: price ${market_price:.2f} outside "
-                        f"${MIN_BUY_PRICE}-${MAX_BUY_PRICE}"
+                        f"  {ticker}: {mkt_type} thresh={threshold:.0f} "
+                        f"offset={offset:+.1f}F -- insufficient"
                     )
                     continue
 
-                # Edge = expected profit per contract (settles at $1.00)
-                model_prob = temp_probability(mean_temp, threshold, spread)
-                edge = (model_prob * 1.00) - market_price  # expected value minus cost
+                evaluated += 1
 
-                log.info(
-                    f"  {ticker}: >{threshold}F | forecast={mean_temp:.0f}F "
-                    f"(+{forecast_offset:.0f}F) | model={model_prob:.1%} "
-                    f"mkt=${market_price:.2f} EV=${edge:+.3f} PASS"
-                )
+                for side, cost, abs_offset, label in candidates:
+                    if cost < MIN_BUY_PRICE or cost > MAX_BUY_PRICE:
+                        log.info(
+                            f"  {ticker}: {label} BUY {side.upper()} ${cost:.2f} "
+                            f"outside ${MIN_BUY_PRICE}-${MAX_BUY_PRICE} "
+                            f"(offset={offset:+.1f}F)"
+                        )
+                        continue
 
-                sig = Signal(
-                    city_code=city_code,
-                    date=date_str,
-                    ticker=ticker,
-                    threshold=threshold,
-                    direction="above",
-                    model_prob=model_prob,
-                    market_price=market_price,
-                    edge=edge,
-                    contracts=0,
-                    forecast_mean=mean_temp,
-                    spread=spread,
-                    forecast_offset=forecast_offset,
-                )
-                signals.append(sig)
-                log.info(f"SIGNAL: {sig}")
+                    model_prob = temp_probability(mean_temp, threshold, spread)
+                    # For NO side, invert probability
+                    effective_prob = model_prob if side == "yes" and mkt_type == "above" else \
+                                     (1 - model_prob) if side == "no" and mkt_type == "above" else \
+                                     model_prob if side == "yes" and mkt_type == "below" else \
+                                     (1 - model_prob)
+
+                    edge = effective_prob - cost
+
+                    log.info(
+                        f"  SIGNAL: {ticker} {label} BUY {side.upper()} @ ${cost:.2f} | "
+                        f"forecast={mean_temp:.0f}F offset={offset:+.0f}F | "
+                        f"model={effective_prob:.1%} edge=${edge:+.3f}"
+                    )
+
+                    sig = Signal(
+                        city_code=city_code,
+                        date=date_str,
+                        ticker=ticker,
+                        threshold=threshold,
+                        direction=label,
+                        model_prob=effective_prob,
+                        market_price=cost,
+                        edge=edge,
+                        contracts=0,
+                        forecast_mean=mean_temp,
+                        spread=spread,
+                        forecast_offset=abs_offset,
+                        side=side,
+                    )
+                    signals.append(sig)
 
             if evaluated == 0 and len(date_markets) > 0:
                 log.info(
                     f"{city_code} {date_str}: {len(date_markets)} markets "
-                    f"but 0 had valid orderbook/price"
+                    f"but 0 met offset threshold ({MIN_FORECAST_OFFSET}F)"
                 )
 
         return signals
@@ -217,20 +272,3 @@ class SignalEngine:
             return dt.strftime("%Y-%m-%d") == date_str
         except ValueError:
             return False
-
-    def _parse_threshold(self, ticker: str) -> float | None:
-        """
-        Extract temperature threshold from ticker.
-        T-type: KXHIGHNY-26APR05-T67 → 67 (above threshold)
-        B-type: KXHIGHNY-26APR05-B66.5 → 66.5 (bucket midpoint)
-        """
-        parts = ticker.split("-")
-        for part in parts:
-            if part.startswith("T") and part[1:].isdigit():
-                return int(part[1:])
-            if part.startswith("B"):
-                try:
-                    return float(part[1:])
-                except ValueError:
-                    continue
-        return None

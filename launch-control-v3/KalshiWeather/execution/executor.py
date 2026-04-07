@@ -98,9 +98,11 @@ class Executor:
             log.warning(f"Cannot size order for {signal.ticker}")
             return None
 
+        side = getattr(signal, "side", "yes")
+
         result = self.kalshi.place_order(
             ticker=signal.ticker,
-            side="yes",
+            side=side,
             action="buy",
             count=count,
             price=signal.market_price,
@@ -116,7 +118,7 @@ class Executor:
             city_code=signal.city_code,
             date=signal.date,
             threshold=signal.threshold,
-            side="yes",
+            side=side,
             contracts=count,
             entry_price=signal.market_price,
             entry_time=datetime.now(),
@@ -149,7 +151,12 @@ class Executor:
                     self._mark_settled(pos)
                 continue
 
-            current_bid = prices["yes_bid"]
+            # For YES positions: current_bid = YES bid
+            # For NO positions: current_bid = NO bid = 1 - YES ask
+            if pos.side == "no":
+                current_bid = round(1.0 - prices["yes_ask"], 4)
+            else:
+                current_bid = prices["yes_bid"]
 
             # 1. Early exit: lock in profit at $0.97+
             if current_bid >= EARLY_EXIT_PRICE:
@@ -163,7 +170,7 @@ class Executor:
 
             # 3. Normal: hold to settlement (no action needed)
             log.debug(
-                f"  {pos.ticker}: bid=${current_bid:.2f} "
+                f"  {pos.ticker} ({pos.side}): bid=${current_bid:.2f} "
                 f"held {pos.hold_minutes:.0f}min — holding to settlement"
             )
 
@@ -171,7 +178,7 @@ class Executor:
         """Sell a position early."""
         self.kalshi.place_order(
             ticker=pos.ticker,
-            side="yes",
+            side=pos.side,
             action="sell",
             count=pos.contracts,
             price=exit_price,

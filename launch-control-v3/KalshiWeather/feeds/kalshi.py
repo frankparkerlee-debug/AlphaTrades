@@ -26,6 +26,7 @@ class KalshiClient:
         self.base_url = KALSHI_DEMO_URL if TRADING_MODE == "paper" else KALSHI_BASE_URL
         self.api_key = KALSHI_API_KEY
         self.private_key = self._load_private_key()
+        log.info(f"Kalshi client initialized | mode={TRADING_MODE} | url={self.base_url}")
 
     def _load_private_key(self):
         """Load RSA private key from env var (inline PEM or raw base64)."""
