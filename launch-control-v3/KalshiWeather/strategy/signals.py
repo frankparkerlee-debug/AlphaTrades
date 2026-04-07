@@ -20,7 +20,7 @@ import logging
 from datetime import datetime, timedelta
 
 from config.settings import (
-    CITIES, MIN_BUY_PRICE, MAX_BUY_PRICE,
+    CITIES, MIN_BUY_PRICE, MAX_BUY_PRICE, MIN_EDGE,
     MIN_FORECAST_OFFSET, MAX_MODEL_SPREAD, LADDER_BUCKETS,
 )
 from feeds.weather import fetch_open_meteo, model_consensus, temp_probability
@@ -194,14 +194,24 @@ class SignalEngine:
                         )
                         continue
 
+                    # model_prob = P(temp > threshold) from our forecast model
                     model_prob = temp_probability(mean_temp, threshold, spread)
-                    # For NO side, invert probability
-                    effective_prob = model_prob if side == "yes" and mkt_type == "above" else \
-                                     (1 - model_prob) if side == "no" and mkt_type == "above" else \
-                                     model_prob if side == "yes" and mkt_type == "below" else \
-                                     (1 - model_prob)
+                    # ABOVE market: YES = temp > threshold (prob = model_prob)
+                    # BELOW market: YES = temp < threshold (prob = 1 - model_prob)
+                    if mkt_type == "above":
+                        effective_prob = model_prob if side == "yes" else (1 - model_prob)
+                    else:  # below
+                        effective_prob = (1 - model_prob) if side == "yes" else model_prob
 
                     edge = effective_prob - cost
+
+                    # Require minimum edge for value plays (cheaper contracts)
+                    if cost < 0.80 and edge < MIN_EDGE:
+                        log.info(
+                            f"  {ticker}: {label} BUY {side.upper()} @ ${cost:.2f} "
+                            f"edge={edge:+.2f} < {MIN_EDGE} (insufficient value edge)"
+                        )
+                        continue
 
                     log.info(
                         f"  SIGNAL: {ticker} {label} BUY {side.upper()} @ ${cost:.2f} | "

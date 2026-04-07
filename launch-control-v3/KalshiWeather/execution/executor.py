@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from config.settings import (
     STARTING_CAPITAL, MAX_POSITION_PCT, MAX_CONTRACTS_PER_BUCKET,
     MAX_OPEN_POSITIONS, DAILY_LOSS_LIMIT_PCT, EARLY_EXIT_PRICE,
+    STOP_LOSS_PCT,
 )
 from feeds.kalshi import KalshiClient
 from strategy.signals import Signal
@@ -163,8 +164,9 @@ class Executor:
                 self._exit_position(pos, current_bid, "EARLY_EXIT")
                 continue
 
-            # 2. Stop loss: model failure (extremely rare at 4F+ offset)
-            if current_bid < 0.50 and pos.hold_minutes > 30:
+            # 2. Stop loss: bid drops below stop_loss_pct of entry price
+            stop_price = pos.entry_price * STOP_LOSS_PCT
+            if current_bid < stop_price and pos.hold_minutes > 30:
                 self._exit_position(pos, current_bid, "STOP_LOSS")
                 continue
 

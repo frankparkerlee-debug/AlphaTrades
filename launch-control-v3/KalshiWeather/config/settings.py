@@ -37,14 +37,19 @@ MAX_CONTRACTS_PER_BUCKET = 25    # fill cap from Kalshi trade tape data
 MAX_OPEN_POSITIONS = 15          # across all cities
 DAILY_LOSS_LIMIT_PCT = 0.10      # halt at -10% daily (tighter for high-cost contracts)
 
-# ── Last Mile Signal Thresholds ───────────────────────────────────────────────
+# ── Last Mile / Value Edge Signal Thresholds ─────────────────────────────────
 
-# Buy contracts priced $0.80-$0.95 where forecast is well above threshold
-MIN_BUY_PRICE = 0.80             # only buy near-certain contracts
-MAX_BUY_PRICE = 0.95             # don't overpay (leaves room for profit)
-MIN_FORECAST_OFFSET = 4          # forecast must be >= 4F above threshold
+# Two zones of opportunity:
+#   1. Last Mile: $0.80-$0.95 (near-certain, hold to settlement at $1.00)
+#   2. Value Edge: $0.30-$0.79 (clear model-vs-market disagreement, big upside)
+# Both require forecast offset >= MIN_FORECAST_OFFSET from threshold
+MIN_BUY_PRICE = 0.30             # widened to capture value edge opportunities
+MAX_BUY_PRICE = 0.95             # cap at near-certain ceiling
+MIN_FORECAST_OFFSET = 4          # forecast must be >= 4F from threshold
+MIN_EDGE = 0.40                  # model_prob - cost must exceed this for value plays
 MAX_MODEL_SPREAD = 6             # models must agree within 6F
 EARLY_EXIT_PRICE = 0.97          # optional early exit if bid hits $0.97
+STOP_LOSS_PCT = 0.50             # cut if bid drops below 50% of entry price
 LADDER_BUCKETS = 3               # buy up to 3 adjacent buckets per city+date
 
 # ── Scan Interval ──────────────────────────────────────────────────────────────
