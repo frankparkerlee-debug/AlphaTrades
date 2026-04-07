@@ -19,14 +19,40 @@ _RETRY_ATTEMPTS = 3
 _RETRY_BACKOFF = [1.0, 3.0, 6.0]  # seconds between attempts
 _RETRY_TIMEOUT = 15
 
+# In-memory forecast cache. Open-Meteo updates models every 6 hours, so
+# refetching every scan cycle is wasteful and triggers rate limits.
+# Cache key: city_code (or a string built from lat/lon for the simple helper).
+# Value: (unix_ts, result_dict).
+_CACHE_TTL_SEC = 20 * 60  # 20 minutes
+_STALE_TTL_SEC = 6 * 60 * 60  # 6 hours — served if upstream is down
+_forecast_cache: dict[str, tuple[float, dict]] = {}
+
+# When we hit 429, back off globally so we stop hammering the API
+_rate_limited_until: float = 0.0
+_RATE_LIMIT_COOLDOWN_SEC = 10 * 60  # 10 minutes
+
 
 def _get_with_retry(url: str, params: dict, label: str) -> dict | None:
-    """GET with retries on 5xx errors and timeouts. Returns parsed JSON or None."""
+    """GET with retries on 5xx/timeout. Bails immediately on 429."""
+    global _rate_limited_until
+
+    if time.time() < _rate_limited_until:
+        remaining = int(_rate_limited_until - time.time())
+        log.debug(f"{label}: in rate-limit cooldown ({remaining}s left)")
+        return None
+
     last_err = None
     for attempt in range(_RETRY_ATTEMPTS):
         try:
             resp = requests.get(url, params=params, timeout=_RETRY_TIMEOUT)
-            # Retry on 5xx (bad gateway, etc); raise otherwise
+            if resp.status_code == 429:
+                # Rate limited — stop retrying and enter global cooldown
+                _rate_limited_until = time.time() + _RATE_LIMIT_COOLDOWN_SEC
+                log.warning(
+                    f"{label}: 429 rate limit — cooling down "
+                    f"{_RATE_LIMIT_COOLDOWN_SEC//60}min"
+                )
+                return None
             if 500 <= resp.status_code < 600:
                 last_err = f"{resp.status_code} {resp.reason}"
                 log.warning(f"{label}: attempt {attempt+1}/{_RETRY_ATTEMPTS} got {last_err}")
@@ -37,7 +63,7 @@ def _get_with_retry(url: str, params: dict, label: str) -> dict | None:
             last_err = f"{type(e).__name__}: {e}"
             log.warning(f"{label}: attempt {attempt+1}/{_RETRY_ATTEMPTS} {last_err}")
         except Exception as e:
-            # Non-retryable (4xx, JSON decode, etc)
+            # Non-retryable (4xx other than 429, JSON decode, etc)
             log.error(f"{label} failed: {e}")
             return None
 
@@ -52,10 +78,18 @@ def fetch_open_meteo(city_code: str) -> dict | None:
     """
     Fetch multi-model daily high forecasts from Open-Meteo.
     Returns {date: {model: temp_f, ...}, ...} or None on failure.
+
+    Results are cached for 20 minutes. If upstream is down and the cache
+    is <6 hours old, the stale entry is served rather than returning None.
     """
     city = CITIES.get(city_code)
     if not city:
         return None
+
+    now = time.time()
+    cached = _forecast_cache.get(city_code)
+    if cached and now - cached[0] < _CACHE_TTL_SEC:
+        return cached[1]
 
     params = {
         "latitude": city["lat"],
@@ -69,6 +103,11 @@ def fetch_open_meteo(city_code: str) -> dict | None:
 
     data = _get_with_retry(OPEN_METEO_URL, params, f"Open-Meteo[{city_code}]")
     if not data:
+        # Serve stale cache if upstream is down but we have something recent
+        if cached and now - cached[0] < _STALE_TTL_SEC:
+            age_min = (now - cached[0]) / 60
+            log.info(f"{city_code}: serving stale cache ({age_min:.0f}min old)")
+            return cached[1]
         return None
 
     daily = data.get("daily", {})
@@ -84,6 +123,8 @@ def fetch_open_meteo(city_code: str) -> dict | None:
         if models:
             result[date_str] = models
 
+    if result:
+        _forecast_cache[city_code] = (now, result)
     return result
 
 
