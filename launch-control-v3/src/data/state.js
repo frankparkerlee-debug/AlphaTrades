@@ -157,6 +157,32 @@ export function getNewsEvents(ticker) {
   return state.news[ticker].filter(e => new Date(e.timestamp) > cutoff);
 }
 
+// Flat list of all news events across all tickers, newest first.
+// Used by the research dashboard.
+export function getAllNews(limit = 100) {
+  const cutoff = Date.now() - 8 * 60 * 60 * 1000;
+  const all = [];
+  for (const ticker of Object.keys(state.news)) {
+    for (const e of state.news[ticker]) {
+      if (new Date(e.timestamp) > cutoff) {
+        all.push({ ticker, ...e });
+      }
+    }
+  }
+  all.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  // Dedupe by headline so a story tagged to multiple tickers only appears once
+  const seen = new Set();
+  const out = [];
+  for (const e of all) {
+    const key = (e.headline || '').toLowerCase().trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(e);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 export function clearDayNews() {
   state.news = {};
 }

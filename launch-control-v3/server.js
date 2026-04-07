@@ -254,6 +254,182 @@ app.get('/api/premarket', async (req, res) => {
   }
 });
 
+// ── RESEARCH / CONTROL CENTER ────────────────────────────────────────────────
+// Aggregator that powers /research dashboard. Returns market pulse, sector heat
+// map, top movers, watchlist, news feed, and macro events in one round trip.
+const RESEARCH_SECTOR_ETFS = [
+  { sym: 'XLK',  label: 'Technology' },
+  { sym: 'XLF',  label: 'Financials' },
+  { sym: 'XLV',  label: 'Health Care' },
+  { sym: 'XLE',  label: 'Energy' },
+  { sym: 'XLY',  label: 'Cons. Discretionary' },
+  { sym: 'XLP',  label: 'Cons. Staples' },
+  { sym: 'XLI',  label: 'Industrials' },
+  { sym: 'XLB',  label: 'Materials' },
+  { sym: 'XLU',  label: 'Utilities' },
+  { sym: 'XLC',  label: 'Comm. Services' },
+  { sym: 'XLRE', label: 'Real Estate' },
+];
+const RESEARCH_INDEX_ETFS = [
+  { sym: 'SPY', label: 'S&P 500' },
+  { sym: 'QQQ', label: 'Nasdaq 100' },
+  { sym: 'IWM', label: 'Russell 2000' },
+  { sym: 'DIA', label: 'Dow 30' },
+  { sym: 'SMH', label: 'Semis' },
+];
+const RESEARCH_WATCHLIST = ['SPY', 'QQQ', 'IWM', 'NVDA', 'TSLA', 'AAPL', 'MSFT', 'META', 'AMD', 'AMZN'];
+
+function pickSnapPrice(snap) {
+  return snap?.latestTrade?.p || snap?.latestQuote?.ap || snap?.minuteBar?.c || snap?.dailyBar?.c || 0;
+}
+
+function snapPctVsRef(snap, todayET) {
+  if (!snap) return null;
+  const px = pickSnapPrice(snap);
+  if (!px) return null;
+  // Mirror the refClose logic from startRestPoller: if dailyBar is dated today
+  // (ET), prevDailyBar.c is yesterday's close. Otherwise dailyBar IS yesterday.
+  let ref = snap.prevDailyBar?.c || 0;
+  if (snap.dailyBar?.t) {
+    const et = new Date(new Date(snap.dailyBar.t).toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const dailyET = `${et.getFullYear()}-${String(et.getMonth() + 1).padStart(2, '0')}-${String(et.getDate()).padStart(2, '0')}`;
+    ref = dailyET === todayET ? (snap.prevDailyBar?.c || 0) : (snap.dailyBar.c || 0);
+  } else if (snap.dailyBar) {
+    ref = snap.dailyBar.c || 0;
+  }
+  if (!ref) return null;
+  return (px - ref) / ref;
+}
+
+app.get('/api/research', async (req, res) => {
+  try {
+    const { getAllNews } = await import('./src/data/state.js');
+    const alpacaHdrs = {
+      'APCA-API-KEY-ID':     process.env.ALPACA_API_KEY,
+      'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY,
+    };
+    const dataUrl = process.env.ALPACA_DATA_URL || 'https://data.alpaca.markets';
+
+    const todayET = (() => {
+      const et = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      return `${et.getFullYear()}-${String(et.getMonth() + 1).padStart(2, '0')}-${String(et.getDate()).padStart(2, '0')}`;
+    })();
+
+    // Sector + index + watchlist symbols we always need fresh quotes for
+    const sectorSyms  = RESEARCH_SECTOR_ETFS.map(s => s.sym);
+    const indexSyms   = RESEARCH_INDEX_ETFS.map(s => s.sym);
+    const allRefSyms  = Array.from(new Set([...sectorSyms, ...indexSyms, ...RESEARCH_WATCHLIST]));
+
+    let refSnaps = {};
+    try {
+      const r = await axios.get(`${dataUrl}/v2/stocks/snapshots`, {
+        headers: alpacaHdrs,
+        params: { symbols: allRefSyms.join(','), feed: ALPACA_FEED },
+        timeout: 8000,
+      });
+      refSnaps = r.data || {};
+    } catch (err) {
+      // Non-fatal — fall back to whatever the poller cached
+    }
+
+    // Combine with the polled equity snapshots so we can compute movers across
+    // the full universe without an extra round trip.
+    const polled = global.latestSnaps || {};
+    const allSnaps = { ...polled, ...refSnaps };
+
+    // ── PULSE ──────────────────────────────────────────────────────────────
+    const indexes = RESEARCH_INDEX_ETFS.map(({ sym, label }) => {
+      const snap = allSnaps[sym];
+      return {
+        symbol: sym,
+        label,
+        price: pickSnapPrice(snap) || null,
+        changePct: snapPctVsRef(snap, todayET),
+      };
+    });
+    const vix = global.marketContext?.vix ?? null;
+    const regime = global.currentRegime || null;
+
+    // ── SECTOR HEAT MAP ────────────────────────────────────────────────────
+    const sectors = RESEARCH_SECTOR_ETFS.map(({ sym, label }) => {
+      const snap = allSnaps[sym];
+      return {
+        symbol: sym,
+        label,
+        price: pickSnapPrice(snap) || null,
+        changePct: snapPctVsRef(snap, todayET),
+      };
+    }).sort((a, b) => (b.changePct || 0) - (a.changePct || 0));
+
+    // ── WATCHLIST ──────────────────────────────────────────────────────────
+    const watchlist = RESEARCH_WATCHLIST.map((sym) => {
+      const snap = allSnaps[sym];
+      return {
+        symbol: sym,
+        price: pickSnapPrice(snap) || null,
+        changePct: snapPctVsRef(snap, todayET),
+        volume: snap?.dailyBar?.v || null,
+      };
+    });
+
+    // ── TOP MOVERS (from polled equity universe) ───────────────────────────
+    const moversAll = Object.entries(polled)
+      .map(([sym, snap]) => ({
+        symbol: sym,
+        price: pickSnapPrice(snap),
+        changePct: snapPctVsRef(snap, todayET),
+        volume: snap?.dailyBar?.v || 0,
+      }))
+      .filter(m => m.changePct != null && m.price && m.volume > 100000);
+    const gainers = [...moversAll].sort((a, b) => b.changePct - a.changePct).slice(0, 10);
+    const losers  = [...moversAll].sort((a, b) => a.changePct - b.changePct).slice(0, 10);
+    const mostActive = [...moversAll].sort((a, b) => b.volume - a.volume).slice(0, 10);
+
+    // ── NEWS FEED ──────────────────────────────────────────────────────────
+    const news = getAllNews(50).map(n => ({
+      ticker:    n.ticker,
+      headline:  n.headline,
+      catalyst:  n.catalyst || null,
+      polarity:  typeof n.polarity === 'number' ? n.polarity : null,
+      timestamp: n.timestamp,
+      source:    n.source || null,
+      url:       n.url || null,
+    }));
+
+    // ── MACRO / CALENDAR ───────────────────────────────────────────────────
+    const todayMacro = isHighImpactMacroDay();
+    const upcomingMacro = MACRO_EVENTS_2026
+      .filter(e => e.date >= todayET)
+      .slice(0, 8);
+
+    // ── STREAM HEALTH ──────────────────────────────────────────────────────
+    const streamHealth = {
+      bars:           global.streamStatus?.bars   || 'unknown',
+      news:           global.streamStatus?.news   || 'unknown',
+      lastSnapshotAt: global.latestSnapsAt        || null,
+    };
+
+    res.json({
+      generatedAt: new Date().toISOString(),
+      todayET,
+      pulse: {
+        indexes,
+        vix,
+        regime,
+        macroToday: todayMacro,
+      },
+      sectors,
+      watchlist,
+      movers: { gainers, losers, mostActive },
+      news,
+      macro: { today: todayMacro, upcoming: upcomingMacro },
+      streamHealth,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Record outcome
 app.post('/api/outcome', async (req, res) => {
   try {
@@ -671,6 +847,10 @@ app.get('/backtest', (req, res) => {
 // Serve consolidated validation dashboard
 app.get('/validation', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'validation.html'));
+});
+// Serve research / control center dashboard
+app.get('/research', (req, res) => {
+  res.sendFile(join(__dirname, 'public', 'research.html'));
 });
 
 // Get full validation results (MC + walk-forward + regime + sensitivity)
@@ -2033,6 +2213,9 @@ async function startRestPoller() {
         });
         Object.assign(allSnaps, res.data || {});
       }
+      // Expose latest snapshots to other endpoints (research dashboard, etc.)
+      global.latestSnaps   = allSnaps;
+      global.latestSnapsAt = new Date().toISOString();
 
       const mktRes = await axios.get(`${dataUrl}/v2/stocks/snapshots`, {
         headers: alpacaHdrs, params: { symbols: 'SPY,QQQ,SMH', feed: ALPACA_FEED }, timeout: 5000,
