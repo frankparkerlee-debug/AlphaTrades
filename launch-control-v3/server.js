@@ -2413,11 +2413,36 @@ async function startRestPoller() {
       }
 
       const mktRes = await axios.get(`${dataUrl}/v2/stocks/snapshots`, {
-        headers: alpacaHdrs, params: { symbols: 'SPY,QQQ', feed: ALPACA_FEED }, timeout: 5000,
+        headers: alpacaHdrs, params: { symbols: 'SPY,QQQ,SMH', feed: ALPACA_FEED }, timeout: 5000,
       });
       const mkt    = mktRes.data || {};
-      const spyPct = mkt.SPY ? ((mkt.SPY.latestTrade?.p||0)-(mkt.SPY.prevDailyBar?.c||0))/(mkt.SPY.prevDailyBar?.c||1) : 0;
-      const qqqPct = mkt.QQQ ? ((mkt.QQQ.latestTrade?.p||0)-(mkt.QQQ.prevDailyBar?.c||0))/(mkt.QQQ.prevDailyBar?.c||1) : 0;
+
+      // Pick the correct "previous regular session close" for change% calculations.
+      // Alpaca's prevDailyBar means "the bar before dailyBar". In premarket, before
+      // Alpaca rolls dailyBar to today, dailyBar is still yesterday and prevDailyBar
+      // is two days ago — comparing against that gives the wrong direction.
+      // If dailyBar is dated today (ET), prevDailyBar.c is yesterday's close.
+      // Otherwise dailyBar IS yesterday's close.
+      const todayET = (() => {
+        const et = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        return `${et.getFullYear()}-${String(et.getMonth()+1).padStart(2,'0')}-${String(et.getDate()).padStart(2,'0')}`;
+      })();
+      const refClose = (snap) => {
+        if (!snap?.dailyBar) return snap?.prevDailyBar?.c || 0;
+        const t = snap.dailyBar.t;
+        if (!t) return snap.prevDailyBar?.c || 0;
+        const et = new Date(new Date(t).toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        const dailyET = `${et.getFullYear()}-${String(et.getMonth()+1).padStart(2,'0')}-${String(et.getDate()).padStart(2,'0')}`;
+        return dailyET === todayET ? (snap.prevDailyBar?.c || 0) : (snap.dailyBar.c || 0);
+      };
+      const pctVs = (snap) => {
+        const ref = refClose(snap);
+        const px  = snap?.latestTrade?.p || snap?.latestQuote?.ap || 0;
+        return ref > 0 && px > 0 ? (px - ref) / ref : 0;
+      };
+      const spyPct = pctVs(mkt.SPY);
+      const qqqPct = pctVs(mkt.QQQ);
+      const smhPct = pctVs(mkt.SMH);
 
       // SPY bars for regime detection (last 3 minute bars)
       const spyBars = mkt.SPY ? [mkt.SPY.prevMinuteBar, mkt.SPY.minuteBar].filter(Boolean) : [];
@@ -2476,7 +2501,7 @@ async function startRestPoller() {
         console.log(`[REGIME] ${regime.regime} — ${regime.regimeNote}`);
       }
       global.currentRegime = regime;
-      global.marketContext = { spyPct, qqqPct, vix, updatedAt: new Date().toISOString() };
+      global.marketContext = { spyPct, qqqPct, smhPct, vix, updatedAt: new Date().toISOString() };
 
       // Update in-memory price cache for /api/prices
       for (const [t, snap] of Object.entries(allSnaps)) {
@@ -2484,7 +2509,7 @@ async function startRestPoller() {
         if (p) latestPrices[t] = p;
       }
 
-      console.log(`[POLL] ${Object.keys(allSnaps).length} snaps SPY=${(spyPct*100).toFixed(2)}% QQQ=${(qqqPct*100).toFixed(2)}% VIX=${vix} REGIME=${regime.regime}`);
+      console.log(`[POLL] ${Object.keys(allSnaps).length} snaps SPY=${(spyPct*100).toFixed(2)}% QQQ=${(qqqPct*100).toFixed(2)}% SMH=${(smhPct*100).toFixed(2)}% VIX=${vix} REGIME=${regime.regime}`);
 
       // Import intelligence functions
       const { analyzeLevels, analyzeTrend, gateSignal } = await import('./src/scoring/intelligence.js');

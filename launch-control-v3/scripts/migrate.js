@@ -179,9 +179,13 @@ async function migrate() {
         human_entry_price       DECIMAL(10,2),
         human_exit_price        DECIMAL(10,2),
         human_pnl_pct           DECIMAL(7,4),
-        human_notes             TEXT
+        human_notes             TEXT,
+
+        strategy                VARCHAR(50)
       )
     `);
+    // Backfill: ADD COLUMN IF NOT EXISTS for DBs created before strategy column was added
+    await client.query(`ALTER TABLE lc_v3.signals ADD COLUMN IF NOT EXISTS strategy VARCHAR(50)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_v3_sig_ticker ON lc_v3.signals(ticker)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_v3_sig_created ON lc_v3.signals(created_at DESC)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_v3_sig_grade ON lc_v3.signals(grade)`);
