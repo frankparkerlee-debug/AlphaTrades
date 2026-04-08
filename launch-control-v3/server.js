@@ -26,12 +26,7 @@ import { scanPostMacro } from './src/strategies/post-macro.js';
 import { scanFailedBreakdown } from './src/strategies/failed-breakdown.js';
 import {
   generateORBBreakoutSignals,
-  generateVWAPBounceSignals,
-  generateFirstPullbackSignals,
   generateGapFillSignals,
-  generatePowerHourMomentumSignals,
-  generateMacroReactionSignals,
-  generateSRBounceSignals,
   generateMomentumScalpSignals,
 } from './scripts/backtest/strategies/live-adapter.js';
 import { getRecentFlow } from './src/data/alpaca-streams.js';
@@ -3554,15 +3549,7 @@ async function startRestPoller() {
             }
 
             const dayData = { minuteBars: liveMins, etfMinuteBars: liveEtfMins, dailyBars: dailyBarsMap, vixByTime: {}, tradingDays: [todayStr] };
-            // MACRO_REACTION expects context.macroEvents[date] — inject today's
-            // macro event flag so it can fire when CPI/FOMC/NFP is happening.
-            const todayMacroEvent = isHighImpactMacroDay();
-            const liveContext = {
-              profiles,
-              intelligence: {},
-              tickers: Object.keys(profiles),
-              macroEvents: todayMacroEvent ? { [todayStr]: todayMacroEvent } : {},
-            };
+            const liveContext = { profiles, intelligence: {}, tickers: Object.keys(profiles) };
 
             // Inject ETF profiles so strategies can scan them
             for (const etf of ['SPY', 'QQQ', 'IWM']) {
@@ -3572,24 +3559,19 @@ async function startRestPoller() {
               if (liveEtfMins[etf] && !liveMins[etf]) liveMins[etf] = liveEtfMins[etf];
             }
 
-            // 7 research-backed strategies + MOMENTUM_SCALP. Together they
-            // cover the entire session -- no more dead windows after 10:30.
-            //   ORB_BREAKOUT     9:35-10:30   institutional order flow
-            //   GAP_FILL         9:40-9:45    overnight overreaction
-            //   MACRO_REACTION   9:45-10:00   post-event second wave
-            //   VWAP_BOUNCE      9:45-2:00    institutional fair-value anchor
-            //   FIRST_PULLBACK   9:45-11:00   momentum continuation
-            //   SR_BOUNCE        9:45-3:30    level convergence (broadest)
-            //   POWER_HOUR_MOM   3:00 check   EOD momentum continuation
-            //   MOMENTUM_SCALP   all day      ETF 0DTE scalping
+            // LIVE scanner runs ONLY strategies with a DEPLOY verdict from
+            // the latest backtest (2026-04-08 run). Other strategies
+            // (VWAP_BOUNCE, FIRST_PULLBACK, POWER_HOUR_MOMENTUM,
+            // MACRO_REACTION, SR_BOUNCE) live in live-adapter.js and are
+            // validated by strategy-runner.js, but do NOT fire on live
+            // capital until they pass Monte Carlo / OOS / WR gates.
+            //
+            //   ORB_BREAKOUT        9:35-10:30  WR 78.8% PF 2.94 MC 97.9% DEPLOY
+            //   GAP_FILL_REVERSION  9:40-9:45   WR 70.7% PF 1.91 MC 91.3% DEPLOY
+            //   MOMENTUM_SCALP      all day     WR 42.9% PF 1.48 MC 74.0% DEPLOY
             const stratFns = [
               { name: 'ORB_BREAKOUT',        fn: generateORBBreakoutSignals },
-              { name: 'VWAP_BOUNCE',         fn: generateVWAPBounceSignals },
-              { name: 'FIRST_PULLBACK',      fn: generateFirstPullbackSignals },
               { name: 'GAP_FILL_REVERSION',  fn: generateGapFillSignals },
-              { name: 'POWER_HOUR_MOMENTUM', fn: generatePowerHourMomentumSignals },
-              { name: 'MACRO_REACTION',      fn: generateMacroReactionSignals },
-              { name: 'SR_BOUNCE',           fn: generateSRBounceSignals },
               { name: 'MOMENTUM_SCALP',      fn: generateMomentumScalpSignals },
             ];
 
