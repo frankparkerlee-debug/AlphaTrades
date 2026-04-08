@@ -7,6 +7,7 @@ import { Pool } from 'pg';
 import cron from 'node-cron';
 import { createServer } from 'http';
 import { selectOptionsContract, getOptionsVolume, fetchContractQuote } from './src/options/contract-selector.js';
+import { scanUnusualFlow, DEFAULT_FLOW_UNIVERSE } from './src/options/flow-scanner.js';
 import { getNewsEvents, getTickerState } from './src/data/state.js';
 import { computeNewsScore } from './src/scoring/news.js';
 import { runMultiStrategyBacktest } from './scripts/backtest/strategy-runner.js';
@@ -97,6 +98,8 @@ app.use(express.static(join(__dirname, 'public')));
 // Signals — today's signals from lc_v3
 app.get('/api/signals', async (req, res) => {
   try {
+    // Fire-and-forget prime of strategy stats cache (non-blocking)
+    const stratStatsPromise = loadStrategyStats().catch(() => null);
     const result = await db.query(`
       SELECT
         s.signal_id, s.ticker, s.direction, s.grade, s.status,
@@ -189,6 +192,29 @@ app.get('/api/signals', async (req, res) => {
       analyst_price_target: s.analyst_price_target != null ? Number(s.analyst_price_target) : null,
       beta:              s.beta_30d != null ? Number(s.beta_30d) : null,
     }));
+
+    // Attach historical backtest stats per signal.strategy (non-blocking, best-effort)
+    const stratStats = await stratStatsPromise;
+    if (stratStats?.strategies) {
+      for (const sig of signals) {
+        const key = sig.strategy;
+        if (!key) continue;
+        const hs = stratStats.strategies[key];
+        if (!hs) continue;
+        sig.historicalStats = {
+          runDate: stratStats.runDate,
+          count: hs.count,
+          winRate: hs.winRate,
+          profitFactor: hs.profitFactor,
+          verdict: hs.verdict,
+          monteCarloPProfit: hs.monteCarloPProfit,
+          directionalAccuracy: hs.directionalAccuracy,
+          // grade-specific (if this signal's grade has been tested)
+          gradeStat: sig.grade && hs.byGrade?.[sig.grade] ? hs.byGrade[sig.grade] : null,
+        };
+      }
+    }
+
     res.json({ signals, count: signals.length });
   } catch (err) {
     console.error('Signals error:', err.message);
@@ -252,6 +278,160 @@ app.get('/api/premarket', async (req, res) => {
   } catch (err) {
     res.json({ briefing: null, error: err.message });
   }
+});
+
+// ── STRATEGY HISTORICAL STATS CACHE ──────────────────────────────────────────
+// Reads latest backtest_results row and exposes per-strategy win rate / verdict
+// so signal cards can show "historical edge" alongside the live signal.
+let strategyStatsCache = { at: 0, payload: null };
+const STRATEGY_STATS_TTL_MS = 10 * 60 * 1000;
+
+async function loadStrategyStats(force = false) {
+  const now = Date.now();
+  if (!force && strategyStatsCache.payload && (now - strategyStatsCache.at) < STRATEGY_STATS_TTL_MS) {
+    return strategyStatsCache.payload;
+  }
+  try {
+    const r = await db.query(`
+      SELECT run_date, start_date, end_date, results
+      FROM lc_v3.backtest_results
+      ORDER BY run_date DESC
+      LIMIT 1
+    `);
+    if (!r.rows.length) {
+      strategyStatsCache = { at: now, payload: { runDate: null, strategies: {} } };
+      return strategyStatsCache.payload;
+    }
+    const row = r.rows[0];
+    const results = row.results || {};
+    const byStrategy = results.byStrategy || {};
+    const reportCards = results.strategyReportCards || {};
+    const validation = results.strategyValidation || {};
+    const allSignals = Array.isArray(results.signals) ? results.signals : [];
+
+    // Build per-strategy, per-grade and per-regime breakdowns from signals[]
+    const grouped = {};
+    for (const sig of allSignals) {
+      const k = sig.strategy;
+      if (!k) continue;
+      if (!grouped[k]) grouped[k] = { byGrade: {}, byRegime: {}, total: 0, wins: 0 };
+      grouped[k].total++;
+      if ((sig.pnlPct || 0) > 0) grouped[k].wins++;
+      const g = sig.grade || '?';
+      if (!grouped[k].byGrade[g]) grouped[k].byGrade[g] = { count: 0, wins: 0, totalPnl: 0 };
+      grouped[k].byGrade[g].count++;
+      if ((sig.pnlPct || 0) > 0) grouped[k].byGrade[g].wins++;
+      grouped[k].byGrade[g].totalPnl += sig.pnlPct || 0;
+      const reg = sig.regime || 'UNKNOWN';
+      if (!grouped[k].byRegime[reg]) grouped[k].byRegime[reg] = { count: 0, wins: 0 };
+      grouped[k].byRegime[reg].count++;
+      if ((sig.pnlPct || 0) > 0) grouped[k].byRegime[reg].wins++;
+    }
+
+    const strategies = {};
+    const allStratKeys = new Set([
+      ...Object.keys(byStrategy),
+      ...Object.keys(reportCards),
+      ...Object.keys(grouped),
+    ]);
+    for (const name of allStratKeys) {
+      const base = byStrategy[name] || {};
+      const card = reportCards[name] || {};
+      const val = validation[name] || {};
+      const g = grouped[name] || { byGrade: {}, byRegime: {} };
+      const byGradeOut = {};
+      for (const [grade, gv] of Object.entries(g.byGrade || {})) {
+        byGradeOut[grade] = {
+          count: gv.count,
+          winRate: gv.count ? Math.round((100 * gv.wins) / gv.count) : null,
+          avgPnlPct: gv.count ? +(gv.totalPnl / gv.count).toFixed(2) : null,
+        };
+      }
+      const byRegimeOut = {};
+      for (const [reg, rv] of Object.entries(g.byRegime || {})) {
+        byRegimeOut[reg] = {
+          count: rv.count,
+          winRate: rv.count ? Math.round((100 * rv.wins) / rv.count) : null,
+        };
+      }
+      strategies[name] = {
+        count: base.count ?? g.total ?? 0,
+        winRate: base.winRate != null ? +base.winRate.toFixed(1) : null,
+        profitFactor: base.profitFactor != null ? +base.profitFactor.toFixed(2) : null,
+        avgHoldMinutes: base.avgHoldMinutes ?? null,
+        totalPnl: base.totalPnl ?? null,
+        verdict: card.verdict?.decision || val.verdict || null,
+        monteCarloPProfit: card.validation?.monteCarlo ?? null,
+        outOfSample: card.validation?.outOfSample ?? null,
+        pValue: card.validation?.statisticalTests?.pValue ?? null,
+        directionalAccuracy: card.phases?.direction?.dirCorrectPct ?? null,
+        exitEfficiency: card.phases?.exit?.avgEfficiency ?? null,
+        strengths: card.verdict?.strengths || [],
+        weaknesses: card.verdict?.weaknesses || [],
+        byGrade: byGradeOut,
+        byRegime: byRegimeOut,
+      };
+    }
+
+    const payload = {
+      runDate: row.run_date?.toISOString?.() || row.run_date,
+      startDate: row.start_date?.toISOString?.() || row.start_date,
+      endDate: row.end_date?.toISOString?.() || row.end_date,
+      strategies,
+    };
+    strategyStatsCache = { at: now, payload };
+    return payload;
+  } catch (err) {
+    console.error('loadStrategyStats error:', err.message);
+    return strategyStatsCache.payload || { runDate: null, strategies: {} };
+  }
+}
+
+app.get('/api/strategy-stats', async (req, res) => {
+  const force = req.query.force === '1';
+  const payload = await loadStrategyStats(force);
+  res.json(payload);
+});
+
+// ── UNUSUAL OPTIONS FLOW CACHE ───────────────────────────────────────────────
+// Scans a liquid-options watchlist and surfaces vol/OI outliers (whale trades).
+// Hot cache so the endpoint doesn't re-hit Alpaca on every dashboard refresh.
+let optionsFlowCache = { at: 0, payload: null, inFlight: null };
+const OPTIONS_FLOW_TTL_MS = 60 * 1000;
+
+async function loadOptionsFlow(force = false) {
+  const now = Date.now();
+  if (!force && optionsFlowCache.payload && (now - optionsFlowCache.at) < OPTIONS_FLOW_TTL_MS) {
+    return { ...optionsFlowCache.payload, cached: true };
+  }
+  // Coalesce concurrent callers onto a single scan
+  if (optionsFlowCache.inFlight) return optionsFlowCache.inFlight;
+
+  optionsFlowCache.inFlight = (async () => {
+    try {
+      const payload = await scanUnusualFlow(DEFAULT_FLOW_UNIVERSE);
+      optionsFlowCache = { at: Date.now(), payload, inFlight: null };
+      return { ...payload, cached: false };
+    } catch (err) {
+      console.error('loadOptionsFlow error:', err.message);
+      optionsFlowCache.inFlight = null;
+      return optionsFlowCache.payload
+        ? { ...optionsFlowCache.payload, cached: true, error: err.message }
+        : { generatedAt: new Date().toISOString(), tickers: [], topUnusual: [], error: err.message };
+    }
+  })();
+  return optionsFlowCache.inFlight;
+}
+
+app.get('/api/research/options-flow', async (req, res) => {
+  const force = req.query.force === '1';
+  const peek = req.query.peek === '1';
+  if (peek) {
+    if (optionsFlowCache.payload) return res.json({ ...optionsFlowCache.payload, cached: true });
+    return res.json({ empty: true });
+  }
+  const payload = await loadOptionsFlow(force);
+  res.json(payload);
 });
 
 // ── RESEARCH / CONTROL CENTER ────────────────────────────────────────────────
@@ -464,6 +644,296 @@ app.get('/api/research', async (req, res) => {
   }
 });
 
+// ── EARNINGS CALENDAR ────────────────────────────────────────────────────────
+// Reads from ticker_intelligence (populated by scripts/seed-earnings.js).
+// Returns upcoming earnings for tracked universe, sorted by date.
+app.get('/api/earnings/upcoming', async (req, res) => {
+  try {
+    const days = Math.max(1, Math.min(60, parseInt(req.query.days) || 14));
+    const result = await db.query(`
+      SELECT
+        ti.ticker,
+        ti.earnings_date,
+        ti.earnings_days_away,
+        ti.earnings_avg_move_pct,
+        ti.earnings_beat_rate,
+        ti.iv_rank_30d,
+        ti.iv_percentile,
+        ti.analyst_price_target,
+        ti.upside_to_target_pct,
+        ti.beta_30d,
+        ep.company_name
+      FROM lc_v3.ticker_intelligence ti
+      LEFT JOIN lc_v3.equity_profiles ep ON ep.ticker = ti.ticker
+      WHERE ti.earnings_date IS NOT NULL
+        AND ti.earnings_date >= CURRENT_DATE
+        AND ti.earnings_date <= CURRENT_DATE + ($1::int * INTERVAL '1 day')
+      ORDER BY ti.earnings_date ASC, ti.ticker ASC
+    `, [days]);
+
+    const rows = result.rows.map(r => ({
+      ticker:             r.ticker,
+      company:            r.company_name || null,
+      date:               r.earnings_date ? r.earnings_date.toISOString().slice(0, 10) : null,
+      daysAway:           r.earnings_days_away != null ? Number(r.earnings_days_away) : null,
+      avgMovePct:         r.earnings_avg_move_pct != null ? Number(r.earnings_avg_move_pct) : null,
+      beatRate:           r.earnings_beat_rate != null ? Number(r.earnings_beat_rate) : null,
+      ivRank:             r.iv_rank_30d != null ? Number(r.iv_rank_30d) : null,
+      ivPercentile:       r.iv_percentile != null ? Number(r.iv_percentile) : null,
+      analystPriceTarget: r.analyst_price_target != null ? Number(r.analyst_price_target) : null,
+      upsidePct:          r.upside_to_target_pct != null ? Number(r.upside_to_target_pct) : null,
+      beta:               r.beta_30d != null ? Number(r.beta_30d) : null,
+    }));
+    res.json({ days, count: rows.length, earnings: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── TICKER DEEP DIVE ─────────────────────────────────────────────────────
+// One round-trip aggregate for the click-through modal. Pulls quote, intelligence,
+// recent signals (today + historical), backtest stats, news, options flow, and
+// company profile so the modal can render without chaining requests.
+app.get('/api/research/ticker/:ticker', async (req, res) => {
+  try {
+    const ticker = req.params.ticker.toUpperCase().replace(/[^A-Z]/g, '');
+    if (!ticker) return res.status(400).json({ error: 'invalid ticker' });
+
+    const todayET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))
+      .toISOString().split('T')[0];
+
+    const [intelRes, liveSignals, historicalSignals, newsEvents, stratStats] = await Promise.all([
+      db.query(`
+        SELECT
+          ti.ticker,
+          ti.earnings_date, ti.earnings_days_away, ti.earnings_avg_move_pct, ti.earnings_beat_rate,
+          ti.iv_rank_30d, ti.iv_percentile, ti.put_call_skew,
+          ti.short_interest_pct, ti.insider_net_30d, ti.insider_net_90d, ti.insider_signal,
+          ti.analyst_consensus, ti.analyst_price_target, ti.upside_to_target_pct,
+          ti.beta_30d, ti.historical_earnings,
+          ep.company_name, ep.sector_etf, ep.exchange_etf,
+          ep.atr_20d, ep.avg_daily_range_pct, ep.options_liquidity_score,
+          ep.beta_spy, ep.beta_qqq, ep.momentum_persistence, ep.news_fade_rate
+        FROM lc_v3.ticker_intelligence ti
+        LEFT JOIN lc_v3.equity_profiles ep ON ep.ticker = ti.ticker
+        WHERE ti.ticker = $1
+      `, [ticker]).catch(() => ({ rows: [] })),
+
+      db.query(`
+        SELECT signal_id, ticker, direction, grade, status, strategy,
+               composite_raw, price_at_signal, relative_volume, confluence_score,
+               spy_change_pct, created_at, human_taken, human_pnl_pct
+        FROM lc_v3.signals
+        WHERE ticker = $1
+          AND DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
+        ORDER BY created_at DESC
+        LIMIT 20
+      `, [ticker]).catch(() => ({ rows: [] })),
+
+      db.query(`
+        SELECT signal_id, ticker, direction, grade, strategy,
+               composite_raw, price_at_signal, created_at,
+               human_taken, human_pnl_pct
+        FROM lc_v3.signals
+        WHERE ticker = $1
+          AND DATE(created_at AT TIME ZONE 'America/New_York') < CURRENT_DATE
+          AND human_taken IS NOT NULL
+        ORDER BY created_at DESC
+        LIMIT 15
+      `, [ticker]).catch(() => ({ rows: [] })),
+
+      Promise.resolve(getNewsEvents(ticker)),
+      loadStrategyStats().catch(() => null),
+    ]);
+
+    // Latest snapshot from poller
+    const snap = (global.latestSnaps || {})[ticker] || null;
+    const quote = snap ? {
+      price: pickSnapPrice(snap),
+      changePct: snapPctVsRef(snap, todayET),
+      bid: snap.latestQuote?.bp || null,
+      ask: snap.latestQuote?.ap || null,
+      volume: snap.dailyBar?.v || 0,
+      dayHigh: snap.dailyBar?.h || null,
+      dayLow:  snap.dailyBar?.l || null,
+      prevClose: snap.prevDailyBar?.c || null,
+      asOf: global.latestSnapsAt || null,
+    } : null;
+
+    const intel = intelRes.rows[0] || null;
+    const profile = intel ? {
+      ticker,
+      companyName: intel.company_name || null,
+      sectorEtf:  intel.sector_etf || null,
+      exchangeEtf: intel.exchange_etf || null,
+      atr20d: intel.atr_20d != null ? Number(intel.atr_20d) : null,
+      avgDailyRangePct: intel.avg_daily_range_pct != null ? Number(intel.avg_daily_range_pct) : null,
+      optionsLiquidityScore: intel.options_liquidity_score != null ? Number(intel.options_liquidity_score) : null,
+      betaSpy: intel.beta_spy != null ? Number(intel.beta_spy) : null,
+      betaQqq: intel.beta_qqq != null ? Number(intel.beta_qqq) : null,
+      momentumPersistence: intel.momentum_persistence != null ? Number(intel.momentum_persistence) : null,
+      newsFadeRate: intel.news_fade_rate != null ? Number(intel.news_fade_rate) : null,
+    } : { ticker, companyName: null };
+
+    const intelligence = intel ? {
+      earningsDate: intel.earnings_date ? intel.earnings_date.toISOString().slice(0, 10) : null,
+      earningsDaysAway: intel.earnings_days_away,
+      earningsAvgMovePct: intel.earnings_avg_move_pct != null ? Number(intel.earnings_avg_move_pct) : null,
+      earningsBeatRate: intel.earnings_beat_rate != null ? Number(intel.earnings_beat_rate) : null,
+      ivRank: intel.iv_rank_30d != null ? Number(intel.iv_rank_30d) : null,
+      ivPercentile: intel.iv_percentile != null ? Number(intel.iv_percentile) : null,
+      putCallSkew: intel.put_call_skew != null ? Number(intel.put_call_skew) : null,
+      shortInterestPct: intel.short_interest_pct != null ? Number(intel.short_interest_pct) : null,
+      insiderNet30d: intel.insider_net_30d != null ? Number(intel.insider_net_30d) : null,
+      insiderNet90d: intel.insider_net_90d != null ? Number(intel.insider_net_90d) : null,
+      insiderSignal: intel.insider_signal || null,
+      analystConsensus: intel.analyst_consensus || null,
+      analystPriceTarget: intel.analyst_price_target != null ? Number(intel.analyst_price_target) : null,
+      upsideToTargetPct: intel.upside_to_target_pct != null ? Number(intel.upside_to_target_pct) : null,
+      beta30d: intel.beta_30d != null ? Number(intel.beta_30d) : null,
+    } : null;
+
+    // Compute historical WR from signal outcomes actually taken
+    const histSigs = historicalSignals.rows;
+    let histStats = null;
+    if (histSigs.length > 0) {
+      const taken = histSigs.filter(s => s.human_taken === true);
+      const wins = taken.filter(s => Number(s.human_pnl_pct) > 0).length;
+      const avgPnl = taken.length
+        ? taken.reduce((a, s) => a + (Number(s.human_pnl_pct) || 0), 0) / taken.length
+        : null;
+      histStats = {
+        totalSignals: histSigs.length,
+        takenCount: taken.length,
+        winRate: taken.length ? Math.round((100 * wins) / taken.length) : null,
+        avgPnlPct: avgPnl != null ? +avgPnl.toFixed(2) : null,
+      };
+    }
+
+    // Backtest strategy slice — find which strategies in the latest backtest
+    // fired on this ticker specifically
+    let backtestByStrategy = null;
+    try {
+      const bt = await db.query(`
+        SELECT results FROM lc_v3.backtest_results
+        ORDER BY run_date DESC LIMIT 1
+      `);
+      if (bt.rows.length && Array.isArray(bt.rows[0].results?.signals)) {
+        const sigs = bt.rows[0].results.signals.filter(s => s.ticker === ticker);
+        if (sigs.length) {
+          const byStrat = {};
+          for (const s of sigs) {
+            const k = s.strategy || 'UNKNOWN';
+            if (!byStrat[k]) byStrat[k] = { count: 0, wins: 0, totalPnl: 0 };
+            byStrat[k].count++;
+            if ((s.pnlPct || 0) > 0) byStrat[k].wins++;
+            byStrat[k].totalPnl += s.pnlPct || 0;
+          }
+          backtestByStrategy = Object.entries(byStrat).map(([strategy, v]) => ({
+            strategy,
+            count: v.count,
+            winRate: Math.round((100 * v.wins) / v.count),
+            avgPnlPct: +(v.totalPnl / v.count).toFixed(2),
+          }));
+        }
+      }
+    } catch (e) {
+      // non-fatal
+    }
+
+    // Options flow snapshot for this ticker (if in cache)
+    let optionsFlow = null;
+    if (optionsFlowCache?.payload?.tickers) {
+      const tf = optionsFlowCache.payload.tickers.find(t => t.ticker === ticker);
+      if (tf) {
+        optionsFlow = {
+          asOf: optionsFlowCache.payload.generatedAt,
+          bias: tf.bias,
+          callNotional: tf.callNotional,
+          putNotional: tf.putNotional,
+          cpRatio: tf.cpRatio,
+          unusualCount: tf.unusualCount,
+          topContracts: tf.topContracts || [],
+        };
+      }
+    }
+
+    res.json({
+      ticker,
+      generatedAt: new Date().toISOString(),
+      profile,
+      quote,
+      intelligence,
+      liveSignals: liveSignals.rows.map(s => ({
+        signalId: s.signal_id?.toString(),
+        direction: s.direction,
+        grade: s.grade,
+        status: s.status,
+        strategy: s.strategy,
+        composite: Number(s.composite_raw) || 0,
+        priceAtSignal: s.price_at_signal != null ? Number(s.price_at_signal) : null,
+        relVolume: s.relative_volume != null ? Number(s.relative_volume) : null,
+        confluence: Number(s.confluence_score) || 0,
+        spyChgPct: s.spy_change_pct != null ? Number(s.spy_change_pct) : null,
+        createdAt: s.created_at?.toISOString?.() || null,
+        taken: s.human_taken,
+        pnlPct: s.human_pnl_pct != null ? Number(s.human_pnl_pct) : null,
+      })),
+      historicalSignals: histSigs.slice(0, 10).map(s => ({
+        direction: s.direction, grade: s.grade, strategy: s.strategy,
+        composite: Number(s.composite_raw) || 0,
+        priceAtSignal: s.price_at_signal != null ? Number(s.price_at_signal) : null,
+        createdAt: s.created_at?.toISOString?.() || null,
+        taken: s.human_taken,
+        pnlPct: s.human_pnl_pct != null ? Number(s.human_pnl_pct) : null,
+      })),
+      historicalStats: histStats,
+      backtestByStrategy,
+      optionsFlow,
+      news: (newsEvents || []).slice(0, 10).map(n => ({
+        headline: n.headline,
+        source: n.source,
+        timestamp: n.timestamp,
+        polarity: n.polarity,
+        catalyst: n.catalyst,
+        url: n.url,
+      })),
+      // strategyStats lookup so the modal can show the trader's edge
+      // per-strategy for ALL strategies this ticker might qualify for
+      strategyStats: stratStats?.strategies || {},
+      earningsHistory: Array.isArray(intel?.historical_earnings) ? intel.historical_earnings.slice(0, 8) : [],
+    });
+  } catch (err) {
+    console.error('ticker deep dive error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Per-ticker earnings history drill-down
+app.get('/api/earnings/history/:ticker', async (req, res) => {
+  try {
+    const ticker = req.params.ticker.toUpperCase();
+    const result = await db.query(`
+      SELECT historical_earnings, earnings_date, earnings_avg_move_pct, earnings_beat_rate
+      FROM lc_v3.ticker_intelligence
+      WHERE ticker = $1
+    `, [ticker]);
+    if (!result.rows.length) return res.json({ ticker, history: [], summary: null });
+    const row = result.rows[0];
+    res.json({
+      ticker,
+      summary: {
+        nextDate:    row.earnings_date ? row.earnings_date.toISOString().slice(0, 10) : null,
+        avgMovePct:  row.earnings_avg_move_pct != null ? Number(row.earnings_avg_move_pct) : null,
+        beatRate:    row.earnings_beat_rate != null ? Number(row.earnings_beat_rate) : null,
+      },
+      history: row.historical_earnings || [],
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── AI INSIGHTS (Claude) ─────────────────────────────────────────────────────
 // Uses the same aggregate as /api/research and asks Claude for a directional
 // read + 2-4 trade ideas grounded in the news/sentiment/sector posture.
@@ -583,6 +1053,164 @@ Rules:
     researchInsightsCache = { at: Date.now(), payload };
     res.json({ ...payload, cached: false });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── RESEARCH CHAT ─────────────────────────────────────────────────────────
+// Conversational assistant that can answer questions about live signals,
+// historical strategy performance, market context, and options flow.
+// Rebuilds context on every request (cheap relative to the LLM call).
+app.post('/api/research/chat', async (req, res) => {
+  try {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
+    }
+    const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
+    if (messages.length === 0) {
+      return res.status(400).json({ error: 'messages array required' });
+    }
+    // Sanity-check shape: each entry needs role + content, cap history at 20 turns
+    const cleanMessages = messages
+      .filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
+      .slice(-20)
+      .map(m => ({ role: m.role, content: m.content.trim().slice(0, 4000) }));
+    if (cleanMessages.length === 0 || cleanMessages[cleanMessages.length - 1].role !== 'user') {
+      return res.status(400).json({ error: 'conversation must end with a user turn' });
+    }
+
+    // Gather context in parallel
+    const [research, stratStats, liveSignalsResult] = await Promise.all([
+      buildResearchAggregate().catch(() => null),
+      loadStrategyStats().catch(() => null),
+      db.query(`
+        SELECT s.signal_id, s.ticker, s.direction, s.grade, s.status, s.strategy,
+               s.composite_raw, s.price_at_signal, s.spy_change_pct, s.relative_volume,
+               s.confluence_score, s.created_at, s.human_taken, s.human_pnl_pct
+        FROM lc_v3.signals s
+        WHERE DATE(s.created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
+        ORDER BY s.created_at DESC
+        LIMIT 30
+      `).catch(() => ({ rows: [] })),
+    ]);
+
+    // Compact market context
+    const ctx = {};
+    if (research) {
+      ctx.market = {
+        asOf: research.generatedAt,
+        regime: research.pulse?.regime || null,
+        vix: research.pulse?.vix || null,
+        macro: research.pulse?.macroLabel || null,
+        indexes: (research.pulse?.indexes || []).map(i => ({
+          sym: i.symbol,
+          chgPct: i.changePct != null ? +(i.changePct * 100).toFixed(2) : null,
+        })),
+        sectors: (research.sectors || []).map(s => ({
+          sym: s.symbol, label: s.label,
+          chgPct: s.changePct != null ? +(s.changePct * 100).toFixed(2) : null,
+        })),
+        topGainers: (research.movers?.gainers || []).slice(0, 6).map(m => ({
+          sym: m.symbol, chgPct: +(m.changePct * 100).toFixed(2),
+        })),
+        topLosers: (research.movers?.losers || []).slice(0, 6).map(m => ({
+          sym: m.symbol, chgPct: +(m.changePct * 100).toFixed(2),
+        })),
+        news: (research.news || []).slice(0, 15).map(n => ({
+          ticker: n.ticker, headline: n.headline, polarity: n.polarity, catalyst: n.catalyst,
+        })),
+      };
+    }
+    if (stratStats?.strategies) {
+      ctx.strategyStats = {
+        runDate: stratStats.runDate,
+        strategies: Object.fromEntries(
+          Object.entries(stratStats.strategies).map(([k, v]) => [k, {
+            count: v.count,
+            winRate: v.winRate,
+            profitFactor: v.profitFactor,
+            verdict: v.verdict,
+            monteCarloPProfit: v.monteCarloPProfit,
+            directionalAccuracy: v.directionalAccuracy,
+            byGrade: v.byGrade,
+          }])
+        ),
+      };
+    }
+    if (liveSignalsResult?.rows?.length) {
+      ctx.liveSignals = liveSignalsResult.rows.map(s => ({
+        ticker: s.ticker,
+        direction: s.direction,
+        grade: s.grade,
+        strategy: s.strategy,
+        composite: Number(s.composite_raw) || 0,
+        status: s.status,
+        entryPrice: Number(s.price_at_signal) || null,
+        spyChgPct: s.spy_change_pct != null ? +(Number(s.spy_change_pct) * 100).toFixed(2) : null,
+        relVolume: s.relative_volume != null ? +Number(s.relative_volume).toFixed(2) : null,
+        confluence: Number(s.confluence_score) || 0,
+        takenByUser: !!s.human_taken,
+        userPnlPct: s.human_pnl_pct != null ? +Number(s.human_pnl_pct).toFixed(2) : null,
+        createdAt: s.created_at?.toISOString?.() || null,
+      }));
+    }
+    // Best-effort options flow if already cached
+    if (optionsFlowCache?.payload?.tickers?.length) {
+      ctx.optionsFlow = {
+        asOf: optionsFlowCache.payload.generatedAt,
+        topTickers: optionsFlowCache.payload.tickers.slice(0, 8).map(t => ({
+          ticker: t.ticker,
+          bias: t.bias,
+          callNotional: t.callNotional,
+          putNotional: t.putNotional,
+          cpRatio: t.cpRatio,
+          unusualCount: t.unusualCount,
+        })),
+      };
+    }
+
+    const systemPrompt = `You are a senior options trading analyst embedded in AlphaTrades Launch Control, a dashboard for a discretionary scalper trading single-leg directional options on a $5-7.5K cash account.
+
+You answer questions from the trader about:
+- Live signals currently on screen (their setups, grades, whether to take them)
+- Historical strategy performance from recent backtests (win rates, edge)
+- Market context (regime, sector posture, news flow, unusual options flow)
+- Tactical execution (entry/exit, sizing, risk)
+
+Ground every answer in the CONTEXT below. When the user asks about a signal or ticker, find it in \`liveSignals\` or the market data and cite specifics (grade, composite, strategy, price, SPY direction, etc.). When they ask about a strategy's edge, cite \`strategyStats\` numbers directly (win rate, profit factor, MC P(profit), verdict). If the answer isn't in the context, say so — don't invent signals, prices, or stats.
+
+Style: direct, opinionated, terse. No hedging. Use monospace-style formatting for numbers and tickers. Short paragraphs. Bullet lists when comparing multiple items. Never use emojis.
+
+The trader is experienced — skip disclaimers and basic definitions. If a setup looks weak, say why. If it looks strong, say why. Suggest concrete action when appropriate.
+
+CONTEXT:
+${JSON.stringify(ctx, null, 2)}`;
+
+    const Anthropic = (await import('@anthropic-ai/sdk')).default;
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 1200,
+      system: systemPrompt,
+      messages: cleanMessages,
+    });
+
+    const text = response.content?.[0]?.text || '';
+    res.json({
+      role: 'assistant',
+      content: text,
+      model: 'claude-sonnet-4-6',
+      contextSize: {
+        liveSignals: ctx.liveSignals?.length || 0,
+        strategies: Object.keys(ctx.strategyStats?.strategies || {}).length,
+        hasMarket: !!ctx.market,
+        hasFlow: !!ctx.optionsFlow,
+      },
+      usage: response.usage || null,
+    });
+  } catch (err) {
+    console.error('research chat error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

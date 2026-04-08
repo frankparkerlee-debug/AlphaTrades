@@ -1046,6 +1046,40 @@ function buildStrategyDetails(s, strategy) {
   return '';
 }
 
+// ── HISTORICAL EDGE ──────────────────────────────────────────────────
+// Renders per-strategy historical win rate / verdict from latest backtest.
+function buildHistoricalEdge(s) {
+  const hs = s.historicalStats;
+  if (!hs || !hs.count || !hs.winRate) return '';
+  const verdict = hs.verdict || '';
+  const verdictColor =
+    verdict === 'DEPLOY' ? 'var(--green)' :
+    verdict === 'REFINE' ? 'var(--amber)' :
+    verdict === 'SHELVE' ? 'var(--red)'   : 'var(--text3)';
+  const wrColor =
+    hs.winRate >= 60 ? 'var(--green)' :
+    hs.winRate >= 50 ? 'var(--amber)' : 'var(--red)';
+  const pf = hs.profitFactor != null ? `PF ${hs.profitFactor.toFixed(2)}` : '';
+  const mc = hs.monteCarloPProfit != null ? `MC ${Math.round(hs.monteCarloPProfit)}%` : '';
+  const gs = hs.gradeStat;
+  const gradeLine = (gs && gs.count >= 3 && gs.winRate != null)
+    ? ` · <span style="color:var(--text2)">${s.grade} grade: ${gs.winRate}% on ${gs.count}</span>`
+    : '';
+  const verdictBadge = verdict
+    ? `<span style="color:${verdictColor};border:1px solid ${verdictColor};border-radius:2px;padding:1px 5px;font-size:9px;font-weight:700;letter-spacing:0.5px">${verdict}</span>`
+    : '';
+  return `
+    <div class="hist-edge-row" style="display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:9px;color:var(--text3);background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:3px;padding:5px 8px;margin:6px 0;letter-spacing:0.3px">
+      <span style="color:var(--text3);font-weight:600">EDGE</span>
+      <span style="color:${wrColor};font-weight:700">${hs.winRate}% WR</span>
+      <span style="color:var(--text2)">on ${hs.count}</span>
+      ${pf ? `<span style="color:var(--text2)">${pf}</span>` : ''}
+      ${mc ? `<span style="color:var(--text2)">${mc}</span>` : ''}
+      ${verdictBadge}
+      ${gradeLine}
+    </div>`;
+}
+
 function buildCard(s) {
   const g = gc(s.grade);
   const c = col(s.grade);
@@ -1182,6 +1216,7 @@ function buildCard(s) {
       ${s.price_at_signal!=null ? `<span class="metric">$${s.price_at_signal.toFixed(2)}</span>` : ''}
     </div>
     <div class="tags">${tags.join('')}${s.confirmation_count > 1 ? `<span class="tag" style="background:rgba(245,158,11,0.15);color:var(--amber);border:1px solid var(--amber)">x${s.confirmation_count}</span>` : ''}</div>
+    ${buildHistoricalEdge(s)}
     ${propCtx}
     ${s.news_headline ? (() => {
       const isFreshnessNote = s.news_headline.includes('Risk:') || s.news_headline.includes('From Open:');
