@@ -26,7 +26,12 @@ import { scanPostMacro } from './src/strategies/post-macro.js';
 import { scanFailedBreakdown } from './src/strategies/failed-breakdown.js';
 import {
   generateORBBreakoutSignals,
+  generateVWAPBounceSignals,
+  generateFirstPullbackSignals,
   generateGapFillSignals,
+  generatePowerHourMomentumSignals,
+  generateMacroReactionSignals,
+  generateSRBounceSignals,
   generateMomentumScalpSignals,
 } from './scripts/backtest/strategies/live-adapter.js';
 import { getRecentFlow } from './src/data/alpaca-streams.js';
@@ -3549,7 +3554,15 @@ async function startRestPoller() {
             }
 
             const dayData = { minuteBars: liveMins, etfMinuteBars: liveEtfMins, dailyBars: dailyBarsMap, vixByTime: {}, tradingDays: [todayStr] };
-            const liveContext = { profiles, intelligence: {}, tickers: Object.keys(profiles) };
+            // MACRO_REACTION expects context.macroEvents[date] — inject today's
+            // macro event flag so it can fire when CPI/FOMC/NFP is happening.
+            const todayMacroEvent = isHighImpactMacroDay();
+            const liveContext = {
+              profiles,
+              intelligence: {},
+              tickers: Object.keys(profiles),
+              macroEvents: todayMacroEvent ? { [todayStr]: todayMacroEvent } : {},
+            };
 
             // Inject ETF profiles so strategies can scan them
             for (const etf of ['SPY', 'QQQ', 'IWM']) {
@@ -3559,11 +3572,25 @@ async function startRestPoller() {
               if (liveEtfMins[etf] && !liveMins[etf]) liveMins[etf] = liveEtfMins[etf];
             }
 
-            // 3 backtested strategies — POWER_HOUR SHELVE'd (23% WR, 0.34 PF)
+            // 7 research-backed strategies + MOMENTUM_SCALP. Together they
+            // cover the entire session -- no more dead windows after 10:30.
+            //   ORB_BREAKOUT     9:35-10:30   institutional order flow
+            //   GAP_FILL         9:40-9:45    overnight overreaction
+            //   MACRO_REACTION   9:45-10:00   post-event second wave
+            //   VWAP_BOUNCE      9:45-2:00    institutional fair-value anchor
+            //   FIRST_PULLBACK   9:45-11:00   momentum continuation
+            //   SR_BOUNCE        9:45-3:30    level convergence (broadest)
+            //   POWER_HOUR_MOM   3:00 check   EOD momentum continuation
+            //   MOMENTUM_SCALP   all day      ETF 0DTE scalping
             const stratFns = [
-              { name: 'ORB_BREAKOUT', fn: generateORBBreakoutSignals },         // DEPLOY: 68% WR, 1.97 PF
-              { name: 'GAP_FILL_REVERSION', fn: generateGapFillSignals },       // 100% directional
-              { name: 'MOMENTUM_SCALP', fn: generateMomentumScalpSignals },     // 92.7% directional
+              { name: 'ORB_BREAKOUT',        fn: generateORBBreakoutSignals },
+              { name: 'VWAP_BOUNCE',         fn: generateVWAPBounceSignals },
+              { name: 'FIRST_PULLBACK',      fn: generateFirstPullbackSignals },
+              { name: 'GAP_FILL_REVERSION',  fn: generateGapFillSignals },
+              { name: 'POWER_HOUR_MOMENTUM', fn: generatePowerHourMomentumSignals },
+              { name: 'MACRO_REACTION',      fn: generateMacroReactionSignals },
+              { name: 'SR_BOUNCE',           fn: generateSRBounceSignals },
+              { name: 'MOMENTUM_SCALP',      fn: generateMomentumScalpSignals },
             ];
 
             const barCount = Object.keys(liveMins).reduce((s, t) => s + Object.keys(liveMins[t]).length, 0);

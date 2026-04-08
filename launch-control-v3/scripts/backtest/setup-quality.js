@@ -193,6 +193,27 @@ export const SETUP_RUBRICS = {
     ],
   },
 
+  SR_BOUNCE: {
+    factors: [
+      { name: 'convergence_count', weight: 30, score: (m) => {
+        const cc = m.convergence_count || 0;
+        if (cc >= 4) return 100;
+        if (cc >= 3) return 85;
+        if (cc >= 2) return 65;
+        return 20;
+      }},
+      { name: 'volume_ratio', weight: 20, score: (m) => {
+        const vr = m.volume_ratio || 0;
+        if (vr >= 1.5) return 100;
+        if (vr >= 1.2) return 70;
+        return 30;
+      }},
+      { name: 'candle_type', weight: 15, score: (m) => scoreCandle(m.candle_type) },
+      { name: 'engulfing', weight: 10, score: (m) => scoreEngulfing(m.engulfing || m.is_hammer) },
+      { name: 'confluence', weight: 25, score: (m) => scoreConfluence(m.confluence) },
+    ],
+  },
+
   // ── New Day Trade Rubrics ───────────────────────────────────────────────
 
   EXTREME_REVERSAL: {

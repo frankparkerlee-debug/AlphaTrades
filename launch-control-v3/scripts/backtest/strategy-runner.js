@@ -1,8 +1,14 @@
 /**
  * Multi-Strategy Backtest Runner
  *
- * 4 focused strategies with academic backing and TA-driven entries:
- *   ORB_BREAKOUT, GAP_FILL_REVERSION, POWER_HOUR_MOMENTUM, MOMENTUM_SCALP
+ * 7 research-backed strategies + MOMENTUM_SCALP, each with academic backing
+ * and TA-driven entries:
+ *   ORB_BREAKOUT, VWAP_BOUNCE, FIRST_PULLBACK, GAP_FILL_REVERSION,
+ *   POWER_HOUR_MOMENTUM, MACRO_REACTION, SR_BOUNCE, MOMENTUM_SCALP
+ *
+ * Each strategy is independently validated (Monte Carlo, walk-forward,
+ * regime stress, OOS, statistical significance). Strategies that fail
+ * get SHELVE'd individually -- they can't hide behind aggregate results.
  *
  * Applies portfolio constraints, simulates single-leg P&L, and feeds
  * validation pipeline.
@@ -30,11 +36,15 @@ import { query } from '../../src/data/db.js';
 
 // Spread-based strategies decommissioned — margin account, no documented edge
 
-// 4 focused strategies — academic backing + TA-driven entries
+// 7 research-backed strategies + MOMENTUM_SCALP
 import {
   generateORBBreakoutSignals,
+  generateVWAPBounceSignals,
+  generateFirstPullbackSignals,
   generateGapFillSignals,
   generatePowerHourMomentumSignals,
+  generateMacroReactionSignals,
+  generateSRBounceSignals,
   generateMomentumScalpSignals,
 } from './strategies/live-adapter.js';
 
@@ -43,11 +53,17 @@ import {
 const MAX_CONCURRENT_POSITIONS = 5;    // max open positions at once
 const MAX_DAILY_RISK_PCT       = 0.40; // max 40% of account at risk per day
 
-// Active strategies — POWER_HOUR SHELVE'd (23% WR, 0.34 PF, hogged all slots at A+)
+// 7 research-backed intraday strategies + MOMENTUM_SCALP. Each is validated
+// independently so failing strategies get SHELVE'd on their own merit.
 const STRATEGIES = [
-  { name: 'ORB_BREAKOUT',          fn: generateORBBreakoutSignals,       intraday: true },  // DEPLOY: 68% WR, 1.97 PF, MC 89.5%
-  { name: 'GAP_FILL_REVERSION',    fn: generateGapFillSignals,           intraday: true },  // 100% directional, tuning needed
-  { name: 'MOMENTUM_SCALP',        fn: generateMomentumScalpSignals,     intraday: true },  // 92.7% directional, was blocked by POWER_HOUR
+  { name: 'ORB_BREAKOUT',          fn: generateORBBreakoutSignals,       intraday: true },  // institutional order flow, 9:35-10:30
+  { name: 'VWAP_BOUNCE',           fn: generateVWAPBounceSignals,        intraday: true },  // institutional fair-value anchor, 9:45-2:00
+  { name: 'FIRST_PULLBACK',        fn: generateFirstPullbackSignals,     intraday: true },  // momentum continuation, 9:45-11:00
+  { name: 'GAP_FILL_REVERSION',    fn: generateGapFillSignals,           intraday: true },  // overnight overreaction, 9:40-9:45
+  { name: 'POWER_HOUR_MOMENTUM',   fn: generatePowerHourMomentumSignals, intraday: true },  // intraday continuation, 3:00 PM check
+  { name: 'MACRO_REACTION',        fn: generateMacroReactionSignals,     intraday: true },  // second-wave drift, 15-30 min post-open
+  { name: 'SR_BOUNCE',             fn: generateSRBounceSignals,          intraday: true },  // level convergence, 9:45-3:30 broad coverage
+  { name: 'MOMENTUM_SCALP',        fn: generateMomentumScalpSignals,     intraday: true },  // 92.7% directional on ETFs
 ];
 
 /**

@@ -83,10 +83,14 @@ function confidenceToGrade(confidence, strategy) {
  * Hold time configuration per strategy.
  */
 const HOLD_CONFIG = {
-  // Hold times tuned by directional study: exit before edge decays
+  // Hold times tuned by directional study / per-strategy specs: exit before edge decays
   ORB_BREAKOUT:          { maxHoldMinutes: 60,  holdDays: 0 }, // MFE at 41 min, 93.7% directional
+  VWAP_BOUNCE:           { maxHoldMinutes: 90,  holdDays: 0 }, // institutional mean reversion
+  FIRST_PULLBACK:        { maxHoldMinutes: 90,  holdDays: 0 }, // momentum continuation after pause
   GAP_FILL_REVERSION:    { maxHoldMinutes: 60,  holdDays: 0 }, // MFE at 40 min, 92.6% directional
-  POWER_HOUR_MOMENTUM:   { maxHoldMinutes: 45,  holdDays: 0 }, // MFE at 24 min, 90.1% directional
+  POWER_HOUR_MOMENTUM:   { maxHoldMinutes: 45,  holdDays: 0 }, // MFE at 24 min, avoids last 15 min chaos
+  MACRO_REACTION:        { maxHoldMinutes: 180, holdDays: 0 }, // post-event drift in second wave
+  SR_BOUNCE:             { maxHoldMinutes: 90,  holdDays: 0 }, // level convergence bounce
   MOMENTUM_SCALP:        { maxHoldMinutes: 60,  holdDays: 0 }, // MFE at 47 min, 92.7% directional
 };
 
@@ -1493,6 +1497,162 @@ export function generateMacroReactionSignals(date, dayData, context) {
   // Cap at top 3
   signals.sort((a, b) => b.composite - a.composite);
   return signals.slice(0, 3);
+}
+
+/**
+ * SR_BOUNCE
+ *
+ * Edge: Level convergence = multiple institutional participants see the same
+ * level. When 2+ independent references (prev day H/L, VWAP, session H/L,
+ * opening range H/L) all cluster at the same zone, the reaction off that zone
+ * is materially stronger. Documented 55-60% WR, 1.5:1 R:R.
+ *
+ * Time: Offsets 15-360 (9:45 AM - 3:30 PM, broad coverage).
+ * Cap: 3 signals/ticker/day, top 5 global.
+ */
+export function generateSRBounceSignals(date, dayData, context) {
+  const { minuteBars, etfMinuteBars, dailyBars } = dayData;
+  const { profiles, tickers } = context;
+  const signals = [];
+  const perTicker = {};
+
+  const CHECK_OFFSETS = [];
+  for (let i = 15; i <= 360; i += 15) CHECK_OFFSETS.push(i);
+
+  const MAX_PER_TICKER = 3;
+  const MAX_TOTAL = 5;
+
+  for (const ticker of tickers) {
+    const profile = profiles[ticker];
+    if (!profile) continue;
+
+    const prevBar = findPrevDayBar(dailyBars, ticker, date);
+    const allKeys = getMinuteKeys(minuteBars, ticker, date);
+    if (allKeys.length < 20) continue;
+
+    const openingRange = computeOpeningRange(minuteBars, ticker, date, 5);
+
+    for (const offset of CHECK_OFFSETS) {
+      if (offset >= allKeys.length) continue;
+      if ((perTicker[ticker] || 0) >= MAX_PER_TICKER) break;
+
+      const checkKey = allKeys[offset];
+      const bars = getBarsUpTo(minuteBars, ticker, date, checkKey);
+      if (bars.length < 15) continue;
+
+      const currentPrice = bars[bars.length - 1].c;
+      const vwap = computeVWAP(bars);
+      if (!vwap || vwap <= 0) continue;
+
+      // Build the candidate level set
+      const allLevels = findKeyLevels(prevBar, bars, vwap, openingRange);
+      if (allLevels.length < 2) continue;
+
+      // Require 2+ levels to converge within 0.1% of the current price
+      const conv = levelsConverging(allLevels, currentPrice, 0.001);
+      if (!conv.converging) continue;
+
+      // Direction: look at the last 2 bars for a bounce off the level cluster
+      if (bars.length < 2) continue;
+      const last2 = bars.slice(-2);
+      const prevBarM = last2[0];
+      const curBar = last2[1];
+      const movingUp = curBar.c > prevBarM.c && curBar.c >= curBar.o;
+      const movingDown = curBar.c < prevBarM.c && curBar.c <= curBar.o;
+      let direction;
+      if (movingUp) direction = 'CALL';
+      else if (movingDown) direction = 'PUT';
+      else continue;
+
+      // Reversal candle check — need conviction, not random drift
+      const candleAnalysis = analyzeCandle(curBar);
+      const isHammer = candleAnalysis.type === 'HAMMER' || candleAnalysis.type === 'INVERTED_HAMMER';
+      const engulfResult = direction === 'CALL'
+        ? detectBullishEngulfing(last2)
+        : detectBearishEngulfing(last2);
+      const engulfing = engulfResult.detected;
+      const hasReversal = isHammer || engulfing || candleAnalysis.bodyRatio >= 0.50;
+      if (!hasReversal) continue;
+
+      // Volume rising at the bounce (ratio > 1.2)
+      let volRatio = 0;
+      if (bars.length >= 10) {
+        const recent = bars.slice(-3);
+        const prior = bars.slice(-10, -3);
+        const recentVol = recent.reduce((s, b) => s + (b.v || 0), 0) / recent.length;
+        const priorVol = prior.reduce((s, b) => s + (b.v || 0), 0) / prior.length;
+        volRatio = priorVol > 0 ? recentVol / priorVol : 0;
+      }
+      if (volRatio < 1.2) continue;
+
+      // Confluence — require 2+ confirming factors
+      const confluenceResult = checkConfluence(bars, direction, { vwap, currentPrice }, { minFactors: 2 });
+      if (!confluenceResult.pass) continue;
+
+      // SPY alignment (soft bonus)
+      const spyChange = getETFChange(etfMinuteBars, 'SPY', date, checkKey);
+      const spyAligned = (direction === 'CALL' && spyChange > 0) || (direction === 'PUT' && spyChange < 0);
+
+      // Confidence scoring
+      let confidence = 60;
+      if (candleAnalysis.type.includes('MARUBOZU')) confidence += 6;
+      else if (candleAnalysis.type.includes('STRONG')) confidence += 4;
+      else confidence += 2;
+      if (isHammer || engulfing) confidence += 4;
+      if (volRatio >= 1.5) confidence += 5;
+      else confidence += 3;
+      if (spyAligned) confidence += 3;
+      // Bonus for unusually strong level convergence
+      if (conv.count >= 3) confidence += 5;
+      else confidence += 3;
+      confidence += Math.max(0, confluenceResult.confirming * 2);
+      confidence -= confluenceResult.opposing * 2;
+      if (confluenceResult.pass) confidence += 3;
+      confidence = Math.max(60, Math.min(95, confidence));
+
+      // Stop: just beyond the level cluster (0.15 ATR)
+      const atr = profile.atr_20d || 0.025;
+      const atrDollar = atr * currentPrice;
+      const stopDistance = 0.15 * atrDollar;
+      const convergentLevels = conv.levels.map(l => l.level);
+      const lowestLevel = Math.min(...convergentLevels);
+      const highestLevel = Math.max(...convergentLevels);
+      const stopPrice = direction === 'CALL'
+        ? +(lowestLevel - stopDistance).toFixed(2)
+        : +(highestLevel + stopDistance).toFixed(2);
+
+      // Target: VWAP if it gives a better R:R, else 1.5:1
+      const risk = Math.abs(currentPrice - stopPrice);
+      if (risk <= 0) continue;
+      let targetPrice = direction === 'CALL'
+        ? +(currentPrice + risk * 1.5).toFixed(2)
+        : +(currentPrice - risk * 1.5).toFixed(2);
+      const vwapIsForwardTarget = direction === 'CALL' ? vwap > currentPrice : vwap < currentPrice;
+      const vwapDist = Math.abs(vwap - currentPrice);
+      if (vwapIsForwardTarget && vwapDist > risk * 1.5) {
+        targetPrice = +vwap.toFixed(2);
+      }
+
+      perTicker[ticker] = (perTicker[ticker] || 0) + 1;
+      const sessionOpen = bars[0]?.o || null;
+      const _srEnrich = enrichMetadata(bars, ticker, date, currentPrice, vwap, sessionOpen, atrDollar, etfMinuteBars, checkKey);
+      signals.push(buildSignal('SR_BOUNCE', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
+        convergence_count: conv.count,
+        convergent_sources: conv.levels.map(l => l.source).join(','),
+        volume_ratio: +volRatio.toFixed(2),
+        candle_type: candleAnalysis.type,
+        engulfing,
+        is_hammer: isHammer,
+        spy_aligned: spyAligned,
+        confluence: confluenceResult.confirming,
+        ..._srEnrich,
+      }));
+    }
+  }
+
+  // Global top-5 cap by composite confidence
+  signals.sort((a, b) => b.composite - a.composite);
+  return signals.slice(0, MAX_TOTAL);
 }
 
 // ── New Day Trade Strategies ────────────────────────────────────────────────
