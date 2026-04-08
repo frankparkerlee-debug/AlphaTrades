@@ -3573,11 +3573,16 @@ async function startRestPoller() {
               try {
                 const signals = sf.fn(todayStr, dayData, liveContext);
                 for (const sig of signals) {
+                  // buildSignal stores the raw confidence as `composite` and the
+                  // per-strategy calibrated grade as `grade`. Pull both directly so
+                  // we honor the strategy-specific scoring algorithm instead of
+                  // falling back to compositeRaw=50 → grade=B for every signal.
                   allStratSignals.push({
                     ticker: sig.ticker,
                     direction: sig.direction,
                     strategy: sig.strategy,
-                    confidence: sig.confidence,
+                    confidence: sig.composite ?? sig.confidence,
+                    grade: sig.grade,
                     entry_price: sig.entryPrice,
                     stop_price: sig.stopCondition?.value,
                     t1_target: sig.targetCondition?.value,
@@ -3882,7 +3887,10 @@ async function startRestPoller() {
               stratTIM = Math.round(compositeRaw * 0.15);
             }
 
-            const grade = toGrade(compositeRaw) || 'B';
+            // Prefer the per-strategy calibrated grade (computed by buildSignal via
+            // confidenceToGrade with optional per-strategy thresholds). Fall back to
+            // the universal toGrade() only if a strategy doesn't supply one.
+            const grade = sig.grade || toGrade(compositeRaw) || 'B';
             // NOTE: placeholder order must match the 15-element params array below.
             // Previous version used $14/$16 for grade/atr_multiple which caused a
             // "bind message supplies 15 parameters, but prepared statement requires 16"
@@ -4119,13 +4127,17 @@ async function startRestPoller() {
           }
         }
 
-        // 2) Any ACTIVE signal (except CONSEC_BOUNCE) with no human action and >15 min old → MISSED
+        // 2) Any ACTIVE signal (except CONSEC_BOUNCE) with no human action and beyond
+        //    its strategy hold window → MISSED. The previous 15-min window was too short
+        //    for the strategy scanner's burst pattern (e.g. 13 GAP_FILL signals fire at
+        //    9:47 ET in a single tick). Use 60 min, which matches every active strategy's
+        //    maxHoldMinutes and gives the user a full hour to react before stale-marking.
         const missed = await db.query(`
           UPDATE lc_v3.signals SET status = 'MISSED',
-            human_notes = COALESCE(human_notes, '') || ' | AUTO: NO_ACTION_15MIN'
+            human_notes = COALESCE(human_notes, '') || ' | AUTO: NO_ACTION_60MIN'
           WHERE status = 'ACTIVE'
             AND human_taken IS NULL
-            AND created_at < NOW() - INTERVAL '15 minutes'
+            AND created_at < NOW() - INTERVAL '60 minutes'
             AND DATE(created_at AT TIME ZONE 'America/New_York') = CURRENT_DATE
             AND news_headline NOT LIKE '%strategy=CONSEC_BOUNCE%'
           RETURNING ticker
