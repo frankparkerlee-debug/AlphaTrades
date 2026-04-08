@@ -507,24 +507,34 @@ function applyPortfolioConstraints(signals, accountSize) {
 
   // Get all dates
   const dates = [...new Set(signals.map(s => s.date))].sort();
-  const strategies = [...new Set(signals.map(s => s.strategy))];
+  const strategies = [...new Set(signals.map(s => s.strategy))].sort();
 
   const accepted = [];
   const activeByDate = {};
   const dailyRisk = {};
 
-  for (const date of dates) {
+  for (let dateIdx = 0; dateIdx < dates.length; dateIdx++) {
+    const date = dates[dateIdx];
     if (!activeByDate[date]) activeByDate[date] = 0;
     if (!dailyRisk[date]) dailyRisk[date] = 0;
 
-    // Round-robin: take best signal from each strategy in turn
+    // Round-robin: take best signal from each strategy in turn.
+    // Rotate the starting strategy each day so no strategy is permanently
+    // starved when concurrent-position slots fill before iteration wraps.
+    // Previously the fixed order caused strategies 6-8 (SR_BOUNCE, MOMENTUM_SCALP)
+    // to be crowded out every single day.
+    const rotation = dateIdx % strategies.length;
+    const rotatedStrategies = [
+      ...strategies.slice(rotation),
+      ...strategies.slice(0, rotation),
+    ];
     const cursors = {};
     for (const strat of strategies) cursors[strat] = 0;
 
     let added = true;
     while (added && activeByDate[date] < MAX_CONCURRENT_POSITIONS) {
       added = false;
-      for (const strat of strategies) {
+      for (const strat of rotatedStrategies) {
         if (activeByDate[date] >= MAX_CONCURRENT_POSITIONS) break;
 
         const group = byDateStrategy[`${date}:${strat}`] || [];
