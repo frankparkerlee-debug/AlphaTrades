@@ -141,6 +141,8 @@ app.get('/api/signals', async (req, res) => {
       composite_raw:     Number(s.composite_raw)     || 0,
       relative_volume:   Number(s.relative_volume)   || null,
       atr_multiple:      Number(s.atr_multiple)       || null,
+      price_at_signal:   s.price_at_signal != null ? Number(s.price_at_signal) : null,
+      human_pnl_pct:     s.human_pnl_pct != null ? Number(s.human_pnl_pct) : null,
       spy_change_pct:    Number(s.spy_change_pct)     || null,
       qqq_change_pct:    Number(s.qqq_change_pct)     || null,
       sector_change_pct: Number(s.sector_change_pct)  || null,

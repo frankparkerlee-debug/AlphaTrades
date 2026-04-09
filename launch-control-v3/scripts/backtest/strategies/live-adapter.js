@@ -91,7 +91,7 @@ const HOLD_CONFIG = {
   POWER_HOUR_MOMENTUM:   { maxHoldMinutes: 45,  holdDays: 0 }, // MFE at 24 min, avoids last 15 min chaos
   MACRO_REACTION:        { maxHoldMinutes: 180, holdDays: 0 }, // post-event drift in second wave
   SR_BOUNCE:             { maxHoldMinutes: 90,  holdDays: 0 }, // level convergence bounce
-  MOMENTUM_SCALP:        { maxHoldMinutes: 60,  holdDays: 0 }, // MFE at 47 min, 92.7% directional
+  MOMENTUM_SCALP:        { maxHoldMinutes: 10,  holdDays: 0 }, // Parker's scalp: quick volume bursts, exit before reversal
 };
 
 /**
@@ -547,6 +547,290 @@ function enrichMetadata(bars, ticker, date, currentPrice, vwap, sessionOpen, atr
   }
 
   return result;
+}
+
+// ── MOMENTUM_SCALP v2 Helpers ────────────────────────────────────────────────
+
+/**
+ * Compute a simple session volume profile.
+ * Buckets session price action into price levels, finds POC (highest volume),
+ * VAH/VAL (value area containing ~70% of volume), HVN (high volume nodes),
+ * and LVN (low volume nodes).
+ *
+ * @param {Array} bars - session bars [{o,h,l,c,v,t}, ...]
+ * @param {number} bucketPct - bucket width as % of median price (default 0.001 = 0.1%)
+ * @returns {{poc, vah, val, hvnList, lvnList, buckets}|null}
+ */
+function computeValueProfile(bars, bucketPct = 0.001) {
+  if (!bars || bars.length < 10) return null;
+
+  const prices = bars.map(b => b.c).filter(p => p > 0).sort((a, b) => a - b);
+  if (prices.length === 0) return null;
+  const medianPrice = prices[Math.floor(prices.length / 2)];
+  const bucketSize = medianPrice * bucketPct;
+  if (bucketSize <= 0) return null;
+
+  // Distribute each bar's volume across its high-low range uniformly.
+  const volByBucket = new Map();
+  for (const bar of bars) {
+    const vol = bar.v || 0;
+    if (vol <= 0 || bar.h <= bar.l) continue;
+    const lowBucket = Math.floor(bar.l / bucketSize);
+    const highBucket = Math.floor(bar.h / bucketSize);
+    const numBuckets = highBucket - lowBucket + 1;
+    const volPerBucket = vol / numBuckets;
+    for (let b = lowBucket; b <= highBucket; b++) {
+      volByBucket.set(b, (volByBucket.get(b) || 0) + volPerBucket);
+    }
+  }
+
+  if (volByBucket.size === 0) return null;
+
+  // Convert to array [{price, volume}] sorted by price
+  const buckets = [...volByBucket.entries()]
+    .map(([b, v]) => ({ price: (b + 0.5) * bucketSize, volume: v, bucket: b }))
+    .sort((a, b) => a.price - b.price);
+
+  // POC = highest volume bucket
+  let pocBucket = buckets[0];
+  for (const b of buckets) if (b.volume > pocBucket.volume) pocBucket = b;
+  const poc = pocBucket.price;
+
+  // Value area: expand around POC until 70% of total volume captured
+  const totalVol = buckets.reduce((s, b) => s + b.volume, 0);
+  const target = totalVol * 0.70;
+  const pocIdx = buckets.indexOf(pocBucket);
+  let lo = pocIdx, hi = pocIdx, accVol = pocBucket.volume;
+  while (accVol < target && (lo > 0 || hi < buckets.length - 1)) {
+    const leftVol  = lo > 0 ? buckets[lo - 1].volume : -1;
+    const rightVol = hi < buckets.length - 1 ? buckets[hi + 1].volume : -1;
+    if (rightVol > leftVol) { hi++; accVol += buckets[hi].volume; }
+    else if (leftVol >= 0)   { lo--; accVol += buckets[lo].volume; }
+    else break;
+  }
+  const val = buckets[lo].price;
+  const vah = buckets[hi].price;
+
+  // HVN: buckets with volume >= 1.5x average
+  // LVN: buckets with volume <= 0.4x average, within session range
+  const avgVol = totalVol / buckets.length;
+  const hvnList = buckets.filter(b => b.volume >= 1.5 * avgVol).map(b => b.price);
+  const lvnList = buckets.filter(b => b.volume <= 0.4 * avgVol).map(b => b.price);
+
+  return { poc, vah, val, hvnList, lvnList, buckets };
+}
+
+/**
+ * Compute the full set of session levels used by MOMENTUM_SCALP's location
+ * classifier. Returns [{level, source}] like findKeyLevels but also includes
+ * POC/VAH/VAL from a value profile.
+ */
+function markSessionLevels(bars, prevDayBar, openingRange, valueProfile) {
+  const levels = [];
+  if (prevDayBar) {
+    if (prevDayBar.h > 0) levels.push({ level: prevDayBar.h, source: 'prev_day_high' });
+    if (prevDayBar.l > 0) levels.push({ level: prevDayBar.l, source: 'prev_day_low' });
+  }
+  if (bars && bars.length > 0) {
+    const sessionHigh = Math.max(...bars.map(b => b.h));
+    const sessionLow = Math.min(...bars.map(b => b.l));
+    if (isFinite(sessionHigh)) levels.push({ level: sessionHigh, source: 'session_high' });
+    if (isFinite(sessionLow)) levels.push({ level: sessionLow, source: 'session_low' });
+  }
+  if (openingRange) {
+    levels.push({ level: openingRange.high, source: 'or_high' });
+    levels.push({ level: openingRange.low, source: 'or_low' });
+  }
+  if (valueProfile) {
+    levels.push({ level: valueProfile.poc, source: 'poc' });
+    levels.push({ level: valueProfile.vah, source: 'vah' });
+    levels.push({ level: valueProfile.val, source: 'val' });
+  }
+  return levels;
+}
+
+/**
+ * Given an entry price, trade direction, and stop distance, check whether
+ * there is at least `minRoomMult * stopDist` of clearance to the next opposing
+ * level. This is Parker's "room-to-move" filter.
+ *
+ * @returns {{ok, nextLevel, roomDollar, roomVsRisk}}
+ */
+function findNextOpposingLevel(entry, direction, stopDist, levels, minRoomMult = 1.5) {
+  if (!levels || stopDist <= 0) return { ok: false, nextLevel: null, roomDollar: 0, roomVsRisk: 0 };
+  let nextLevel = null;
+  let nextDist = Infinity;
+  for (const L of levels) {
+    if (!L || !isFinite(L.level)) continue;
+    if (direction === 'CALL' && L.level > entry) {
+      const d = L.level - entry;
+      if (d < nextDist) { nextDist = d; nextLevel = L; }
+    } else if (direction === 'PUT' && L.level < entry) {
+      const d = entry - L.level;
+      if (d < nextDist) { nextDist = d; nextLevel = L; }
+    }
+  }
+  if (!nextLevel) return { ok: true, nextLevel: null, roomDollar: Infinity, roomVsRisk: Infinity };
+  return {
+    ok: nextDist >= minRoomMult * stopDist,
+    nextLevel,
+    roomDollar: +nextDist.toFixed(4),
+    roomVsRisk: +(nextDist / stopDist).toFixed(2),
+  };
+}
+
+/**
+ * True RVOL: current bar volume vs trailing `lookback` bar average.
+ * Returns a ratio (1.0 = average, 2.0 = double avg).
+ */
+function computeTrueRVOL(bars, lookback = 20) {
+  if (!bars || bars.length < 2) return 0;
+  const n = Math.min(lookback, bars.length - 1);
+  const recent = bars.slice(-(n + 1), -1);
+  const avg = recent.reduce((s, b) => s + (b.v || 0), 0) / n;
+  if (avg <= 0) return 0;
+  const cur = bars[bars.length - 1].v || 0;
+  return cur / avg;
+}
+
+/**
+ * Simple EMA9 computation plus slope sign over the last `slopeLookback` bars.
+ * Returns { ema9, slope, slopeSign } where slopeSign is 1/-1/0.
+ */
+function computeEMA9(closes, slopeLookback = 3) {
+  if (!closes || closes.length < 9) return { ema9: null, slope: 0, slopeSign: 0, series: [] };
+  const k = 2 / (9 + 1);
+  const series = [];
+  let ema = closes.slice(0, 9).reduce((s, c) => s + c, 0) / 9;
+  series.push(ema);
+  for (let i = 9; i < closes.length; i++) {
+    ema = closes[i] * k + ema * (1 - k);
+    series.push(ema);
+  }
+  const current = series[series.length - 1];
+  const prior = series.length > slopeLookback ? series[series.length - 1 - slopeLookback] : series[0];
+  const slope = current - prior;
+  const slopeSign = slope > 1e-6 ? 1 : slope < -1e-6 ? -1 : 0;
+  return { ema9: current, slope, slopeSign, series };
+}
+
+/**
+ * Fetch order-flow buy ratio for a bar. Primary path: lookup from
+ * context.barFlow[ticker][key]. Fallback: infer from candle body
+ * (close relative to bar range) as a proxy for buy pressure.
+ *
+ * @returns {number} 0-1 (0.5 = neutral)
+ */
+function getBarFlow(ticker, barKey, bar, barFlowMap) {
+  if (barFlowMap && barFlowMap[ticker] && barFlowMap[ticker][barKey] != null) {
+    const bf = barFlowMap[ticker][barKey];
+    if (typeof bf === 'number') return bf;
+    if (bf && typeof bf.buy_ratio === 'number') return bf.buy_ratio;
+  }
+  // Fallback: body-based proxy. Close near high of range => buyers in control.
+  if (!bar || bar.h <= bar.l) return 0.5;
+  return (bar.c - bar.l) / (bar.h - bar.l);
+}
+
+/**
+ * Chop filter. Returns true when the last N bars are range-bound with no
+ * sustained directional push (session chop that kills scalps).
+ *
+ * Detects chop via:
+ *   - range width over last N bars < 0.15% of price
+ *   - or alternating red/green bars (>= 60% direction flips)
+ */
+function isChop(bars, price, lookback = 10) {
+  if (!bars || bars.length < lookback || !price || price <= 0) return false;
+  const slice = bars.slice(-lookback);
+  const high = Math.max(...slice.map(b => b.h));
+  const low = Math.min(...slice.map(b => b.l));
+  const rangePct = (high - low) / price;
+  if (rangePct < 0.0015) return true;
+
+  let flips = 0;
+  for (let i = 1; i < slice.length; i++) {
+    const prev = slice[i - 1].c - slice[i - 1].o;
+    const cur  = slice[i].c - slice[i].o;
+    if ((prev > 0 && cur < 0) || (prev < 0 && cur > 0)) flips++;
+  }
+  return flips >= Math.ceil(lookback * 0.6);
+}
+
+/**
+ * Macro blackout check. Returns true if `ts` (a minute-bar key like
+ * `2026-04-09T13:30`) falls within ±15 min of a known macro release from
+ * the event calendar map. If no calendar is provided, returns false.
+ *
+ * `eventCalendar` shape: { '2026-04-09': [{ time: '08:30', name: 'CPI', blackout: true }] }
+ */
+function isMacroBlackout(ts, eventCalendar) {
+  if (!eventCalendar || !ts) return false;
+  const [date, hm] = ts.split('T');
+  if (!date || !hm) return false;
+  const events = eventCalendar[date];
+  if (!events || !events.length) return false;
+  const [h, m] = hm.split(':').map(Number);
+  const minutes = h * 60 + m;
+  for (const ev of events) {
+    if (!ev || !ev.blackout) continue;
+    const [eh, em] = (ev.time || '').split(':').map(Number);
+    if (isNaN(eh) || isNaN(em)) continue;
+    const evMins = eh * 60 + em;
+    if (Math.abs(minutes - evMins) <= 15) return true;
+  }
+  return false;
+}
+
+/**
+ * Classify current price location against session structure. Returns one of:
+ *   'NEAR_LEVEL'    -- within 0.1% of a session level (break / rejection candidate)
+ *   'IN_LVN'        -- inside a low-volume node (momentum breakthrough candidate)
+ *   'AT_HVN'        -- within 0.1% of a high-volume node (rejection candidate)
+ *   'IN_VALUE'      -- between VAL and VAH (chop zone — avoid)
+ *   'ABOVE_VALUE'   -- above VAH (extension)
+ *   'BELOW_VALUE'   -- below VAL (extension)
+ *   'OPEN_AIR'      -- none of the above
+ */
+function classifyLocation(price, sessionLevels, valueProfile, tolerance = 0.001) {
+  if (!price || price <= 0) return { kind: 'OPEN_AIR', nearest: null };
+
+  // Near any session level?
+  if (sessionLevels && sessionLevels.length) {
+    let best = null;
+    let bestDist = Infinity;
+    for (const L of sessionLevels) {
+      if (!L || !isFinite(L.level)) continue;
+      const d = Math.abs(L.level - price) / price;
+      if (d < bestDist) { bestDist = d; best = L; }
+    }
+    if (best && bestDist <= tolerance) {
+      return { kind: 'NEAR_LEVEL', nearest: best, distPct: +bestDist };
+    }
+  }
+
+  if (valueProfile) {
+    // AT_HVN
+    for (const hvn of valueProfile.hvnList || []) {
+      if (Math.abs(hvn - price) / price <= tolerance) {
+        return { kind: 'AT_HVN', nearest: { level: hvn, source: 'hvn' } };
+      }
+    }
+    // IN_LVN (wider tolerance: inside the node)
+    for (const lvn of valueProfile.lvnList || []) {
+      if (Math.abs(lvn - price) / price <= tolerance * 2) {
+        return { kind: 'IN_LVN', nearest: { level: lvn, source: 'lvn' } };
+      }
+    }
+    // Value area zones
+    if (price >= valueProfile.val && price <= valueProfile.vah) {
+      return { kind: 'IN_VALUE', nearest: { level: valueProfile.poc, source: 'poc' } };
+    }
+    if (price > valueProfile.vah) return { kind: 'ABOVE_VALUE', nearest: { level: valueProfile.vah, source: 'vah' } };
+    if (price < valueProfile.val) return { kind: 'BELOW_VALUE', nearest: { level: valueProfile.val, source: 'val' } };
+  }
+
+  return { kind: 'OPEN_AIR', nearest: null };
 }
 
 // ── Strategy Implementations ─────────────────────────────────────────────────
@@ -2756,49 +3040,53 @@ export function generateZeroDTEScalpSignals(date, dayData, context) {
   return signals;
 }
 
-// ── MOMENTUM_SCALP ─────────────────────────────────────────────────────────────
+// ── MOMENTUM_SCALP v2 ──────────────────────────────────────────────────────────
 
 /**
- * MOMENTUM_SCALP
+ * MOMENTUM_SCALP v2 — Parker's discretionary scalp methodology, codified.
  *
- * Pure TA scalp strategy. Identifies high-opportunity setups from price action
- * and rides them for 1-5 minutes. Three patterns, each with a clear structural reason:
+ * REPLACES the old MACD-based gate. MACD is a lagging indicator — by the time
+ * the histogram confirms, the move is half done. Parker reads price action:
+ * volume bursts, key-level breaks, volume profile context (HVN/LVN), candle
+ * confluence on 1-min, and EMA9 slope for confirmation. Holds 1-10 min.
  *
- * 1. LEVEL_REJECTION: Price touches a key level (VWAP, session H/L, OR H/L, prev day H/L)
- *    and prints a rejection wick. Scalp the bounce. WHY: Institutional liquidity pools at
- *    key levels cause predictable reactions.
+ * ── FOUR TRIGGERS (any one can fire, all share the same confluence + exits) ──
  *
- * 2. MOMENTUM_BURST: Consolidation (5+ bars in tight range) breaks with a large-body
- *    candle + volume spike. Ride the initial thrust. WHY: Compression resolves into
- *    expansion -- stored energy releases directionally.
+ * 1. VOL_BURST    -- true RVOL >= 2x + marubozu/strong candle + EMA9 slope agrees
+ *                    + bar flow buy_ratio aligned. Catches the initial thrust.
+ * 2. LEVEL_BREAK  -- close beyond a marked session level (prev day H/L, session
+ *                    H/L, OR H/L) on RVOL >= 1.5x and EMA9 slope agrees.
+ * 3. LVN_THRUST   -- price moves into a low-volume node on RVOL >= 1.8x. Empty
+ *                    air above/below = price travels fast through LVNs.
+ * 4. HVN_REJECT   -- price touches an HVN or POC with a rejection wick
+ *                    (hammer/shooting star) on rising volume. High-volume
+ *                    nodes act as magnets AND walls.
  *
- * 3. TREND_CONTINUATION: 5+ bars trending (higher lows / lower highs), 1-2 bar pullback
- *    on declining volume, then a continuation candle. WHY: Orderly pullbacks in a trend
- *    are profit-taking, not reversals. First pullback has highest follow-through.
+ * ── CONFLUENCE REQUIREMENTS (all four triggers) ──
+ *   - Cross-ETF: at least 1 other ETF moving in same direction
+ *   - Room-to-move: next opposing level >= 1.5x the stop distance away
+ *   - EMA9 slope agrees with direction (soft +2 bonus if so, required for VOL_BURST/LEVEL_BREAK)
+ *   - NOT in chop zone (10-bar range < 0.15% of price OR alternating direction)
+ *   - NOT in macro blackout window (±15 min of CPI/FOMC/etc)
+ *   - Time window: 10:00 AM - 3:45 PM ET (offset 30-375)
+ *   - ETF only: SPY, QQQ, IWM (max liquidity, 0DTE gamma asymmetry)
  *
- * Rules:
- *   - Check every 5 bars from offset 15 to 370 (9:45 AM - 3:40 PM)
- *   - Max hold: 5 minutes
- *   - Stop: tight, pattern-specific (rejection wick, consolidation edge, pullback low)
- *   - Target: 0.2-0.3% or 1.5:1 R:R
- *   - Max 3 signals per ticker per day, max 10 total (top by confidence)
+ * ── EXITS (scalp ladder — ride momentum, cut reversal fast) ──
+ *   - Max hold: 10 minutes (HOLD_CONFIG)
+ *   - Momentum stall: 2 bars against = exit immediately (primary profit trigger)
+ *   - Trail activate: +20% option gain, give back 65% of peak
+ *   - Hard cut: -15% (premium is the risk, not the underlying)
+ *   - No fixed target cap — let gamma run on big moves
+ *
+ * ── CAPS ──
+ *   - 3 signals per ticker per day, 9 total (top by confidence)
  */
-/**
- * ETF Trend Continuation — 0DTE scalp on SPY, QQQ, IWM
- *
- * Focused exclusively on major ETFs for maximum liquidity, tight spreads,
- * and 0DTE gamma. Trades TREND_CONTINUATION pattern: established trend →
- * orderly pullback on declining volume → continuation candle.
- *
- * Why ETFs: institutional flow drives persistent trends, massive OI for
- * fills, 0DTE options available daily, gamma asymmetry maximized.
- */
+let _momScalpDiagLogged = false;
 export function generateMomentumScalpSignals(date, dayData, context) {
-  const { minuteBars, etfMinuteBars } = dayData;
-  const { profiles } = context;
+  const { minuteBars, etfMinuteBars, dailyBars } = dayData;
+  const { profiles, barFlow, eventCalendar } = context || {};
   const signals = [];
 
-  // ETFs only — max liquidity, 0DTE available daily
   const ETF_TICKERS = ['SPY', 'QQQ', 'IWM'];
   const ETF_DEFAULTS = {
     SPY: { atr: 0.012, ticker: 'SPY' },
@@ -2808,16 +3096,17 @@ export function generateMomentumScalpSignals(date, dayData, context) {
   const MAX_PER_TICKER = 3;
   const MAX_TOTAL = 9;
 
-  // Start at offset 36 — need 35+ bars for 1-min MACD (12+26+9-2=35)
+  // Session window: 10:00 AM - 3:45 PM ET (offset 30 - 375). Parker's Q&A:
+  // don't trade during opening volatility; exit before close chaos.
   const CHECK_OFFSETS = [];
-  for (let i = 36; i <= 370; i += 3) CHECK_OFFSETS.push(i);
+  for (let i = 30; i <= 375; i += 1) CHECK_OFFSETS.push(i);
 
   for (const ticker of ETF_TICKERS) {
     const tickerMinutes = minuteBars[ticker] || (etfMinuteBars && etfMinuteBars[ticker]) || {};
     const barSource = minuteBars[ticker] ? minuteBars : (etfMinuteBars || {});
 
     const allKeys = getMinuteKeys(barSource, ticker, date);
-    if (allKeys.length < 36) continue;
+    if (allKeys.length < 30) continue;
 
     const profile = profiles[ticker] || ETF_DEFAULTS[ticker];
     const atr = profile.atr_20d || profile.atr_5d || ETF_DEFAULTS[ticker].atr;
@@ -2825,82 +3114,160 @@ export function generateMomentumScalpSignals(date, dayData, context) {
     if (!sessionOpen) continue;
     const atrDollar = atr * sessionOpen;
 
+    const prevDayBar = findPrevDayBar(dailyBars || {}, ticker, date);
+    const openingRange = computeOpeningRange(barSource, ticker, date, 5);
+
     let tickerCount = 0;
+    let lastSignalOffset = -10;  // dedupe: min 3 bars between signals per ticker
 
     for (const offset of CHECK_OFFSETS) {
-      if (offset >= allKeys.length) continue;
+      if (offset >= allKeys.length) break;
       if (tickerCount >= MAX_PER_TICKER) break;
+      if (offset - lastSignalOffset < 3) continue;
 
       const checkKey = allKeys[offset];
+
+      // ── Macro blackout check ────────────────────────────────────────────
+      if (isMacroBlackout(checkKey, eventCalendar)) continue;
+
       const bars = getBarsUpTo(barSource, ticker, date, checkKey);
-      if (bars.length < 36) continue;
+      if (bars.length < 20) continue;
 
       const currentBar = bars[bars.length - 1];
       const currentPrice = currentBar.c;
+      if (!currentPrice || currentPrice <= 0) continue;
       const vwap = computeVWAP(bars);
 
-      // ── GATE 1: Volume spike (hard gate) ──────────────────────────────────
-      const recent10 = bars.slice(-11, -1);
-      const avgVol10 = recent10.reduce((s, b) => s + (b.v || 0), 0) / recent10.length;
-      const volRatio = avgVol10 > 0 ? (currentBar.v || 0) / avgVol10 : 1;
-      if (volRatio < 1.3) continue;  // no volume = no conviction
+      // ── Chop filter (hard gate) ─────────────────────────────────────────
+      if (isChop(bars, currentPrice, 10)) continue;
 
-      // ── Exhaustion gate ────────────────────────────────────────────────────
-      const vwapDistPct = vwap > 0 ? Math.abs(currentPrice - vwap) / vwap * 100 : 0;
-      if (vwapDistPct > 2.0) continue;
+      // ── True RVOL (current bar vs trailing 20-bar average) ──────────────
+      const rvol = computeTrueRVOL(bars, 20);
 
-      // ── GATE 2: 1-Min MACD direction (hard gate) ──────────────────────────
-      const closes1m = bars.map(b => b.c);
-      const macd1m = computeMACD(closes1m);
-      if (macd1m.histogram === null) continue;
+      // ── EMA9 + slope ────────────────────────────────────────────────────
+      const closes = bars.map(b => b.c);
+      const ema = computeEMA9(closes, 3);
+      if (ema.ema9 == null) continue;
 
-      // Determine MACD direction
-      let macdDirection = null;
-      if (macd1m.histogram > 0) macdDirection = 'CALL';
-      else if (macd1m.histogram < 0) macdDirection = 'PUT';
-      else continue;  // histogram exactly 0 = no momentum
+      // ── Volume profile (session so far) ─────────────────────────────────
+      const valueProfile = computeValueProfile(bars, 0.001);
 
-      // ── GATE 3: 1-Min candle pattern confirming direction (hard gate) ─────
-      const patternScan = scanCandlePatterns(bars.slice(-5));
-      let candleDirection = null;
-      let candlePatternName = null;
+      // ── Session levels incl. POC/VAH/VAL ────────────────────────────────
+      const sessionLevels = markSessionLevels(bars, prevDayBar, openingRange, valueProfile);
+
+      // ── Location classifier ─────────────────────────────────────────────
+      const location = classifyLocation(currentPrice, sessionLevels, valueProfile, 0.001);
+
+      // ── Candle pattern scan (last 3 bars) ───────────────────────────────
+      const patternScan = scanCandlePatterns(bars.slice(-3));
+
+      // ── Bar flow (order flow buy ratio) ─────────────────────────────────
+      const buyRatio = getBarFlow(ticker, checkKey, currentBar, barFlow);
+
+      // ── Determine candle direction from last bar body ───────────────────
+      const body = currentBar.c - currentBar.o;
+      const range = currentBar.h - currentBar.l;
+      const bodyFrac = range > 0 ? Math.abs(body) / range : 0;
+      const candleIsBull = body > 0;
+      const candleIsBear = body < 0;
+
+      // ── TRIGGER EVALUATION ──────────────────────────────────────────────
+      let trigger = null;       // string trigger name
+      let direction = null;     // 'CALL' | 'PUT'
+      let candleName = null;
       let candleQuality = 0;
 
-      if (macdDirection === 'CALL' && patternScan.strongestBullish && patternScan.strongestBullish.quality >= 40) {
-        candleDirection = 'CALL';
-        candlePatternName = patternScan.strongestBullish.name;
-        candleQuality = patternScan.strongestBullish.quality;
-      } else if (macdDirection === 'PUT' && patternScan.strongestBearish && patternScan.strongestBearish.quality >= 40) {
-        candleDirection = 'PUT';
-        candlePatternName = patternScan.strongestBearish.name;
-        candleQuality = patternScan.strongestBearish.quality;
-      }
-      if (!candleDirection) continue;  // MACD and candles must agree
-
-      const direction = candleDirection;
-
-      // ── GATE 4: 5-Min trend alignment (hard gate) ─────────────────────────
-      const bars5m = aggregate5Min(bars);
-      let fiveMinAligned = false;
-      if (bars5m.length >= 10) {
-        // Enough data for 5-min MACD (3/7/3 = needs 10 candles)
-        const closes5m = bars5m.map(b => b.c);
-        const macd5m = computeMACD(closes5m, 3, 7, 3);
-        if (macd5m.histogram !== null) {
-          fiveMinAligned = (direction === 'CALL' && macd5m.histogram >= 0)
-                        || (direction === 'PUT' && macd5m.histogram <= 0);
+      // ---- 1. VOL_BURST ---------------------------------------------------
+      // True RVOL >= 2x + strong-body candle + EMA9 slope agrees + flow agrees
+      if (!trigger && rvol >= 2.0 && bodyFrac >= 0.65) {
+        if (candleIsBull && ema.slopeSign >= 0 && buyRatio >= 0.55) {
+          trigger = 'VOL_BURST';
+          direction = 'CALL';
+        } else if (candleIsBear && ema.slopeSign <= 0 && buyRatio <= 0.45) {
+          trigger = 'VOL_BURST';
+          direction = 'PUT';
         }
-      } else if (bars5m.length >= 3) {
-        // Fallback: check last 3 five-min bars price structure
-        const last3 = bars5m.slice(-3);
-        const greenCount = last3.filter(b => b.c > b.o).length;
-        const redCount = last3.filter(b => b.c < b.o).length;
-        fiveMinAligned = (direction === 'CALL' && greenCount >= 2)
-                      || (direction === 'PUT' && redCount >= 2);
+        if (trigger) {
+          const bp = patternScan.strongestBullish;
+          const sp = patternScan.strongestBearish;
+          if (direction === 'CALL' && bp) { candleName = bp.name; candleQuality = bp.quality; }
+          else if (direction === 'PUT' && sp) { candleName = sp.name; candleQuality = sp.quality; }
+          else { candleName = 'STRONG_BODY'; candleQuality = Math.round(bodyFrac * 100); }
+        }
       }
-      if (!fiveMinAligned) continue;
 
-      // ── GATE 5: Cross-ETF alignment (hard gate) ───────────────────────────
+      // ---- 2. LEVEL_BREAK -------------------------------------------------
+      // Close beyond a session level on RVOL >= 1.5 and EMA9 agrees
+      if (!trigger && rvol >= 1.5 && sessionLevels.length > 0) {
+        for (const L of sessionLevels) {
+          if (!L || !isFinite(L.level)) continue;
+          // Require the PRIOR close to be on the opposite side (fresh break)
+          const prior = bars[bars.length - 2];
+          if (!prior) continue;
+          const brokeAbove = prior.c <= L.level && currentBar.c > L.level;
+          const brokeBelow = prior.c >= L.level && currentBar.c < L.level;
+          if (brokeAbove && ema.slopeSign >= 0 && buyRatio >= 0.5) {
+            trigger = 'LEVEL_BREAK';
+            direction = 'CALL';
+            candleName = `BREAK_${L.source.toUpperCase()}`;
+            candleQuality = 70;
+            break;
+          }
+          if (brokeBelow && ema.slopeSign <= 0 && buyRatio <= 0.5) {
+            trigger = 'LEVEL_BREAK';
+            direction = 'PUT';
+            candleName = `BREAK_${L.source.toUpperCase()}`;
+            candleQuality = 70;
+            break;
+          }
+        }
+      }
+
+      // ---- 3. LVN_THRUST --------------------------------------------------
+      // Price entering a low-volume node on RVOL >= 1.8 — fast travel expected
+      if (!trigger && rvol >= 1.8 && location.kind === 'IN_LVN' && bodyFrac >= 0.55) {
+        if (candleIsBull && ema.slopeSign >= 0) {
+          trigger = 'LVN_THRUST';
+          direction = 'CALL';
+          candleName = 'LVN_BREAK_UP';
+          candleQuality = 65;
+        } else if (candleIsBear && ema.slopeSign <= 0) {
+          trigger = 'LVN_THRUST';
+          direction = 'PUT';
+          candleName = 'LVN_BREAK_DN';
+          candleQuality = 65;
+        }
+      }
+
+      // ---- 4. HVN_REJECT --------------------------------------------------
+      // Touch HVN/POC with rejection wick + rising volume
+      if (!trigger && rvol >= 1.3 && (location.kind === 'AT_HVN' || (location.kind === 'IN_VALUE' && location.nearest && location.nearest.source === 'poc'))) {
+        // Rejection: large wick on one side, small body
+        const upperWick = currentBar.h - Math.max(currentBar.o, currentBar.c);
+        const lowerWick = Math.min(currentBar.o, currentBar.c) - currentBar.l;
+        const bodyAbs = Math.abs(body);
+        if (range > 0) {
+          const upperWickFrac = upperWick / range;
+          const lowerWickFrac = lowerWick / range;
+          if (lowerWickFrac >= 0.5 && bodyAbs / range <= 0.35) {
+            // Bullish rejection wick (hammer)
+            trigger = 'HVN_REJECT';
+            direction = 'CALL';
+            candleName = 'HAMMER_AT_HVN';
+            candleQuality = 65;
+          } else if (upperWickFrac >= 0.5 && bodyAbs / range <= 0.35) {
+            // Bearish rejection wick (shooting star)
+            trigger = 'HVN_REJECT';
+            direction = 'PUT';
+            candleName = 'SHOOTING_STAR_AT_HVN';
+            candleQuality = 65;
+          }
+        }
+      }
+
+      if (!trigger || !direction) continue;
+
+      // ── Cross-ETF alignment ─────────────────────────────────────────────
       const otherETFs = ETF_TICKERS.filter(e => e !== ticker);
       let etfAlignCount = 0;
       for (const other of otherETFs) {
@@ -2908,79 +3275,129 @@ export function generateMomentumScalpSignals(date, dayData, context) {
                     || getETFChange(barSource, other, date, checkKey);
         if ((direction === 'CALL' && change > 0) || (direction === 'PUT' && change < 0)) etfAlignCount++;
       }
-      if (etfAlignCount < 1) continue;  // at least 1 other ETF must confirm
+      if (etfAlignCount < 1) continue;
 
-      // ── VWAP alignment (soft — confidence bonus) ──────────────────────────
-      const vwapAligned = vwap > 0 && (
-        (direction === 'CALL' && currentPrice >= vwap) ||
-        (direction === 'PUT' && currentPrice <= vwap)
-      );
-
-      // ── Stop & target ─────────────────────────────────────────────────────
+      // ── Stop & target (pattern-specific) ────────────────────────────────
+      // Stop: tight swing (5 bars) ± 2% ATR. Target: 1.5x risk.
       const recentSwingLow = Math.min(...bars.slice(-5).map(b => b.l));
       const recentSwingHigh = Math.max(...bars.slice(-5).map(b => b.h));
       let stopPrice, targetPrice;
       if (direction === 'CALL') {
         stopPrice = +(recentSwingLow - atrDollar * 0.02).toFixed(2);
         const risk = currentPrice - stopPrice;
+        if (risk <= 0) continue;
         targetPrice = +(currentPrice + risk * 1.5).toFixed(2);
       } else {
         stopPrice = +(recentSwingHigh + atrDollar * 0.02).toFixed(2);
         const risk = stopPrice - currentPrice;
+        if (risk <= 0) continue;
         targetPrice = +(currentPrice - risk * 1.5).toFixed(2);
       }
 
-      // ── Confidence scoring ────────────────────────────────────────────────
-      let confidence = 65;
+      // ── Room-to-move check (Parker's "room relative to resistance") ─────
+      const stopDist = Math.abs(currentPrice - stopPrice);
+      const room = findNextOpposingLevel(currentPrice, direction, stopDist, sessionLevels, 1.5);
+      if (!room.ok) continue;  // not enough clearance to next opposing level
 
-      // MACD strength
-      if (macd1m.crossover === 'BULLISH' || macd1m.crossover === 'BEARISH') confidence += 6;
-      else if (macd1m.histogramTrend === 'EXPANDING_BULLISH' || macd1m.histogramTrend === 'EXPANDING_BEARISH') confidence += 3;
-      else confidence += 1;
+      // ── VWAP alignment (soft bonus) ─────────────────────────────────────
+      const vwapAligned = vwap > 0 && (
+        (direction === 'CALL' && currentPrice >= vwap) ||
+        (direction === 'PUT' && currentPrice <= vwap)
+      );
 
-      // Candle pattern strength
-      if (candlePatternName.includes('MARUBOZU') || candlePatternName.includes('ENGULFING')) confidence += 5;
-      else if (candlePatternName.includes('STRONG') || candlePatternName.includes('STAR')) confidence += 3;
-      else confidence += 2;
+      // ── Confidence scoring ──────────────────────────────────────────────
+      let confidence = 60;
 
-      // Volume
-      if (volRatio >= 2.0) confidence += 4;
-      else confidence += 2;  // already gated at 1.3
+      // Trigger base bonus
+      if (trigger === 'VOL_BURST') confidence += 8;
+      else if (trigger === 'LEVEL_BREAK') confidence += 7;
+      else if (trigger === 'LVN_THRUST') confidence += 6;
+      else if (trigger === 'HVN_REJECT') confidence += 5;
 
-      // VWAP
+      // RVOL strength
+      if (rvol >= 3.0) confidence += 6;
+      else if (rvol >= 2.0) confidence += 4;
+      else if (rvol >= 1.5) confidence += 2;
+
+      // Candle body quality
+      if (bodyFrac >= 0.75) confidence += 4;
+      else if (bodyFrac >= 0.6) confidence += 2;
+
+      // Bar flow agreement
+      const flowAgrees = (direction === 'CALL' && buyRatio >= 0.55) || (direction === 'PUT' && buyRatio <= 0.45);
+      if (flowAgrees) confidence += 3;
+
+      // EMA9 slope agrees (soft bonus, some triggers already gate)
+      const emaAgrees = (direction === 'CALL' && ema.slopeSign > 0) || (direction === 'PUT' && ema.slopeSign < 0);
+      if (emaAgrees) confidence += 3;
+
+      // VWAP alignment
       if (vwapAligned) confidence += 3;
 
       // Cross-ETF
       if (etfAlignCount >= 2) confidence += 5;
-      else confidence += 3;
+      else confidence += 2;
 
-      // PUT directional bias — user has better success with PUTs
-      if (direction === 'PUT') confidence += 3;
+      // Room-to-move quality
+      if (room.roomVsRisk >= 3.0) confidence += 3;
+      else if (room.roomVsRisk >= 2.0) confidence += 2;
+
+      // Location bonus for high-quality contexts
+      if (location.kind === 'IN_LVN' || location.kind === 'NEAR_LEVEL') confidence += 2;
+      if (location.kind === 'IN_VALUE') confidence -= 3;  // chop zone penalty
+
+      // PUT directional bias — Parker's slight edge
+      if (direction === 'PUT') confidence += 2;
 
       confidence = Math.max(60, Math.min(95, confidence));
 
+      // Confluence count (for setup quality scoring)
+      const confluenceCount =
+        (etfAlignCount >= 1 ? 1 : 0) +
+        (vwapAligned ? 1 : 0) +
+        (emaAgrees ? 1 : 0) +
+        (flowAgrees ? 1 : 0) +
+        (room.roomVsRisk >= 2.0 ? 1 : 0);
+
       tickerCount++;
+      lastSignalOffset = offset;
+
+      if (!_momScalpDiagLogged) {
+        _momScalpDiagLogged = true;
+        console.log(`[DIAG] MOMENTUM_SCALP v2 first signal: ${ticker} ${checkKey} ${direction} ${trigger} rvol=${rvol.toFixed(2)} conf=${confidence} loc=${location.kind} room=${room.roomVsRisk}x`);
+      }
 
       const _msEnrich = enrichMetadata(bars, ticker, date, currentPrice, vwap, sessionOpen, atrDollar, etfMinuteBars, checkKey);
       signals.push(buildSignal('MOMENTUM_SCALP', date, checkKey, ticker, direction, confidence, currentPrice, stopPrice, targetPrice, profile, {
-        pattern: 'MACD_CANDLE_CONFIRMED',
-        candle_pattern: candlePatternName,
+        pattern: trigger,
+        trigger,
+        candle_pattern: candleName,
         candle_quality: candleQuality,
-        macd_1m_histogram: +macd1m.histogram.toFixed(4),
-        macd_1m_crossover: macd1m.crossover,
-        macd_1m_trend: macd1m.histogramTrend,
-        five_min_aligned: fiveMinAligned,
-        vol_ratio: +volRatio.toFixed(2),
+        rvol_true: +rvol.toFixed(2),
+        ema9: +ema.ema9.toFixed(4),
+        ema9_slope: +ema.slope.toFixed(4),
+        ema9_slope_sign: ema.slopeSign,
+        buy_ratio: +buyRatio.toFixed(3),
+        body_frac: +bodyFrac.toFixed(3),
+        location: location.kind,
+        location_source: location.nearest ? location.nearest.source : null,
+        value_profile_poc: valueProfile ? +valueProfile.poc.toFixed(4) : null,
+        value_profile_vah: valueProfile ? +valueProfile.vah.toFixed(4) : null,
+        value_profile_val: valueProfile ? +valueProfile.val.toFixed(4) : null,
         vwap_aligned: vwapAligned,
-        cross_etf_aligned: true,
+        cross_etf_aligned: etfAlignCount >= 1,
         etf_align_count: etfAlignCount,
-        confluence: etfAlignCount + (vwapAligned ? 1 : 0),
+        room_dollar: room.roomDollar,
+        room_vs_risk: room.roomVsRisk,
+        next_opposing_level: room.nextLevel ? room.nextLevel.level : null,
+        next_opposing_source: room.nextLevel ? room.nextLevel.source : null,
+        confluence: confluenceCount,
         exitOverrides: {
           targetPct: 100,         // no fixed cap — let gamma run on big moves
-          trailActivatePct: 20,   // trail only after meaningful gain (10-20% is typical capture)
-          trailGiveBack: 0.65,    // keep 65% of peak when trail does fire
-          lossCutPct: -15,        // cut at -15% (premium is the risk)
-          momentumStall: true,    // PRIMARY profit exit: 2 bars against = reversal starting
+          trailActivatePct: 20,   // trail only after meaningful gain
+          trailGiveBack: 0.65,    // keep 65% of peak when trail fires
+          lossCutPct: -15,        // hard cut: premium is the risk
+          momentumStall: true,    // PRIMARY profit exit: 2 bars against = reversal
         },
         ..._msEnrich,
       }));

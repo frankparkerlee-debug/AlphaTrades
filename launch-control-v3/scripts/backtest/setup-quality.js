@@ -413,22 +413,66 @@ export const SETUP_RUBRICS = {
   },
 
   MOMENTUM_SCALP: {
+    // v2 rubric: volume-burst/level-break/LVN-thrust/HVN-reject triggers.
+    // Scores Parker's discretionary criteria: trigger type, true RVOL, body
+    // quality, order-flow agreement, EMA9 slope, room-to-move, cross-ETF.
     factors: [
-      { name: 'pattern', weight: 35, score: (m) => {
-        if (m.pattern === 'MOMENTUM_BURST') return 100;
-        if (m.pattern === 'LEVEL_REJECTION') return 85;
-        if (m.pattern === 'TREND_CONTINUATION') return 90;
+      { name: 'trigger', weight: 25, score: (m) => {
+        const t = m.trigger || m.pattern;
+        if (t === 'VOL_BURST') return 100;
+        if (t === 'LEVEL_BREAK') return 90;
+        if (t === 'LVN_THRUST') return 80;
+        if (t === 'HVN_REJECT') return 75;
         return 30;
       }},
-      { name: 'vol_ratio', weight: 25, score: (m) => {
-        const vr = m.vol_ratio || 0;
-        if (vr >= 2.0) return 100;
-        if (vr >= 1.5) return 75;
-        if (vr >= 1.0) return 50;
+      { name: 'rvol_true', weight: 20, score: (m) => {
+        const r = m.rvol_true || 0;
+        if (r >= 3.0) return 100;
+        if (r >= 2.0) return 85;
+        if (r >= 1.5) return 65;
+        if (r >= 1.2) return 40;
+        return 15;
+      }},
+      { name: 'body_frac', weight: 10, score: (m) => {
+        const b = m.body_frac || 0;
+        if (b >= 0.75) return 100;
+        if (b >= 0.6) return 75;
+        if (b >= 0.45) return 50;
+        return 25;
+      }},
+      { name: 'buy_ratio', weight: 10, score: (m) => {
+        if (m.buy_ratio == null) return 50;
+        const dist = Math.abs(m.buy_ratio - 0.5);
+        if (dist >= 0.2) return 100;
+        if (dist >= 0.1) return 70;
+        if (dist >= 0.05) return 45;
         return 20;
       }},
-      { name: 'candle_type', weight: 20, score: (m) => scoreCandle(m.candle_type) },
-      { name: 'spy_aligned', weight: 20, score: (m) => m.spy_aligned ? 100 : 30 },
+      { name: 'ema9_slope', weight: 10, score: (m) => {
+        if (m.ema9_slope_sign == null) return 50;
+        return m.ema9_slope_sign !== 0 ? 85 : 35;
+      }},
+      { name: 'room_vs_risk', weight: 10, score: (m) => {
+        const r = m.room_vs_risk || 0;
+        if (r >= 3.0) return 100;
+        if (r >= 2.0) return 80;
+        if (r >= 1.5) return 60;
+        return 25;
+      }},
+      { name: 'cross_etf', weight: 10, score: (m) => {
+        const c = m.etf_align_count || 0;
+        if (c >= 2) return 100;
+        if (c >= 1) return 70;
+        return 20;
+      }},
+      { name: 'location', weight: 5, score: (m) => {
+        const l = m.location;
+        if (l === 'NEAR_LEVEL' || l === 'IN_LVN') return 100;
+        if (l === 'AT_HVN' || l === 'ABOVE_VALUE' || l === 'BELOW_VALUE') return 75;
+        if (l === 'OPEN_AIR') return 50;
+        if (l === 'IN_VALUE') return 20;
+        return 40;
+      }},
     ],
   },
 };

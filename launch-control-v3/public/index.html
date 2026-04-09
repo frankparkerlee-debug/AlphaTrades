@@ -1009,7 +1009,18 @@ function render() {
     return;
   }
 
-  const html = list.map(buildCard).join('');
+  // Defensive: one bad signal must not kill the entire grid. Catch per-signal.
+  const html = list.map(s => {
+    try {
+      return buildCard(s);
+    } catch (err) {
+      console.error('buildCard failed for', s.signal_id, s.ticker, err);
+      return `<div class="card" style="border:1px solid var(--red);padding:10px;font-family:var(--mono);font-size:10px;color:var(--red)">
+        <div style="font-weight:700;margin-bottom:4px">${s.ticker || '?'} — RENDER ERROR</div>
+        <div style="color:var(--text3);font-size:9px">${(err && err.message) || 'unknown'}</div>
+      </div>`;
+    }
+  }).join('');
   const hash = workspace + '|' + list.map(s => `${s.signal_id}:${s.composite_raw}:${s.grade}:${s.status}:${s.contract_mid}`).join('|');
   if (hash !== lastRenderHash) {
     document.getElementById('signalGrid').innerHTML = html;
