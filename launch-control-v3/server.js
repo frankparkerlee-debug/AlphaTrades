@@ -30,6 +30,8 @@ import {
   generateMomentumScalpSignals,
 } from './scripts/backtest/strategies/live-adapter.js';
 import { getRecentFlow } from './src/data/alpaca-streams.js';
+import { startSentimentPoller, getSentimentPollerStats } from './src/sentiment/poller.js';
+import { getRecentSentiment, getSentimentRollup, getIngestCounts } from './src/sentiment/store.js';
 import { monitorOpenPositions } from './src/jobs/options-monitor.js';
 import { scoreContinuation } from './src/jobs/continuation-scorer.js';
 import { startAutoTrader, stopAutoTrader, getAutoTraderStatus } from './src/execution/auto-trader.js';
@@ -1392,6 +1394,47 @@ app.post('/api/edit', async (req, res) => {
 
 // Health check
 app.get('/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+
+// ── SENTIMENT FEED ──────────────────────────────────────────────────────────
+// /api/sentiment           — recent classified events (query: source, ticker, impact, limit)
+// /api/sentiment/rollup    — aggregated ticker sentiment (query: ticker, window)
+// /api/sentiment/status    — poller health + ingest counts
+
+app.get('/api/sentiment', async (req, res) => {
+  try {
+    const { source, ticker, impact, limit } = req.query;
+    const rows = await getRecentSentiment({
+      source: source || undefined,
+      ticker: ticker || undefined,
+      impact: impact ? impact.split(',') : ['MEDIUM', 'HIGH'],
+      limit: Math.min(parseInt(limit) || 50, 200),
+    });
+    res.json({ ok: true, count: rows.length, events: rows });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.get('/api/sentiment/rollup', async (req, res) => {
+  try {
+    const ticker = req.query.ticker || 'SPY';
+    const window = Math.min(parseInt(req.query.window) || 60, 1440);
+    const rollup = await getSentimentRollup(ticker, window);
+    res.json({ ok: true, ticker, window_min: window, ...rollup });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.get('/api/sentiment/status', async (req, res) => {
+  try {
+    const counts = await getIngestCounts(60);
+    const poller = getSentimentPollerStats();
+    res.json({ ok: true, ingest_last_60m: counts, poller });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
 
 // Debug endpoint — test contract selector on live Render
 // Snapshot scan — intraday movers
@@ -2930,6 +2973,9 @@ server.listen(PORT, () => {
 async function startWorker() {
   // Always start REST poller — guaranteed signal generation every 60s
   startRestPoller();
+
+  // Sentiment ingestion — StockTwits, News RSS, Truth Social
+  startSentimentPoller();
 
   // Also try WebSocket worker for real-time scoring
   try {
