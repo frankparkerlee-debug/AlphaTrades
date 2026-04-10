@@ -211,6 +211,47 @@ a { color: inherit; text-decoration: none; }
 .news-headline a { color: var(--text1); }
 .news-headline a:hover { color: var(--amber); }
 
+/* SENTIMENT FEED */
+.sent-list { max-height: 500px; overflow-y: auto; }
+.sent-item {
+  border-bottom: 1px solid var(--border);
+  padding: 8px 2px;
+  display: flex; gap: 10px; align-items: flex-start;
+}
+.sent-item:last-child { border-bottom: 0; }
+.sent-strip { width: 3px; align-self: stretch; border-radius: 2px; background: var(--text4); }
+.sent-strip.up { background: var(--green); }
+.sent-strip.down { background: var(--red); }
+.sent-body { flex: 1; min-width: 0; }
+.sent-row1 { display: flex; gap: 6px; align-items: center; margin-bottom: 3px; flex-wrap: wrap; }
+.sent-source { font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: 0.5px; color: var(--purple); }
+.sent-author { font-family: var(--mono); font-size: 9px; color: var(--text3); }
+.sent-impact { font-family: var(--mono); font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 2px; }
+.sent-impact.HIGH { background: rgba(239,68,68,0.15); color: var(--red2); }
+.sent-impact.MEDIUM { background: rgba(245,158,11,0.15); color: var(--amber2); }
+.sent-impact.LOW { background: rgba(59,130,246,0.1); color: var(--blue); }
+.sent-conf { font-family: var(--mono); font-size: 9px; color: var(--text3); }
+.sent-tickers { display: flex; gap: 4px; flex-wrap: wrap; }
+.sent-tk { font-family: var(--mono); font-size: 10px; font-weight: 700; color: var(--amber); cursor: pointer; }
+.sent-tk:hover { text-decoration: underline; }
+.sent-headline { font-size: 12px; color: var(--text1); line-height: 1.3; }
+.sent-headline a { color: var(--text1); }
+.sent-headline a:hover { color: var(--amber); }
+.sent-rationale { font-size: 11px; color: var(--text3); margin-top: 2px; line-height: 1.3; }
+.sent-time { font-family: var(--mono); font-size: 9px; color: var(--text4); }
+.sent-rollup-row { display: flex; gap: 16px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.sent-rollup-label { font-family: var(--mono); font-size: 10px; color: var(--text3); width: 50px; }
+.sent-rollup-bar { flex: 1; height: 6px; border-radius: 3px; background: var(--bg3); position: relative; overflow: hidden; }
+.sent-rollup-fill { height: 100%; border-radius: 3px; }
+.sent-rollup-val { font-family: var(--mono); font-size: 10px; width: 70px; text-align: right; }
+.sent-tabs { display: flex; gap: 0; margin-bottom: 6px; }
+.sent-tab { font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: 1px; padding: 4px 10px;
+  background: none; border: 1px solid var(--border); color: var(--text3); cursor: pointer; }
+.sent-tab:first-child { border-radius: 3px 0 0 3px; }
+.sent-tab:last-child { border-radius: 0 3px 3px 0; }
+.sent-tab + .sent-tab { border-left: 0; }
+.sent-tab.on { background: var(--bg3); color: var(--amber); border-color: var(--amber); }
+
 /* MACRO */
 .macro-row {
   display: flex; align-items: center; justify-content: space-between;
@@ -689,6 +730,47 @@ a { color: inherit; text-decoration: none; }
     <div class="news-list" id="newsList"><div class="empty">loading...</div></div>
   </div>
 
+  <!-- SENTIMENT FEED (StockTwits, News RSS, Truth Social) -->
+  <div class="card span-12">
+    <div class="card-title">
+      <span>Sentiment Feed</span>
+      <span style="display:flex;gap:8px;align-items:center;">
+        <span class="meta" id="sentCount">0 events</span>
+        <span class="meta" id="sentStatus">&mdash;</span>
+      </span>
+    </div>
+    <!-- SPY / QQQ rollup bars -->
+    <div style="display:flex;gap:24px;padding:6px 2px 10px;border-bottom:1px solid var(--border)">
+      <div style="flex:1">
+        <div class="sent-rollup-row">
+          <span class="sent-rollup-label">SPY</span>
+          <div class="sent-rollup-bar"><div class="sent-rollup-fill" id="spyBar" style="width:50%;background:var(--text4)"></div></div>
+          <span class="sent-rollup-val" id="spyRollup">&mdash;</span>
+        </div>
+      </div>
+      <div style="flex:1">
+        <div class="sent-rollup-row">
+          <span class="sent-rollup-label">QQQ</span>
+          <div class="sent-rollup-bar"><div class="sent-rollup-fill" id="qqqBar" style="width:50%;background:var(--text4)"></div></div>
+          <span class="sent-rollup-val" id="qqqRollup">&mdash;</span>
+        </div>
+      </div>
+    </div>
+    <!-- Source tabs -->
+    <div class="sent-tabs" id="sentTabs">
+      <button class="sent-tab on" data-sentfilter="all">ALL</button>
+      <button class="sent-tab" data-sentfilter="truth_social">TRUTH</button>
+      <button class="sent-tab" data-sentfilter="stocktwits">STOCKTWITS</button>
+      <button class="sent-tab" data-sentfilter="reuters">REUTERS</button>
+      <button class="sent-tab" data-sentfilter="ap">AP</button>
+      <button class="sent-tab" data-sentfilter="bloomberg">BLOOMBERG</button>
+      <button class="sent-tab" data-sentfilter="aljazeera">AJ</button>
+      <button class="sent-tab" data-sentfilter="ft">FT</button>
+      <button class="sent-tab" data-sentfilter="afp">AFP</button>
+    </div>
+    <div class="sent-list" id="sentList"><div class="empty">loading sentiment...</div></div>
+  </div>
+
   <!-- UNUSUAL OPTIONS FLOW -->
   <div class="card span-12">
     <div class="card-title">
@@ -925,6 +1007,114 @@ function renderHealth(d) {
     '<div class="health-row"><span class="health-label"><span class="dot ' + dotCls(h.bars) + '"></span>BARS STREAM</span><span class="health-val">' + escapeHtml(h.bars) + '</span></div>' +
     '<div class="health-row"><span class="health-label"><span class="dot ' + dotCls(h.news) + '"></span>NEWS STREAM</span><span class="health-val">' + escapeHtml(h.news) + '</span></div>' +
     '<div class="health-row"><span class="health-label">LAST SNAPSHOT</span><span class="health-val">' + (h.lastSnapshotAt ? fmtTimeAgo(h.lastSnapshotAt) : '—') + '</span></div>';
+}
+
+// ── SENTIMENT FEED ──────────────────────────────────────────────────────────
+let activeSentFilter = 'all';
+let sentimentData = [];
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.sent-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.sent-tab').forEach(b => b.classList.remove('on'));
+      btn.classList.add('on');
+      activeSentFilter = btn.dataset.sentfilter;
+      renderSentimentList();
+    });
+  });
+  loadSentiment();
+  setInterval(loadSentiment, 30000);
+});
+
+async function loadSentiment() {
+  try {
+    const [evRes, spyRes, qqqRes, statusRes] = await Promise.all([
+      fetch('/api/sentiment?limit=100&impact=LOW,MEDIUM,HIGH', { cache: 'no-store' }),
+      fetch('/api/sentiment/rollup?ticker=SPY&window=60', { cache: 'no-store' }),
+      fetch('/api/sentiment/rollup?ticker=QQQ&window=60', { cache: 'no-store' }),
+      fetch('/api/sentiment/status', { cache: 'no-store' }),
+    ]);
+    const evData = await evRes.json();
+    const spyData = await spyRes.json();
+    const qqqData = await qqqRes.json();
+    const statusData = await statusRes.json();
+    sentimentData = evData.events || [];
+    document.getElementById('sentCount').textContent = sentimentData.length + ' events';
+    renderSentimentRollup('spy', spyData);
+    renderSentimentRollup('qqq', qqqData);
+    renderSentimentStatus(statusData);
+    renderSentimentList();
+  } catch (err) {
+    console.error('sentiment load failed:', err);
+  }
+}
+
+function renderSentimentRollup(prefix, data) {
+  const bar = document.getElementById(prefix + 'Bar');
+  const val = document.getElementById(prefix + 'Rollup');
+  const upN = parseInt(data.up_n) || 0;
+  const downN = parseInt(data.down_n) || 0;
+  const total = upN + downN;
+  if (total === 0) {
+    bar.style.width = '50%';
+    bar.style.background = 'var(--text4)';
+    val.textContent = 'no data';
+    val.style.color = 'var(--text4)';
+    return;
+  }
+  const pct = Math.round((upN / total) * 100);
+  bar.style.width = pct + '%';
+  bar.style.background = pct >= 55 ? 'var(--green)' : pct <= 45 ? 'var(--red)' : 'var(--amber)';
+  const avgSent = parseFloat(data.avg_sentiment) || 0;
+  const label = avgSent > 0.3 ? 'BULLISH' : avgSent < -0.3 ? 'BEARISH' : 'MIXED';
+  val.textContent = label + ' (' + upN + 'u/' + downN + 'd)';
+  val.style.color = avgSent > 0.3 ? 'var(--green2)' : avgSent < -0.3 ? 'var(--red2)' : 'var(--amber2)';
+}
+
+function renderSentimentStatus(data) {
+  const el = document.getElementById('sentStatus');
+  const counts = data.ingest_last_60m || [];
+  const total = counts.reduce((s, c) => s + parseInt(c.n), 0);
+  const sources = counts.map(c => c.source).join(', ');
+  el.textContent = total + ' in 60m · ' + counts.length + ' sources';
+}
+
+function renderSentimentList() {
+  const list = document.getElementById('sentList');
+  let items = sentimentData;
+  if (activeSentFilter !== 'all') items = items.filter(e => e.source === activeSentFilter);
+  if (!items.length) { list.innerHTML = '<div class="empty">no events for this filter</div>'; return; }
+  list.innerHTML = items.map(e => {
+    const dir = e.direction || 'NEUTRAL';
+    const stripCls = dir === 'UP' ? 'up' : dir === 'DOWN' ? 'down' : '';
+    const dirTag = dir === 'UP' ? '<span class="tag tag-green">UP</span>'
+                 : dir === 'DOWN' ? '<span class="tag tag-red">DOWN</span>'
+                 : '<span class="tag tag-muted">NEU</span>';
+    const impactTag = e.market_impact && e.market_impact !== 'NONE'
+      ? '<span class="sent-impact ' + escapeHtml(e.market_impact) + '">' + escapeHtml(e.market_impact) + '</span>' : '';
+    const conf = e.confidence ? '<span class="sent-conf">conf ' + Number(e.confidence).toFixed(2) + '</span>' : '';
+    const tickers = (e.tickers || []).map(t =>
+      '<span class="sent-tk" onclick="openTickerDrill(\'' + escapeHtml(t) + '\')">' + escapeHtml(t) + '</span>'
+    ).join('');
+    const headline = e.title
+      ? (e.url ? '<a href="' + escapeHtml(e.url) + '" target="_blank" rel="noopener">' + escapeHtml(e.title) + '</a>' : escapeHtml(e.title))
+      : escapeHtml((e.text || '').slice(0, 200));
+    const rationale = e.rationale ? '<div class="sent-rationale">' + escapeHtml(e.rationale) + '</div>' : '';
+    return '<div class="sent-item">' +
+      '<div class="sent-strip ' + stripCls + '"></div>' +
+      '<div class="sent-body">' +
+        '<div class="sent-row1">' +
+          '<span class="sent-source">' + escapeHtml(e.source) + '</span>' +
+          (e.author ? '<span class="sent-author">@' + escapeHtml(e.author) + '</span>' : '') +
+          dirTag + impactTag + conf +
+          '<span class="sent-time">' + fmtTimeAgo(e.raw_ts) + '</span>' +
+        '</div>' +
+        '<div class="sent-headline">' + headline + '</div>' +
+        rationale +
+        (tickers ? '<div class="sent-tickers" style="margin-top:3px">' + tickers + '</div>' : '') +
+      '</div>' +
+    '</div>';
+  }).join('');
 }
 
 function renderAll(d) {
