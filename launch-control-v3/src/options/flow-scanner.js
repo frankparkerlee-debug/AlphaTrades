@@ -40,6 +40,13 @@ const MIN_MID = 0.10;
 const MAX_PAGES_PER_TYPE = 3; // caps per-ticker latency
 const CONCURRENCY = 4;
 
+// Track auth status so we can surface it in /api/research/options-flow
+let lastAuthError = null;
+let lastSuccessAt = null;
+export function getFlowScannerHealth() {
+  return { lastAuthError, lastSuccessAt, hasKeys: Boolean(API_KEY && API_SECRET) };
+}
+
 /**
  * Parse OCC symbol → { type, strike, expiry }
  * e.g. "AAPL260327C00175000" → { type:'CALL', strike:175, expiry:'2026-03-27' }
@@ -74,9 +81,16 @@ async function fetchTickerChain(ticker) {
         Object.assign(allSnaps, res.data?.snapshots || {});
         pageToken = res.data?.next_page_token || null;
         pages++;
+        lastSuccessAt = new Date().toISOString();
+        lastAuthError = null;
       } catch (err) {
-        // Non-fatal — log and continue
-        console.warn(`[flow-scanner] ${ticker} ${type} page ${pages} failed:`, err.response?.status || err.message);
+        const status = err.response?.status;
+        if (status === 401 || status === 403) {
+          lastAuthError = { status, message: `Options data 401/403 — check Alpaca subscription includes options data`, at: new Date().toISOString() };
+          console.error(`[flow-scanner] AUTH FAILED (${status}) for ${ticker} ${type} — your Alpaca plan may not include options data. Check https://app.alpaca.markets/brokerage/dashboard/overview`);
+        } else {
+          console.warn(`[flow-scanner] ${ticker} ${type} page ${pages} failed:`, status || err.message);
+        }
         break;
       }
     } while (pageToken && pages < MAX_PAGES_PER_TYPE);

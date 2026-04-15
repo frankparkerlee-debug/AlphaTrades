@@ -7,7 +7,7 @@ import { Pool } from 'pg';
 import cron from 'node-cron';
 import { createServer } from 'http';
 import { selectOptionsContract, getOptionsVolume, fetchContractQuote } from './src/options/contract-selector.js';
-import { scanUnusualFlow, DEFAULT_FLOW_UNIVERSE } from './src/options/flow-scanner.js';
+import { scanUnusualFlow, DEFAULT_FLOW_UNIVERSE, getFlowScannerHealth } from './src/options/flow-scanner.js';
 import { getNewsEvents, getTickerState } from './src/data/state.js';
 import { computeNewsScore } from './src/scoring/news.js';
 import { runMultiStrategyBacktest } from './scripts/backtest/strategy-runner.js';
@@ -435,7 +435,8 @@ app.get('/api/research/options-flow', async (req, res) => {
     return res.json({ empty: true });
   }
   const payload = await loadOptionsFlow(force);
-  res.json(payload);
+  const health = getFlowScannerHealth();
+  res.json({ ...payload, scannerHealth: health });
 });
 
 // ── RESEARCH / CONTROL CENTER ────────────────────────────────────────────────
@@ -1074,7 +1075,6 @@ app.post('/api/research/chat', async (req, res) => {
     if (messages.length === 0) {
       return res.status(400).json({ error: 'messages array required' });
     }
-    // Sanity-check shape: each entry needs role + content, cap history at 20 turns
     const cleanMessages = messages
       .filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
       .slice(-20)
@@ -1083,7 +1083,7 @@ app.post('/api/research/chat', async (req, res) => {
       return res.status(400).json({ error: 'conversation must end with a user turn' });
     }
 
-    // Gather context in parallel
+    // Gather live context in parallel (lightweight, always available)
     const [research, stratStats, liveSignalsResult] = await Promise.all([
       buildResearchAggregate().catch(() => null),
       loadStrategyStats().catch(() => null),
@@ -1098,7 +1098,6 @@ app.post('/api/research/chat', async (req, res) => {
       `).catch(() => ({ rows: [] })),
     ]);
 
-    // Compact market context
     const ctx = {};
     if (research) {
       ctx.market = {
@@ -1114,12 +1113,8 @@ app.post('/api/research/chat', async (req, res) => {
           sym: s.symbol, label: s.label,
           chgPct: s.changePct != null ? +(s.changePct * 100).toFixed(2) : null,
         })),
-        topGainers: (research.movers?.gainers || []).slice(0, 6).map(m => ({
-          sym: m.symbol, chgPct: +(m.changePct * 100).toFixed(2),
-        })),
-        topLosers: (research.movers?.losers || []).slice(0, 6).map(m => ({
-          sym: m.symbol, chgPct: +(m.changePct * 100).toFixed(2),
-        })),
+        topGainers: (research.movers?.gainers || []).slice(0, 6).map(m => ({ sym: m.symbol, chgPct: +(m.changePct * 100).toFixed(2) })),
+        topLosers: (research.movers?.losers || []).slice(0, 6).map(m => ({ sym: m.symbol, chgPct: +(m.changePct * 100).toFixed(2) })),
         news: (research.news || []).slice(0, 15).map(n => ({
           ticker: n.ticker, headline: n.headline, polarity: n.polarity, catalyst: n.catalyst,
         })),
@@ -1130,25 +1125,17 @@ app.post('/api/research/chat', async (req, res) => {
         runDate: stratStats.runDate,
         strategies: Object.fromEntries(
           Object.entries(stratStats.strategies).map(([k, v]) => [k, {
-            count: v.count,
-            winRate: v.winRate,
-            profitFactor: v.profitFactor,
-            verdict: v.verdict,
-            monteCarloPProfit: v.monteCarloPProfit,
-            directionalAccuracy: v.directionalAccuracy,
-            byGrade: v.byGrade,
+            count: v.count, winRate: v.winRate, profitFactor: v.profitFactor,
+            verdict: v.verdict, monteCarloPProfit: v.monteCarloPProfit,
+            directionalAccuracy: v.directionalAccuracy, byGrade: v.byGrade,
           }])
         ),
       };
     }
     if (liveSignalsResult?.rows?.length) {
       ctx.liveSignals = liveSignalsResult.rows.map(s => ({
-        ticker: s.ticker,
-        direction: s.direction,
-        grade: s.grade,
-        strategy: s.strategy,
-        composite: Number(s.composite_raw) || 0,
-        status: s.status,
+        ticker: s.ticker, direction: s.direction, grade: s.grade, strategy: s.strategy,
+        composite: Number(s.composite_raw) || 0, status: s.status,
         entryPrice: Number(s.price_at_signal) || null,
         spyChgPct: s.spy_change_pct != null ? +(Number(s.spy_change_pct) * 100).toFixed(2) : null,
         relVolume: s.relative_volume != null ? +Number(s.relative_volume).toFixed(2) : null,
@@ -1158,61 +1145,107 @@ app.post('/api/research/chat', async (req, res) => {
         createdAt: s.created_at?.toISOString?.() || null,
       }));
     }
-    // Best-effort options flow if already cached
     if (optionsFlowCache?.payload?.tickers?.length) {
       ctx.optionsFlow = {
         asOf: optionsFlowCache.payload.generatedAt,
         topTickers: optionsFlowCache.payload.tickers.slice(0, 8).map(t => ({
-          ticker: t.ticker,
-          bias: t.bias,
-          callNotional: t.callNotional,
-          putNotional: t.putNotional,
-          cpRatio: t.cpRatio,
-          unusualCount: t.unusualCount,
+          ticker: t.ticker, bias: t.bias, callNotional: t.callNotional,
+          putNotional: t.putNotional, cpRatio: t.cpRatio, unusualCount: t.unusualCount,
         })),
       };
     }
 
-    const systemPrompt = `You are a senior options trading analyst embedded in AlphaTrades Launch Control, a dashboard for a discretionary scalper trading single-leg directional options on a $5-7.5K cash account.
-
-You answer questions from the trader about:
-- Live signals currently on screen (their setups, grades, whether to take them)
-- Historical strategy performance from recent backtests (win rates, edge)
-- Market context (regime, sector posture, news flow, unusual options flow)
-- Tactical execution (entry/exit, sizing, risk)
-
-Ground every answer in the CONTEXT below. When the user asks about a signal or ticker, find it in \`liveSignals\` or the market data and cite specifics (grade, composite, strategy, price, SPY direction, etc.). When they ask about a strategy's edge, cite \`strategyStats\` numbers directly (win rate, profit factor, MC P(profit), verdict). If the answer isn't in the context, say so — don't invent signals, prices, or stats.
-
-Style: direct, opinionated, terse. No hedging. Use monospace-style formatting for numbers and tickers. Short paragraphs. Bullet lists when comparing multiple items. Never use emojis.
-
-The trader is experienced — skip disclaimers and basic definitions. If a setup looks weak, say why. If it looks strong, say why. Suggest concrete action when appropriate.
-
-CONTEXT:
-${JSON.stringify(ctx, null, 2)}`;
-
+    // ── TOOL-USE RESEARCH AGENT ──────────────────────────────────────────────
+    const { TOOL_DEFINITIONS, executeTool } = await import('./src/chat/research-tools.js');
     const Anthropic = (await import('@anthropic-ai/sdk')).default;
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 1200,
-      system: systemPrompt,
-      messages: cleanMessages,
-    });
+    const systemPrompt = `You are a senior options trading research agent embedded in AlphaTrades Launch Control, a dashboard for a discretionary scalper trading single-leg directional options on a $5-7.5K cash account.
 
-    const text = response.content?.[0]?.text || '';
-    res.json({
-      role: 'assistant',
-      content: text,
-      model: 'claude-sonnet-4-6',
-      contextSize: {
-        liveSignals: ctx.liveSignals?.length || 0,
-        strategies: Object.keys(ctx.strategyStats?.strategies || {}).length,
-        hasMarket: !!ctx.market,
-        hasFlow: !!ctx.optionsFlow,
-      },
-      usage: response.usage || null,
-    });
+You have two capabilities:
+1. LIVE CONTEXT (below) — today's signals, market pulse, strategy stats, options flow
+2. RESEARCH TOOLS — you can actively search the web, query sentiment feeds, look up historical signals/trades, check ticker intelligence, and read articles
+
+When the user asks about current events, geopolitical developments, news impact, or anything NOT in your live context, USE YOUR TOOLS. Do not say "I don't have that information" — search for it.
+
+Tool guidance:
+- "What happened with Iran?" → search_news + query_sentiment
+- "How did my trades do this week?" → query_paper_trades
+- "What's the sentiment on SPY?" → query_sentiment
+- "When does NVDA report?" → query_ticker_intel
+- "Show me recent ORB signals" → query_signals
+- For deep research, chain: search_news → fetch_article for the most relevant link → synthesize
+
+Ground every answer in data — your context, tool results, or both. Cite specifics. If a tool returns no results, say so honestly.
+
+Style: direct, opinionated, terse. No hedging. Use monospace formatting for numbers/tickers. Short paragraphs. Bullet lists when comparing. Never use emojis.
+
+The trader is experienced — skip disclaimers. If a setup looks weak, say why. If it looks strong, say why. Suggest concrete action when appropriate.
+
+LIVE CONTEXT:
+${JSON.stringify(ctx, null, 2)}`;
+
+    const MAX_TOOL_ROUNDS = 5;
+    let loopMessages = [...cleanMessages];
+    let toolsUsed = [];
+    let totalUsage = { input_tokens: 0, output_tokens: 0 };
+
+    for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+      const response = await client.messages.create({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 2000,
+        system: systemPrompt,
+        messages: loopMessages,
+        tools: TOOL_DEFINITIONS,
+      });
+
+      if (response.usage) {
+        totalUsage.input_tokens += response.usage.input_tokens || 0;
+        totalUsage.output_tokens += response.usage.output_tokens || 0;
+      }
+
+      // Check if response contains tool use
+      const toolUseBlocks = (response.content || []).filter(b => b.type === 'tool_use');
+      const textBlocks = (response.content || []).filter(b => b.type === 'text');
+
+      if (toolUseBlocks.length === 0 || round === MAX_TOOL_ROUNDS) {
+        // No more tool calls — return the text response
+        const finalText = textBlocks.map(b => b.text).join('\n') || '(no response)';
+        return res.json({
+          role: 'assistant',
+          content: finalText,
+          model: 'claude-sonnet-4-6',
+          toolsUsed,
+          contextSize: {
+            liveSignals: ctx.liveSignals?.length || 0,
+            strategies: Object.keys(ctx.strategyStats?.strategies || {}).length,
+            hasMarket: !!ctx.market,
+            hasFlow: !!ctx.optionsFlow,
+          },
+          usage: totalUsage,
+        });
+      }
+
+      // Execute tools and continue the loop
+      loopMessages.push({ role: 'assistant', content: response.content });
+
+      const toolResults = [];
+      for (const toolBlock of toolUseBlocks) {
+        const toolName = toolBlock.name;
+        const toolInput = toolBlock.input || {};
+        console.log(`[chat-agent] tool: ${toolName}(${JSON.stringify(toolInput).slice(0, 200)})`);
+        toolsUsed.push({ tool: toolName, input: toolInput });
+
+        const result = await executeTool(toolName, toolInput);
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: toolBlock.id,
+          content: JSON.stringify(result).slice(0, 8000),
+        });
+      }
+
+      loopMessages.push({ role: 'user', content: toolResults });
+    }
   } catch (err) {
     console.error('research chat error:', err.message);
     res.status(500).json({ error: err.message });

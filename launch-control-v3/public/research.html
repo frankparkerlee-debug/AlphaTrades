@@ -251,6 +251,8 @@ a { color: inherit; text-decoration: none; }
 .sent-tab:last-child { border-radius: 0 3px 3px 0; }
 .sent-tab + .sent-tab { border-left: 0; }
 .sent-tab.on { background: var(--bg3); color: var(--amber); border-color: var(--amber); }
+.sent-item.arc { background: rgba(139,92,246,0.06); border-left: 3px solid var(--purple); }
+.sent-item.arc .sent-source { color: var(--purple); font-size: 10px; }
 
 /* MACRO */
 .macro-row {
@@ -500,6 +502,21 @@ a { color: inherit; text-decoration: none; }
   40%    { content: '.'; }
   60%    { content: '..'; }
   80%,100% { content: '...'; }
+}
+.chat-tools-used {
+  display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px;
+}
+.chat-tool-badge {
+  display: inline-block; padding: 2px 6px; font-size: 9px;
+  font-family: var(--mono); background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 3px; color: var(--text3); letter-spacing: 0.3px;
+}
+.chat-tool-badge.search_news { border-color: #3b82f680; color: #60a5fa; }
+.chat-tool-badge.query_sentiment { border-color: #a855f780; color: #c084fc; }
+.chat-tool-badge.query_signals { border-color: #f59e0b80; color: #fbbf24; }
+.chat-tool-badge.query_paper_trades { border-color: #10b98180; color: #34d399; }
+.chat-tool-badge.query_ticker_intel { border-color: #06b6d480; color: #22d3ee; }
+.chat-tool-badge.fetch_article { border-color: #64748b80; color: #94a3b8; }
 }
 
 .chat-input-row {
@@ -767,6 +784,9 @@ a { color: inherit; text-decoration: none; }
       <button class="sent-tab" data-sentfilter="aljazeera">AJ</button>
       <button class="sent-tab" data-sentfilter="ft">FT</button>
       <button class="sent-tab" data-sentfilter="afp">AFP</button>
+      <button class="sent-tab" data-sentfilter="dawn">DAWN</button>
+      <button class="sent-tab" data-sentfilter="bbc_mideast">BBC ME</button>
+      <button class="sent-tab" data-sentfilter="narrative_synthesis">ARCS</button>
     </div>
     <div class="sent-list" id="sentList"><div class="empty">loading sentiment...</div></div>
   </div>
@@ -1100,12 +1120,15 @@ function renderSentimentList() {
       ? (e.url ? '<a href="' + escapeHtml(e.url) + '" target="_blank" rel="noopener">' + escapeHtml(e.title) + '</a>' : escapeHtml(e.title))
       : escapeHtml((e.text || '').slice(0, 200));
     const rationale = e.rationale ? '<div class="sent-rationale">' + escapeHtml(e.rationale) + '</div>' : '';
-    return '<div class="sent-item">' +
+    const isArc = e.source === 'narrative_synthesis';
+    const arcCls = isArc ? ' arc' : '';
+    const srcLabel = isArc ? 'NARRATIVE ARC' : e.source;
+    return '<div class="sent-item' + arcCls + '">' +
       '<div class="sent-strip ' + stripCls + '"></div>' +
       '<div class="sent-body">' +
         '<div class="sent-row1">' +
-          '<span class="sent-source">' + escapeHtml(e.source) + '</span>' +
-          (e.author ? '<span class="sent-author">@' + escapeHtml(e.author) + '</span>' : '') +
+          '<span class="sent-source">' + escapeHtml(srcLabel) + '</span>' +
+          (!isArc && e.author ? '<span class="sent-author">@' + escapeHtml(e.author) + '</span>' : '') +
           dirTag + impactTag + conf +
           '<span class="sent-time">' + fmtTimeAgo(e.raw_ts) + '</span>' +
         '</div>' +
@@ -1712,22 +1735,32 @@ function renderChatHistory() {
   if (!chatHistory.length) {
     body.innerHTML =
       '<div class="chat-empty">' +
-        'Ask me about live signals, historical performance, market posture, or options flow.' +
+        'I can search news, query sentiment, look up signals, check paper trades, and research any ticker. Ask me anything.' +
         '<div class="chat-empty-examples">' +
-          '<button class="chat-example" onclick="sendExample(this)">What&rsquo;s the edge on ORB_BREAKOUT right now?</button>' +
-          '<button class="chat-example" onclick="sendExample(this)">Which live signals have the strongest setup?</button>' +
-          '<button class="chat-example" onclick="sendExample(this)">What&rsquo;s the market saying about tech this morning?</button>' +
-          '<button class="chat-example" onclick="sendExample(this)">Where are whales buying options?</button>' +
+          '<button class="chat-example" onclick="sendExample(this)">Search for any news on Iran Pakistan and tell me the market impact</button>' +
+          '<button class="chat-example" onclick="sendExample(this)">What&rsquo;s the sentiment on SPY right now across all sources?</button>' +
+          '<button class="chat-example" onclick="sendExample(this)">Show me my paper trade performance this week</button>' +
+          '<button class="chat-example" onclick="sendExample(this)">Look up NVDA earnings, IV, and any unusual signals</button>' +
         '</div>' +
       '</div>';
     return;
   }
-  body.innerHTML = chatHistory.map(m =>
-    '<div class="chat-msg ' + m.role + '">' +
+  body.innerHTML = chatHistory.map(m => {
+    let toolBadges = '';
+    if (m.toolsUsed && m.toolsUsed.length) {
+      const TOOL_LABELS = { search_news: 'NEWS SEARCH', query_sentiment: 'SENTIMENT', query_signals: 'SIGNALS', query_paper_trades: 'PAPER TRADES', query_ticker_intel: 'TICKER INTEL', fetch_article: 'ARTICLE' };
+      const seen = new Set();
+      toolBadges = '<div class="chat-tools-used">' +
+        m.toolsUsed.filter(t => { if (seen.has(t.tool)) return false; seen.add(t.tool); return true; })
+          .map(t => '<span class="chat-tool-badge ' + t.tool + '">' + (TOOL_LABELS[t.tool] || t.tool) + '</span>').join('') +
+        '</div>';
+    }
+    return '<div class="chat-msg ' + m.role + '">' +
       '<div class="chat-msg-label">' + (m.role === 'user' ? 'YOU' : 'ASSISTANT') + '</div>' +
+      toolBadges +
       '<div class="chat-msg-body">' + escapeChatContent(m.content) + '</div>' +
-    '</div>'
-  ).join('');
+    '</div>';
+  }).join('');
   body.scrollTop = body.scrollHeight;
 }
 
@@ -1769,7 +1802,7 @@ async function sendChat() {
   const typing = document.createElement('div');
   typing.className = 'chat-msg assistant';
   typing.id = 'chatTyping';
-  typing.innerHTML = '<div class="chat-msg-label">ASSISTANT</div><div class="chat-msg-body"><span class="chat-typing">thinking</span></div>';
+  typing.innerHTML = '<div class="chat-msg-label">ASSISTANT</div><div class="chat-msg-body"><span class="chat-typing">researching</span></div>';
   body.appendChild(typing);
   body.scrollTop = body.scrollHeight;
 
@@ -1785,7 +1818,9 @@ async function sendChat() {
     if (!r.ok || j.error) {
       chatHistory.push({ role: 'assistant', content: 'Error: ' + (j.error || ('HTTP ' + r.status)) });
     } else {
-      chatHistory.push({ role: 'assistant', content: j.content || '(no response)' });
+      const entry = { role: 'assistant', content: j.content || '(no response)' };
+      if (j.toolsUsed && j.toolsUsed.length) entry.toolsUsed = j.toolsUsed;
+      chatHistory.push(entry);
     }
     saveChatHistory();
     renderChatHistory();

@@ -54,24 +54,81 @@ export const NEWS_SOURCES = [
     name: 'Financial Times Home',
     url: 'https://www.ft.com/rss/home',
   },
+  // Geopolitical-focused feeds — added after Iran/Pakistan miss April 2026.
+  // These cover Middle East + South Asia events that Bloomberg/Reuters/AP
+  // often pick up only after the market has already moved.
+  {
+    slug: 'dawn',
+    name: 'Dawn (Pakistan)',
+    url: 'https://www.dawn.com/feeds/home',
+  },
+  {
+    slug: 'bbc_mideast',
+    name: 'BBC Middle East',
+    url: 'https://feeds.bbci.co.uk/news/world/middle_east/rss.xml',
+  },
 ];
 
 // Key terms that suggest a headline is market-moving enough to spend an LLM
 // call on. Rest are still ingested but classified NULL (can be backfilled).
+//
+// IMPORTANT: This list must be broad. Missing a keyword = missing a market
+// move (Iran/Pakistan delegation, blockade, negotiation breakdown all missed
+// in the April 2026 incident because the terms weren't here).
 const MARKET_KEYWORDS = [
   // Macro / econ
-  'cpi', 'inflation', 'fed', 'fomc', 'powell', 'rate hike', 'rate cut', 'jobs', 'payroll', 'unemployment', 'gdp', 'recession', 'ppi', 'retail sales',
-  // Geopolitics
-  'iran', 'russia', 'ukraine', 'china', 'taiwan', 'israel', 'gaza', 'opec', 'sanction', 'tariff', 'ceasefire', 'strike', 'missile', 'nato', 'nuclear',
-  // Corporate / markets
-  'stocks', 'market', 'bond', 'dollar', 'oil', 'crude', 'gold', 'bitcoin', 'earnings', 'guidance', 'buyback', 'merger', 'acquisition', 'ipo', 'bankrupt',
+  'cpi', 'inflation', 'fed', 'fomc', 'powell', 'rate hike', 'rate cut',
+  'jobs', 'payroll', 'unemployment', 'gdp', 'recession', 'ppi',
+  'retail sales', 'consumer confidence', 'ism ', 'pmi', 'housing',
+  'interest rate', 'monetary policy', 'fiscal', 'debt ceiling',
+  'default', 'treasury', 'yield', 'inversion',
+  // Geopolitics — countries & regions
+  'iran', 'pakistan', 'india', 'russia', 'ukraine', 'china', 'taiwan',
+  'israel', 'gaza', 'palestine', 'saudi', 'iraq', 'syria', 'yemen',
+  'houthi', 'hezbollah', 'north korea', 'south korea', 'japan',
+  'turkey', 'egypt', 'libya', 'venezuela', 'mexico', 'brazil',
+  'islamabad', 'tehran', 'moscow', 'beijing', 'taipei', 'kyiv',
+  'jerusalem', 'riyadh', 'pyongyang',
+  // Geopolitics — actions & events
+  'delegation', 'negotiation', 'talks', 'summit', 'diplomacy',
+  'diplomatic', 'blockade', 'embargo', 'sanction', 'tariff', 'trade war',
+  'ceasefire', 'truce', 'peace', 'war ', 'conflict', 'invasion',
+  'escalat', 'de-escalat', 'tension', 'crisis', 'standoff',
+  'strike', 'missile', 'drone', 'attack', 'bomb', 'shell',
+  'strait', 'hormuz', 'suez', 'shipping', 'tanker', 'naval',
+  'military', 'troops', 'deploy', 'nato', 'nuclear', 'uranium',
+  'enrichment', 'weapons', 'defense', 'pentagon', 'state dept',
+  'un security', 'united nations', 'iaea',
+  // Energy / commodities
+  'opec', 'oil', 'crude', 'brent', 'wti', 'natural gas', 'lng',
+  'pipeline', 'refinery', 'energy', 'gold', 'copper', 'lithium',
+  'rare earth', 'grain', 'wheat', 'commodity',
+  // Markets / corporate
+  'stocks', 'market', 'rally', 'crash', 'selloff', 'sell-off',
+  'correction', 'bear market', 'bull market', 'volatility', 'vix',
+  'bond', 'dollar', 'euro', 'yen', 'yuan', 'bitcoin', 'crypto',
+  'earnings', 'guidance', 'buyback', 'dividend', 'merger',
+  'acquisition', 'ipo', 'bankrupt', 'layoff', 'restructur',
   // Regulatory
-  'sec', 'doj', 'fda', 'antitrust', 'investigation', 'lawsuit', 'subpoena', 'fine', 'settlement',
-  // Major political / Fed chair
-  'yellen', 'treasury', 'white house', 'congress', 'senate', 'trump', 'biden', 'harris',
+  'sec ', 'doj', 'fda', 'ftc', 'antitrust', 'investigation',
+  'lawsuit', 'subpoena', 'fine', 'settlement', 'regulation',
+  // Political — US
+  'white house', 'congress', 'senate', 'house of rep', 'executive order',
+  'trump', 'biden', 'harris', 'yellen', 'president', 'veto',
+  'shutdown', 'appropriation', 'bipartisan',
+  // Supply chain / trade
+  'supply chain', 'chip', 'semiconductor', 'export control', 'ban',
+  'restrict', 'quota', 'port', 'freight', 'container',
 ];
 
-function worthClassifying(title, description) {
+// Sources that are already editorially filtered — classify ALL items from
+// these feeds regardless of keyword match. They publish few items and the
+// signal-to-noise ratio is high enough to justify the extra LLM cost.
+const CLASSIFY_ALL_SOURCES = new Set(['aljazeera', 'afp', 'ft', 'bloomberg', 'dawn', 'bbc_mideast']);
+
+function worthClassifying(title, description, sourceSlug) {
+  // Editorially tight sources: always classify
+  if (CLASSIFY_ALL_SOURCES.has(sourceSlug)) return true;
   const t = ((title || '') + ' ' + (description || '')).toLowerCase();
   if (!t.trim()) return false;
   return MARKET_KEYWORDS.some(kw => t.includes(kw));
@@ -123,7 +180,7 @@ export async function pollNewsRSS() {
       const pub = item.pubDate || new Date();
 
       let classification = null;
-      if (worthClassifying(title, description)) {
+      if (worthClassifying(title, description, src.slug)) {
         classification = await classifySentiment({
           source: src.slug,
           title,
