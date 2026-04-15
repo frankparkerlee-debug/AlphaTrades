@@ -11,14 +11,28 @@
 import axios from 'axios';
 
 const TRADING_URL = process.env.ALPACA_TRADING_URL || 'https://paper-api.alpaca.markets';
-const API_KEY     = process.env.ALPACA_API_KEY;
-const API_SECRET  = process.env.ALPACA_SECRET_KEY;
+
+// Paper trading needs paper keys (PK*). Check all possible env var names, fall back to main keys.
+const PAPER_KEY    = process.env.ALPACA_PAPER_API_KEY || process.env.ALPACA_PAPER_KEY || process.env.ALPACA_API_KEY;
+const PAPER_SECRET = process.env.ALPACA_PAPER_SECRET_KEY || process.env.ALPACA_PAPER_SECRET || process.env.ALPACA_SECRET_KEY;
 
 const headers = {
-  'APCA-API-KEY-ID':     API_KEY,
-  'APCA-API-SECRET-KEY': API_SECRET,
+  'APCA-API-KEY-ID':     PAPER_KEY,
+  'APCA-API-SECRET-KEY': PAPER_SECRET,
   'Content-Type':        'application/json',
 };
+
+// Startup diagnostic — surface key mismatch early
+const isPaperUrl = TRADING_URL.includes('paper');
+const isPaperKey = (PAPER_KEY || '').startsWith('PK');
+if (isPaperUrl && !isPaperKey) {
+  console.error(
+    `[ORDERS] WARNING: Trading URL is paper (${TRADING_URL}) but key does NOT start with PK. ` +
+    `Paper API requires paper keys. Set ALPACA_PAPER_KEY / ALPACA_PAPER_SECRET in your env.`
+  );
+} else {
+  console.log(`[ORDERS] Trading: ${TRADING_URL} | Key: ${(PAPER_KEY || '').slice(0, 4)}*** | Paper: ${isPaperKey}`);
+}
 
 // ── Order Placement ────────────────────────────────────────────────────────────
 

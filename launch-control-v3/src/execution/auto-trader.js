@@ -417,16 +417,24 @@ async function exitTrade(trade, reason, currentMid) {
   try {
     if (!DRY_RUN) {
       // Sell to close at market (fast exit)
+      let exitSuccess = false;
       try {
         await closePosition(trade.contractSymbol);
+        exitSuccess = true;
       } catch (closeErr) {
         // If closePosition fails (no position found), try a sell order
         console.warn(`[AUTO-TRADER] closePosition failed, trying sell order: ${closeErr.message}`);
         try {
           await submitOptionOrder(trade.contractSymbol, trade.contracts, 'sell', 'market');
+          exitSuccess = true;
         } catch (sellErr) {
           console.error(`[AUTO-TRADER] Sell order also failed: ${sellErr.message}`);
         }
+      }
+      if (!exitSuccess) {
+        console.error(`[AUTO-TRADER] Could not close ${trade.ticker} — will retry next cycle`);
+        trade.state = 'OPEN';
+        return;
       }
     }
 
@@ -478,7 +486,7 @@ async function emergencyFlatten() {
 
 async function recordTradeEntry(trade) {
   try {
-    await query(`
+    const res = await query(`
       INSERT INTO lc_v3.paper_trades (
         signal_id, ticker, direction, strategy, status,
         entry_stock_price, entry_contract_mid, entry_contract_symbol,
@@ -486,6 +494,7 @@ async function recordTradeEntry(trade) {
         entry_contract_delta, entry_contract_iv,
         position_size_pct, auto_traded
       ) VALUES ($1,$2,$3,$4,'OPEN',$5,$6,$7,$8,$9,$10,$11,$12,TRUE)
+      RETURNING paper_id
     `, [
       trade.signalId,
       trade.ticker,
@@ -500,6 +509,10 @@ async function recordTradeEntry(trade) {
       trade.iv,
       SIZE_PCT,
     ]);
+    // Store paper_id so exits can match exactly
+    if (res.rows?.[0]?.paper_id) {
+      trade.paperId = res.rows[0].paper_id;
+    }
   } catch (err) {
     console.error(`[AUTO-TRADER] recordTradeEntry failed: ${err.message}`);
   }
@@ -507,27 +520,46 @@ async function recordTradeEntry(trade) {
 
 async function recordTradeExit(trade, exitReason, pnlPct, pnlDollars) {
   try {
-    // Update the existing paper trade row
-    await query(`
-      UPDATE lc_v3.paper_trades SET
-        status = 'CLOSED',
-        exit_time = NOW(),
-        exit_reason = $1,
-        final_pnl_pct = $2,
-        final_pnl_dollars = $3,
-        outcome = $4
-      WHERE signal_id = $5
-        AND ticker = $6
-        AND status = 'OPEN'
-        AND auto_traded = TRUE
-    `, [
-      exitReason,
-      parseFloat(pnlPct.toFixed(2)),
-      Math.round(pnlDollars),
-      pnlPct > 0 ? 'WIN' : pnlPct < 0 ? 'LOSS' : 'FLAT',
-      trade.signalId,
-      trade.ticker,
-    ]);
+    // Prefer paper_id for exact match, fall back to signal_id + ticker
+    if (trade.paperId) {
+      await query(`
+        UPDATE lc_v3.paper_trades SET
+          status = 'CLOSED',
+          exit_time = NOW(),
+          exit_reason = $1,
+          final_pnl_pct = $2,
+          final_pnl_dollars = $3,
+          outcome = $4
+        WHERE paper_id = $5
+      `, [
+        exitReason,
+        parseFloat(pnlPct.toFixed(2)),
+        Math.round(pnlDollars),
+        pnlPct > 0 ? 'WIN' : pnlPct < 0 ? 'LOSS' : 'FLAT',
+        trade.paperId,
+      ]);
+    } else {
+      await query(`
+        UPDATE lc_v3.paper_trades SET
+          status = 'CLOSED',
+          exit_time = NOW(),
+          exit_reason = $1,
+          final_pnl_pct = $2,
+          final_pnl_dollars = $3,
+          outcome = $4
+        WHERE signal_id = $5
+          AND ticker = $6
+          AND status = 'OPEN'
+          AND auto_traded = TRUE
+      `, [
+        exitReason,
+        parseFloat(pnlPct.toFixed(2)),
+        Math.round(pnlDollars),
+        pnlPct > 0 ? 'WIN' : pnlPct < 0 ? 'LOSS' : 'FLAT',
+        trade.signalId,
+        trade.ticker,
+      ]);
+    }
   } catch (err) {
     console.error(`[AUTO-TRADER] recordTradeExit failed: ${err.message}`);
   }
