@@ -272,6 +272,96 @@ export async function selectOptionsContract(ticker, direction, grade, currentPri
 }
 
 /**
+ * Select contract for compound scalp strategy.
+ * CALLs: ATM within $1 of stock price, min $0.75 mid
+ * PUTs:  ITM preferred, strike $1-3 above stock price, min $1.00 mid
+ *
+ * Uses 0DTE options. Returns same shape as buildRecommendation.
+ */
+export async function selectCompoundScalpContract(ticker, direction, currentPrice) {
+  try {
+    const { snapshots, expiry } = await fetchAllSnapshots(ticker, direction, 0); // 0DTE
+    if (!expiry) {
+      console.log(`[compound-contract] No 0DTE options for ${ticker}`);
+      return null;
+    }
+
+    const contracts = Object.entries(snapshots).map(([symbol, snap]) => {
+      const greeks = snap.greeks || {};
+      const quote = snap.latestQuote || {};
+      let strike = snap.details?.strikePrice || 0;
+      if (!strike) {
+        const m = symbol.match(/\d{8}$/);
+        if (m) strike = parseInt(m[0]) / 1000;
+      }
+      const bid = quote.bp || 0;
+      const ask = quote.ap || 0;
+      const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
+      return {
+        symbol, strike, bid, ask, mid,
+        delta: Math.abs(greeks.delta || 0),
+        gamma: Math.abs(greeks.gamma || 0),
+        theta: greeks.theta || 0,
+        vega: greeks.vega || 0,
+        iv: greeks.impliedVolatility || 0,
+        oi: snap.openInterest || 0,
+        volume: snap.dayBar?.v || 0,
+      };
+    }).filter(c => c.mid > 0 && c.bid > 0);
+
+    if (contracts.length === 0) return null;
+
+    let selected = null;
+
+    if (direction === 'CALL') {
+      // ATM within $1, min $0.75 mid
+      const candidates = contracts
+        .filter(c => c.strike <= currentPrice + 1 && c.strike >= currentPrice - 1 && c.mid >= 0.75)
+        .sort((a, b) => Math.abs(a.strike - currentPrice) - Math.abs(b.strike - currentPrice));
+      selected = candidates[0] || null;
+    } else {
+      // PUT: ITM preferred, strike $1-3 above current price, min $1.00 mid
+      const itmCandidates = contracts
+        .filter(c => c.strike >= currentPrice + 1 && c.strike <= currentPrice + 3 && c.mid >= 1.00)
+        .sort((a, b) => a.strike - b.strike); // closest ITM first
+
+      if (itmCandidates.length > 0) {
+        selected = itmCandidates[0];
+      } else {
+        // Fallback: ATM put with min $1.00
+        const atmCandidates = contracts
+          .filter(c => c.strike >= currentPrice - 1 && c.strike <= currentPrice + 1 && c.mid >= 1.00)
+          .sort((a, b) => Math.abs(a.strike - currentPrice) - Math.abs(b.strike - currentPrice));
+        selected = atmCandidates[0] || null;
+      }
+    }
+
+    if (!selected) {
+      console.log(`[compound-contract] No viable ${direction} contract for ${ticker} @ $${currentPrice.toFixed(2)}`);
+      return null;
+    }
+
+    console.log(`[compound-contract] ${ticker} ${direction}: ${selected.symbol} strike=$${selected.strike} mid=$${selected.mid.toFixed(2)} delta=${selected.delta.toFixed(3)}`);
+
+    return {
+      symbol: selected.symbol,
+      strike: selected.strike,
+      expiry: expiry.date,
+      expiry_label: expiry.label,
+      bid: selected.bid,
+      ask: selected.ask,
+      mid: parseFloat(selected.mid.toFixed(2)),
+      delta: parseFloat(selected.delta.toFixed(3)),
+      iv: parseFloat((selected.iv * 100).toFixed(1)),
+      oi: selected.oi,
+    };
+  } catch (err) {
+    console.error(`[compound-contract] Selection failed for ${ticker}: ${err.message}`);
+    return null;
+  }
+}
+
+/**
  * Fetch a live quote for a SPECIFIC options contract symbol.
  * Used by the monitor to refresh bid/ask/mid/greeks without re-running selection.
  * @param {string} contractSymbol - OCC symbol like "AAPL260327C00175000"

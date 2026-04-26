@@ -56,14 +56,23 @@ export async function fetchAllDataFromDB(config, tickers) {
 
   console.log(`\n[DATA-DB] Fetching from database for ${tickers.length} tickers: ${startDate} → ${endDate}`);
 
-  // 1. Get all minute bars from DB
+  // 1. Get minute bars from DB (filter to requested tickers if small set)
   console.log('[DATA-DB] Fetching minute bars...');
-  const barsRes = await query(`
-    SELECT ticker, ts, open, high, low, close, volume, vwap, session
-    FROM lc_v3.bars
-    WHERE ts >= $1::date AND ts < ($2::date + interval '1 day')
-    ORDER BY ticker, ts
-  `, [earlyStartStr, endDate]);
+  const filterTickers = tickers.length <= 10;
+  const barsRes = filterTickers
+    ? await query(`
+        SELECT ticker, ts, open, high, low, close, volume, vwap, session
+        FROM lc_v3.bars
+        WHERE ts >= $1::date AND ts < ($2::date + interval '1 day')
+          AND ticker = ANY($3)
+        ORDER BY ticker, ts
+      `, [earlyStartStr, endDate, tickers])
+    : await query(`
+        SELECT ticker, ts, open, high, low, close, volume, vwap, session
+        FROM lc_v3.bars
+        WHERE ts >= $1::date AND ts < ($2::date + interval '1 day')
+        ORDER BY ticker, ts
+      `, [earlyStartStr, endDate]);
 
   console.log(`[DATA-DB] ${barsRes.rows.length} total bars from DB`);
 
@@ -131,8 +140,15 @@ export async function fetchAllDataFromDB(config, tickers) {
     etfMinuteBars[etf] = minuteBars[etf] || {};
   }
 
-  if (Object.keys(etfMinuteBars.SPY).length === 0 && API_HEADERS['APCA-API-KEY-ID']) {
-    console.log('[DATA-DB] No SPY/QQQ/IWM bars in DB — fetching from Alpaca API');
+  // Always fetch from Alpaca API if DB coverage is incomplete for the date range.
+  // DB may have partial data (e.g. 164 days vs 353 in range). Alpaca fills the gaps.
+  const expectedDays = Math.round((new Date(endDate) - new Date(startDate)) / 86400000 * 5 / 7); // rough estimate
+  const spyDBDays = Object.keys(etfMinuteBars.SPY).length > 0
+    ? new Set(Object.keys(etfMinuteBars.SPY).map(k => k.slice(0, 10))).size : 0;
+  const needAPIFill = spyDBDays < expectedDays * 0.8; // fetch if DB has <80% of expected days
+
+  if (needAPIFill && API_HEADERS['APCA-API-KEY-ID']) {
+    console.log(`[DATA-DB] DB has ${spyDBDays} SPY days vs ~${expectedDays} expected — fetching from Alpaca API to fill gaps`);
     for (const etf of ['SPY', 'QQQ', 'IWM']) {
       try {
         const apiBars = await fetchBarsFromAPI(etf, '1Min', startDate, endDate, 'sip');
@@ -159,6 +175,25 @@ export async function fetchAllDataFromDB(config, tickers) {
       }
     }
     console.log(`[DATA-DB] SPY bars: ${Object.keys(etfMinuteBars.SPY).length}, QQQ bars: ${Object.keys(etfMinuteBars.QQQ).length}, IWM bars: ${Object.keys(etfMinuteBars.IWM || {}).length}`);
+  }
+
+  // Sentiment ETFs — HYG (high yield bonds, risk-on/off) and TLT (treasuries, rate/fear)
+  // Used for directional confirmation: IWM up + HYG up = confirmed risk-on
+  const sentimentBars = {};
+  if (API_HEADERS['APCA-API-KEY-ID']) {
+    for (const etf of ['HYG', 'TLT']) {
+      try {
+        const apiBars = await fetchBarsFromAPI(etf, '5Min', startDate, endDate, 'sip');
+        sentimentBars[etf] = {};
+        for (const bar of apiBars) {
+          const key = new Date(bar.t).toISOString().slice(0, 16);
+          sentimentBars[etf][key] = { o: bar.o, h: bar.h, l: bar.l, c: bar.c, v: bar.v || 0 };
+        }
+        console.log(`[DATA-DB] Sentiment (${etf}): ${Object.keys(sentimentBars[etf]).length} bars loaded`);
+      } catch (err) {
+        console.warn(`[DATA-DB] ${etf} fetch failed: ${err.message}`);
+      }
+    }
   }
 
   // VIX — try VIXY ETF as proxy (VIX index not available via /v2/stocks)
@@ -216,6 +251,7 @@ export async function fetchAllDataFromDB(config, tickers) {
     dailyBars,
     minuteBars,
     etfMinuteBars,
+    sentimentBars,
     vixByTime,
     newsByTickerDate,
     tradingDays,

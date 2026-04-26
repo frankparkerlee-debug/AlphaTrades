@@ -82,9 +82,9 @@ export function updateTickerBar(ticker, bar) {
   t.vwap   = bar.vw || bar.c; // Alpaca provides vwap as 'vw'
   t.lastBarAt = new Date();
 
-  // Keep last 20 bars
+  // Keep last 30 bars (scalp patterns need 15+ lookback)
   t.bars.push({ o: bar.o, h: bar.h, l: bar.l, c: bar.c, v: bar.v, t: bar.t });
-  if (t.bars.length > 20) t.bars.shift();
+  if (t.bars.length > 30) t.bars.shift();
 
   state.streamStatus.lastBarAt = new Date();
 }

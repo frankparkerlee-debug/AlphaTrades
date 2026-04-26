@@ -5,11 +5,17 @@ dotenv.config();
 import Anthropic from '@anthropic-ai/sdk';
 import {
   updateTickerBar, updateMarketEtf, addNewsEvent,
-  setStreamStatus, initTicker,
+  setStreamStatus, initTicker, getTickerState,
 } from './state.js';
 import { classifyCatalyst } from '../scoring/news.js';
 import { query as dbQuery } from './db.js';
 import logger from '../utils/logger.js';
+import { detectScalpPatterns } from '../scalper/pattern-detector.js';
+import { detectCompoundSignals } from '../scalper/compound-detector.js';
+import {
+  SCALP_TICKERS, updateScalpState, addDetectedPattern,
+} from '../scalper/scalp-state.js';
+import { selectCompoundScalpContract } from '../options/contract-selector.js';
 
 // ── BAR PERSISTENCE ─────────────────────────────────────
 function getBarSession(tsStr) {
@@ -355,6 +361,14 @@ function handleStockMessage(msg) {
       if (REFERENCE_ETFS.includes(msg.S)) {
         updateMarketEtf(msg.S, msg);
         persistBar(msg.S, msg);
+        // Run scalp pattern detection on ETFs that are scalp tickers
+        if (SCALP_TICKERS.includes(msg.S)) {
+          try { runScalpDetection(msg.S); } catch (e) { /* non-critical */ }
+          // Compound scalp detection → writes signals for auto-trader
+          if (msg.S === 'IWM') {
+            runCompoundDetection(msg.S).catch(e => logger.error(`[COMPOUND] ${e.message}`));
+          }
+        }
       } else if (trackedTickers.includes(msg.S)) {
         updateTickerBar(msg.S, msg);
         persistBar(msg.S, msg);
@@ -375,6 +389,200 @@ function handleStockMessage(msg) {
 
     default:
       break;
+  }
+}
+
+// ── SCALP PATTERN DETECTION ─────────────────────────────
+// Called on each new 1-min bar for SPY/QQQ/IWM.
+// Detects patterns, stores in scalp-state for API consumption.
+
+function runScalpDetection(ticker) {
+  const ts = getTickerState(ticker);
+  if (!ts || !ts.bars || ts.bars.length < 5) return;
+
+  const rawCtx = {
+    vwap: ts.vwap || 0,
+    sessionOpen: ts.sessionOpen || 0,
+    sessionHigh: ts.sessionHigh || 0,
+    sessionLow: ts.sessionLow || 0,
+    prevDayHigh: ts.prevDayHigh || 0,
+    prevDayLow: ts.prevDayLow || 0,
+    upVolRatio: ts.upVolRatio || 0.5,
+    barsFromOpen: ts.bars.length,
+  };
+
+  // Update scalp state (FVGs, OBs, swings)
+  updateScalpState(ticker, ts.bars, rawCtx);
+
+  // Detect patterns
+  const signals = detectScalpPatterns(ticker, ts.bars, rawCtx);
+
+  // Record detected patterns
+  for (const sig of signals) {
+    addDetectedPattern(ticker, sig);
+  }
+
+  if (signals.length > 0) {
+    logger.info(`[SCALPER] ${ticker}: ${signals.length} pattern(s) — ${signals.map(s => `${s.pattern}(${s.direction},${s.confidence})`).join(', ')}`);
+  }
+}
+
+// ── COMPOUND SCALP SIGNAL WRITER ──────────────────────
+// When compound detector fires on IWM, write high-confidence signals
+// to lc_v3.signals for auto-trader pickup.
+
+const compoundState = {
+  lastSignalTime: {},   // ticker -> timestamp (cooldown)
+  daySignals: {},       // ticker -> count
+  dayDate: null,
+  dayWins: 0,
+  dayLosses: 0,
+  circuitBroken: false,
+};
+
+function resetCompoundDay() {
+  const today = new Date().toISOString().split('T')[0];
+  if (compoundState.dayDate !== today) {
+    compoundState.dayDate = today;
+    compoundState.daySignals = {};
+    compoundState.dayWins = 0;
+    compoundState.dayLosses = 0;
+    compoundState.circuitBroken = false;
+    compoundState.lastSignalTime = {};
+  }
+}
+
+async function runCompoundDetection(ticker) {
+  const ts = getTickerState(ticker);
+  if (!ts || !ts.bars || ts.bars.length < 15) return;
+
+  resetCompoundDay();
+
+  // Circuit breaker: 2 consecutive losses before a win → stop for the day
+  if (compoundState.circuitBroken) return;
+
+  // Max 7 signals/day
+  const dayCount = compoundState.daySignals[ticker] || 0;
+  if (dayCount >= 7) return;
+
+  // 5-bar cooldown
+  const now = Date.now();
+  const lastTime = compoundState.lastSignalTime[ticker] || 0;
+  if (now - lastTime < 5 * 60 * 1000) return; // 5 minutes
+
+  // Build context from state
+  const bars = ts.bars;
+  const barsFromOpen = bars.length;
+  const sessionOpen = ts.sessionOpen || bars[0]?.o || 0;
+
+  // Compute VWAP from bars
+  let cumVol = 0, cumPV = 0;
+  for (const b of bars) {
+    const tp = (b.h + b.l + b.c) / 3;
+    cumVol += (b.v || 0);
+    cumPV += tp * (b.v || 0);
+  }
+  const vwap = cumVol > 0 ? cumPV / cumVol : bars[bars.length - 1]?.c || 0;
+
+  // Compute OR (first 5 bars)
+  let orHigh = 0, orLow = Infinity;
+  for (let i = 0; i < Math.min(5, bars.length); i++) {
+    if (bars[i].h > orHigh) orHigh = bars[i].h;
+    if (bars[i].l < orLow) orLow = bars[i].l;
+  }
+
+  const ctx = {
+    vwap,
+    orHigh: barsFromOpen >= 5 ? orHigh : undefined,
+    orLow: barsFromOpen >= 5 ? orLow : undefined,
+    sessionHigh: ts.sessionHigh || 0,
+    sessionLow: ts.sessionLow || Infinity,
+    sessionOpen,
+    barsFromOpen,
+    prevDayHigh: ts.prevDayHigh || 0,
+    prevDayLow: ts.prevDayLow || 0,
+  };
+
+  const signals = detectCompoundSignals(ticker, bars, ctx);
+  if (signals.length === 0) return;
+
+  // Session trend filter: CALLs need price > VWAP or > open; PUTs need < VWAP or < open
+  const price = bars[bars.length - 1].c;
+  const filteredSignals = signals.filter(sig => {
+    if (sig.confidence < 65) return false;
+    if (sig.direction === 'CALL') return price > vwap || price > sessionOpen;
+    if (sig.direction === 'PUT') return price < vwap || price < sessionOpen;
+    return false;
+  });
+
+  if (filteredSignals.length === 0) return;
+
+  // Take highest confidence signal
+  const best = filteredSignals.sort((a, b) => b.confidence - a.confidence)[0];
+
+  // Select contract with ITM preference for puts
+  let contract = null;
+  try {
+    contract = await selectCompoundScalpContract(ticker, best.direction, price);
+  } catch (err) {
+    logger.error(`[COMPOUND] Contract selection failed for ${ticker} ${best.direction}: ${err.message}`);
+    return;
+  }
+
+  if (!contract) {
+    logger.info(`[COMPOUND] No viable contract for ${ticker} ${best.direction}`);
+    return;
+  }
+
+  // Write to lc_v3.signals
+  try {
+    await dbQuery(`
+      INSERT INTO lc_v3.signals (
+        expires_at, status, ticker, direction, signal_tier,
+        composite_raw, grade, strategy,
+        price_at_signal, vwap_at_signal,
+        contract_symbol, contract_strike, contract_expiry, contract_expiry_label,
+        contract_bid, contract_ask, contract_mid,
+        contract_delta, contract_iv,
+        flags
+      ) VALUES (
+        NOW() + interval '60 seconds', 'ACTIVE', $1, $2, 'COMPOUND',
+        $3, $4, 'COMPOUND_SCALP',
+        $5, $6,
+        $7, $8, $9, $10,
+        $11, $12, $13,
+        $14, $15,
+        $16
+      )
+    `, [
+      ticker,
+      best.direction,
+      best.confidence,
+      best.confidence >= 80 ? 'A+' : best.confidence >= 70 ? 'A' : 'B+',
+      price,
+      vwap,
+      contract.symbol,
+      contract.strike,
+      contract.expiry,
+      contract.expiry_label,
+      contract.bid,
+      contract.ask,
+      contract.mid,
+      contract.delta,
+      contract.iv,
+      JSON.stringify({ pattern: best.pattern, category: 'COMPOUND', metadata: best.metadata }),
+    ]);
+
+    compoundState.lastSignalTime[ticker] = now;
+    compoundState.daySignals[ticker] = dayCount + 1;
+
+    logger.info(
+      `[COMPOUND] SIGNAL: ${ticker} ${best.direction} ${best.pattern} conf=${best.confidence} ` +
+      `contract=${contract.symbol} mid=$${contract.mid.toFixed(2)} ` +
+      `(day #${dayCount + 1})`
+    );
+  } catch (err) {
+    logger.error(`[COMPOUND] Signal write failed: ${err.message}`);
   }
 }
 
@@ -504,6 +712,24 @@ export function disconnectAll() {
   setStreamStatus('bars', 'disconnected');
   setStreamStatus('news', 'disconnected');
   logger.info('All streams disconnected');
+}
+
+/**
+ * Record a compound scalp trade result (called by auto-trader on exit).
+ * Updates the circuit breaker state.
+ */
+export function recordCompoundResult(isWin) {
+  if (isWin) {
+    compoundState.dayWins++;
+    compoundState.dayLosses = 0;
+  } else {
+    compoundState.dayLosses++;
+    // Circuit breaker: 2 consecutive losses before any win → stop for the day
+    if (compoundState.dayLosses >= 2 && compoundState.dayWins === 0) {
+      compoundState.circuitBroken = true;
+      logger.info('[COMPOUND] Circuit breaker tripped: 2 losses before a win');
+    }
+  }
 }
 
 export function getConnectionHealth() {

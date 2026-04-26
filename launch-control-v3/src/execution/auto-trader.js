@@ -27,6 +27,7 @@ import {
   updatePositionCount, resetDaily, isMarketHours, getDailyState,
   manualHalt, resume,
 } from './risk-manager.js';
+import { recordCompoundResult } from '../data/alpaca-streams.js';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -63,6 +64,24 @@ const STRATEGY_EXITS = {
     lossCutPct: -15,         // tighter cut for scalps
     maxHoldMinutes: 45,
   },
+  SCALP_PATTERN: {
+    targetPct: 100,          // disabled — trail captures gains
+    trailActivatePct: 5,     // tight trail: activate at +5%
+    trailGiveBack: 0.50,     // exit when P&L drops to 50% of peak
+    lossCutPct: -10,         // quick cut at -10%
+    maxHoldMinutes: 5,       // hard 5-min max hold for scalps
+  },
+  // Compound Scalp — backtest-validated trailing stop model (27 months, 6/6 overfit checks passed)
+  // Parameters: -3% init, BE@+2%, trail@+3% keep 60%, close-based stops
+  COMPOUND_SCALP: {
+    targetPct: 100,          // disabled — trailing captures gains (no fixed target)
+    trailActivatePct: 3,     // trail activates at +3%
+    trailGiveBack: 0.60,     // keep 60% of peak
+    lossCutPct: -3,          // -3% initial stop
+    maxHoldMinutes: 5,       // 5 bar (minute) max hold
+    breakEvenPct: 2,         // move stop to 0% when +2% reached
+    closeBasedStops: true,   // only evaluate stops on bar close, not intra-bar
+  },
 };
 
 // Position sizing: 10% of account per trade (1-2 contracts on 0DTE)
@@ -97,8 +116,15 @@ export async function startAutoTrader() {
   }
 
   resetDaily();
+
+  // Clean up stale paper trades from DB (0DTE options that expired on prior days)
+  await cleanupStaleTrades();
+
+  // Recover any open auto-traded positions from DB (survives server restart)
+  await recoverOpenTrades();
+
   cycleTimer = setInterval(runCycle, CYCLE_SECONDS * 1000);
-  console.log(`[AUTO-TRADER] Running every ${CYCLE_SECONDS}s | Exits: trail +8%→60%, cut -20%, max 45min`);
+  console.log(`[AUTO-TRADER] Running every ${CYCLE_SECONDS}s | Default: trail +8%→60%, cut -20%, max 45min | CompoundScalp: trail +3%→60%, BE@+2%, cut -3%, max 5min`);
 }
 
 /**
@@ -204,11 +230,27 @@ async function processSignal(signal) {
     return;
   }
 
-  // Select ATM 0DTE contract
+  // Select contract — compound scalp uses pre-selected contract from signal
   console.log(`[AUTO-TRADER] Selecting contract: ${ticker} ${direction} ${strategy} grade=${grade}`);
 
   try {
-    const contract = await selectOptionsContract(ticker, direction, grade, entryPrice, 0, { minDTE: 0 });
+    let contract;
+    if (strategy === 'COMPOUND_SCALP' && signal.contract_symbol && signal.contract_mid > 0) {
+      // Use pre-selected contract (already uses ITM put logic)
+      contract = {
+        symbol: signal.contract_symbol,
+        strike: parseFloat(signal.contract_strike || 0),
+        expiry: signal.contract_expiry,
+        mid: parseFloat(signal.contract_mid),
+        bid: parseFloat(signal.contract_bid || 0),
+        ask: parseFloat(signal.contract_ask || 0),
+        delta: parseFloat(signal.contract_delta || 0),
+        iv: parseFloat(signal.contract_iv || 0),
+      };
+      console.log(`[AUTO-TRADER] Using pre-selected compound contract: ${contract.symbol} mid=$${contract.mid.toFixed(2)}`);
+    } else {
+      contract = await selectOptionsContract(ticker, direction, grade, entryPrice, 0, { minDTE: 0 });
+    }
 
     if (!contract) {
       console.log(`[AUTO-TRADER] No viable contract for ${ticker} ${direction}`);
@@ -270,6 +312,7 @@ async function processSignal(signal) {
       exits,
       // Trail state
       peakPnlPct: 0,
+      breakEvenLocked: false,  // compound scalp: stop moves to 0% at +2%
       // For DB recording
       signalId: signal.signal_id,
       strike: contract.strike,
@@ -319,22 +362,35 @@ async function monitorOpenPositions() {
       // Update peak P&L for trailing
       trade.peakPnlPct = Math.max(trade.peakPnlPct, pnlPct);
 
+      // Compound scalp breakeven lock: once +2% reached, stop moves to 0%
+      if (exits.breakEvenPct && trade.peakPnlPct >= exits.breakEvenPct) {
+        trade.breakEvenLocked = true;
+      }
+
       let exitReason = null;
 
-      // 1. Loss cut
-      if (pnlPct <= exits.lossCutPct) {
-        exitReason = 'CUT';
+      // Compute effective stop level for compound scalp trailing model
+      let effectiveStop = exits.lossCutPct;
+      if (trade.breakEvenLocked) {
+        // Breakeven locked — stop is at least 0%
+        effectiveStop = 0;
       }
-      // 2. Trail stop
-      else if (trade.peakPnlPct >= exits.trailActivatePct &&
-               pnlPct < trade.peakPnlPct * exits.trailGiveBack) {
-        exitReason = 'TRAIL';
+      if (trade.peakPnlPct >= exits.trailActivatePct) {
+        // Trail active — stop is peak * keepPct (at least breakeven if locked)
+        const trailStop = trade.peakPnlPct * exits.trailGiveBack;
+        effectiveStop = Math.max(effectiveStop, trailStop);
       }
-      // 3. Target (effectively disabled at 100%)
+
+      // 1. Stop check (covers initial stop, breakeven, and trailing)
+      if (pnlPct <= effectiveStop) {
+        exitReason = trade.peakPnlPct >= exits.trailActivatePct ? 'TRAIL' :
+                     trade.breakEvenLocked ? 'BREAKEVEN' : 'CUT';
+      }
+      // 2. Target (effectively disabled at 100% for compound scalp)
       else if (pnlPct >= exits.targetPct) {
         exitReason = 'TARGET';
       }
-      // 4. Time backstop
+      // 3. Time backstop
       else if (holdMinutes >= exits.maxHoldMinutes) {
         exitReason = 'TIME';
       }
@@ -366,7 +422,7 @@ async function checkPendingOrders() {
 
     const elapsed = (Date.now() - trade.entryTime) / 1000;
 
-    // TTL expired — cancel unfilled order
+    // TTL expired — cancel unfilled order and update DB
     if (elapsed > ORDER_TTL_SECONDS) {
       console.log(`[AUTO-TRADER] Order TTL expired for ${trade.ticker} — canceling`);
       try {
@@ -374,6 +430,17 @@ async function checkPendingOrders() {
           await cancelOrder(trade.orderId);
         }
       } catch { /* already filled or canceled */ }
+      // Mark in DB so it doesn't stay OPEN forever
+      if (trade.paperId) {
+        try {
+          await query(`
+            UPDATE lc_v3.paper_trades SET
+              status = 'CLOSED', exit_time = NOW(), exit_reason = 'ORDER_EXPIRED',
+              final_pnl_pct = 0, final_pnl_dollars = 0, outcome = 'FLAT'
+            WHERE paper_id = $1
+          `, [trade.paperId]);
+        } catch { /* best effort */ }
+      }
       openTrades.delete(tradeId);
       continue;
     }
@@ -400,6 +467,17 @@ async function checkPendingOrders() {
 
       } else if (order.status === 'canceled' || order.status === 'expired' || order.status === 'rejected') {
         console.log(`[AUTO-TRADER] Order ${order.status}: ${trade.ticker}`);
+        // Mark in DB so it doesn't stay OPEN forever
+        if (trade.paperId) {
+          try {
+            await query(`
+              UPDATE lc_v3.paper_trades SET
+                status = 'CLOSED', exit_time = NOW(),
+                exit_reason = $1, final_pnl_pct = 0, final_pnl_dollars = 0, outcome = 'FLAT'
+              WHERE paper_id = $2
+            `, [`ORDER_${order.status.toUpperCase()}`, trade.paperId]);
+          } catch { /* best effort */ }
+        }
         openTrades.delete(tradeId);
       }
     } catch (err) {
@@ -446,6 +524,11 @@ async function exitTrade(trade, reason, currentMid) {
     trade.state = 'CLOSED';
     recordTrade(totalPnl);
 
+    // Update compound scalp circuit breaker
+    if (trade.strategy === 'COMPOUND_SCALP') {
+      try { recordCompoundResult(totalPnl > 0); } catch { /* non-critical */ }
+    }
+
     // Record in paper_trades
     await recordTradeExit(trade, reason, pnlPct, totalPnl);
 
@@ -459,6 +542,122 @@ async function exitTrade(trade, reason, currentMid) {
   } catch (err) {
     console.error(`[AUTO-TRADER] Exit failed for ${trade.ticker}: ${err.message}`);
     trade.state = 'OPEN'; // retry next cycle
+  }
+}
+
+// ── State Recovery & Cleanup ─────────────────────────────────────────────────
+
+/**
+ * Close stale paper trades from prior days.
+ * 0DTE options expire worthless at EOD — any OPEN trade from a previous day is dead.
+ */
+async function cleanupStaleTrades() {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const res = await query(`
+      UPDATE lc_v3.paper_trades SET
+        status = 'CLOSED',
+        exit_time = created_at + interval '7 hours',
+        exit_reason = 'EXPIRED_0DTE',
+        final_pnl_pct = -100,
+        final_pnl_dollars = 0,
+        outcome = 'LOSS'
+      WHERE status = 'OPEN'
+        AND auto_traded = true
+        AND created_at < $1::date
+      RETURNING paper_id, ticker
+    `, [today]);
+
+    if (res.rows.length > 0) {
+      console.log(`[AUTO-TRADER] Cleaned up ${res.rows.length} stale paper trades from prior days: ${res.rows.map(r => r.ticker).join(', ')}`);
+    }
+  } catch (err) {
+    console.error(`[AUTO-TRADER] Stale trade cleanup failed: ${err.message}`);
+  }
+}
+
+/**
+ * Recover open auto-traded positions from DB (survives server restart).
+ * Only recovers trades from today that have a contract symbol.
+ */
+async function recoverOpenTrades() {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const res = await query(`
+      SELECT paper_id, signal_id, ticker, direction, strategy,
+             entry_stock_price, entry_contract_mid, entry_contract_symbol,
+             entry_contract_strike, entry_contract_expiry,
+             entry_contract_delta, entry_contract_iv,
+             position_size_pct, created_at, grade
+      FROM lc_v3.paper_trades
+      WHERE status = 'OPEN'
+        AND auto_traded = true
+        AND created_at >= $1::date
+        AND entry_contract_symbol IS NOT NULL
+    `, [today]);
+
+    if (res.rows.length === 0) return;
+
+    // Check which contracts we actually hold on Alpaca
+    let positions;
+    try {
+      positions = await getPositions();
+    } catch {
+      positions = [];
+    }
+    const heldSymbols = new Set(positions.map(p => p.symbol));
+
+    let recovered = 0;
+    for (const row of res.rows) {
+      // Only recover if we still hold the position on Alpaca
+      if (!heldSymbols.has(row.entry_contract_symbol)) {
+        // Position closed on Alpaca but DB still says OPEN — mark as closed
+        await query(`
+          UPDATE lc_v3.paper_trades SET
+            status = 'CLOSED', exit_time = NOW(), exit_reason = 'POSITION_GONE',
+            outcome = 'UNKNOWN'
+          WHERE paper_id = $1
+        `, [row.paper_id]);
+        console.log(`[AUTO-TRADER] Marked ${row.ticker} ${row.entry_contract_symbol} as POSITION_GONE (not held on Alpaca)`);
+        continue;
+      }
+
+      const strategy = row.strategy || 'UNKNOWN';
+      const exits = STRATEGY_EXITS[strategy] || DEFAULT_EXITS;
+      const tradeId = `${row.ticker}-${row.direction}-recovered-${row.paper_id}`;
+
+      openTrades.set(tradeId, {
+        id: tradeId,
+        strategy,
+        ticker: row.ticker,
+        direction: row.direction,
+        state: 'OPEN',
+        orderId: null,
+        contractSymbol: row.entry_contract_symbol,
+        contracts: 1, // conservative — we don't know exact qty from DB
+        entryTime: new Date(row.created_at).getTime(),
+        entryPrice: parseFloat(row.entry_stock_price || 0),
+        entryPremium: parseFloat(row.entry_contract_mid || 0),
+        fillPrice: parseFloat(row.entry_contract_mid || 0),
+        grade: row.grade || 'B+',
+        exits,
+        peakPnlPct: 0,
+        breakEvenLocked: false,
+        signalId: row.signal_id,
+        strike: parseFloat(row.entry_contract_strike || 0),
+        expiry: row.entry_contract_expiry,
+        delta: parseFloat(row.entry_contract_delta || 0),
+        iv: parseFloat(row.entry_contract_iv || 0),
+        paperId: row.paper_id,
+      });
+      recovered++;
+    }
+
+    if (recovered > 0) {
+      console.log(`[AUTO-TRADER] Recovered ${recovered} open trades from DB`);
+    }
+  } catch (err) {
+    console.error(`[AUTO-TRADER] Trade recovery failed: ${err.message}`);
   }
 }
 

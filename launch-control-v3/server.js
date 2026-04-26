@@ -36,6 +36,7 @@ import { monitorOpenPositions } from './src/jobs/options-monitor.js';
 import { scoreContinuation } from './src/jobs/continuation-scorer.js';
 import { startAutoTrader, stopAutoTrader, getAutoTraderStatus } from './src/execution/auto-trader.js';
 import { manualHalt, resume as resumeTrading, getDailyState } from './src/execution/risk-manager.js';
+import { getActiveScalpPatterns, getScalpSessionStats, getScalpLevels, SCALP_TICKERS } from './src/scalper/scalp-state.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app  = express();
@@ -2989,6 +2990,33 @@ app.post('/api/auto-trader/resume', (req, res) => {
   res.json({ status: 'resumed', ...getAutoTraderStatus() });
 });
 
+// ── SCALPER ENDPOINTS ─────────────────────────────────────────────────────────
+
+app.get('/scalper', (req, res) => {
+  res.sendFile(join(__dirname, 'public', 'scalper.html'));
+});
+
+app.get('/api/scalper/patterns', (req, res) => {
+  const ticker = req.query.ticker; // optional filter
+  let patterns = getActiveScalpPatterns();
+  if (ticker && ticker !== 'ALL') {
+    patterns = patterns.filter(p => p.ticker === ticker);
+  }
+  res.json(patterns);
+});
+
+app.get('/api/scalper/stats', (req, res) => {
+  res.json(getScalpSessionStats());
+});
+
+app.get('/api/scalper/levels/:ticker', (req, res) => {
+  const { ticker } = req.params;
+  if (!SCALP_TICKERS.includes(ticker)) {
+    return res.status(400).json({ error: `Invalid ticker. Use: ${SCALP_TICKERS.join(', ')}` });
+  }
+  res.json(getScalpLevels(ticker));
+});
+
 // Catch-all — serve dashboard
 app.get('*', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'index.html'));
@@ -4041,45 +4069,9 @@ async function startRestPoller() {
                 console.warn(`[GREEKS] ${sig.ticker} capture failed: ${greeksErr.message}`);
               }
 
-              // Auto-open paper trade for every strategy signal
-              console.log(`[AUTO-PAPER ATTEMPT] ${sig.ticker} ${sig.strategy} signal_id=${newSignalId}`);
-              try {
-                // Re-read the signal to get contract fields that were just updated
-                const sigRow = await db.query(`SELECT * FROM lc_v3.signals WHERE signal_id = $1`, [newSignalId]);
-                const s = sigRow.rows[0];
-                if (s) {
-                  await db.query(`
-                    INSERT INTO lc_v3.paper_trades (
-                      signal_id, ticker, direction, grade, strategy,
-                      entry_stock_price, entry_contract_mid,
-                      entry_t1, entry_t2, entry_t3, entry_stop,
-                      position_size_pct,
-                      entry_contract_symbol, entry_contract_strike, entry_contract_expiry,
-                      entry_contract_delta, entry_contract_iv,
-                      status, auto_traded
-                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'OPEN',TRUE)
-                  `, [
-                    newSignalId, sig.ticker, sig.direction, 'A', sig.strategy,
-                    sig.entry_price,
-                    s.contract_mid ? parseFloat(s.contract_mid) : null,
-                    s.contract_t1 ? parseFloat(s.contract_t1) : null,
-                    s.contract_t2 ? parseFloat(s.contract_t2) : null,
-                    s.contract_t3 ? parseFloat(s.contract_t3) : null,
-                    s.contract_stop ? parseFloat(s.contract_stop) : null,
-                    s.position_size_pct ? parseFloat(s.position_size_pct) : null,
-                    s.contract_symbol || null,
-                    s.contract_strike ? parseFloat(s.contract_strike) : null,
-                    s.contract_expiry || null,
-                    s.contract_delta ? parseFloat(s.contract_delta) : null,
-                    s.contract_iv ? parseFloat(s.contract_iv) : null,
-                  ]);
-                  console.log(`[AUTO-PAPER SUCCESS] ${sig.ticker} ${sig.strategy} signal_id=${newSignalId}`);
-                } else {
-                  console.warn(`[AUTO-PAPER FAILED] ${sig.ticker} — signal row not found after insert`);
-                }
-              } catch (paperErr) {
-                console.error(`[AUTO-PAPER FAILED] ${sig.ticker} ${sig.strategy} error: ${paperErr.message}`);
-              }
+              // Paper trade creation is handled by auto-trader.js (checkForNewSignals → processSignal).
+              // auto-trader manages the full lifecycle: entry order → fill → monitor → exit → P&L recording.
+              // Previously this section created orphaned paper trades with no exit mechanism.
             }
           }
 
