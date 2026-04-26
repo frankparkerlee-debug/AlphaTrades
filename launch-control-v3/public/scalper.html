@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Launch Control v3 -- Scalper</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg0:#060a0f;--bg1:#0b1118;--bg2:#111a24;--bg3:#182030;
+  --border:#1e2d3d;--border2:#243547;
+  --amber:#f59e0b;--amber2:#fbbf24;--green:#10b981;--green2:#34d399;
+  --red:#ef4444;--blue:#3b82f6;--purple:#8b5cf6;--cyan:#06b6d4;
+  --text1:#e2e8f0;--text2:#a8b8c8;--text3:#6b7f94;--text4:#3d5068;
+  --mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg0);color:var(--text1);font-family:var(--sans);font-size:13px}
+body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.025) 2px,rgba(0,0,0,.025) 4px)}
+::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:var(--bg0)}::-webkit-scrollbar-thumb{background:var(--border2)}
+
+#header{position:sticky;top:0;z-index:100;display:flex;align-items:center;justify-content:space-between;padding:0 16px;height:44px;background:var(--bg1);border-bottom:1px solid var(--border)}
+.logo{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:13px;font-weight:700;letter-spacing:3px;color:var(--amber)}
+.logo-dot{width:7px;height:7px;border-radius:50%;background:var(--cyan)}
+.nav-links{display:flex;align-items:center;gap:12px}
+.nav-link{font-family:var(--mono);font-size:10px;color:var(--text3);text-decoration:none;letter-spacing:1px}
+.nav-link:hover{color:var(--amber)}
+.nav-link.active{color:var(--amber)}
+
+.container{max-width:1400px;margin:0 auto;padding:16px}
+.stat-row{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.stat{background:var(--bg2);border:1px solid var(--border);border-radius:5px;padding:10px 16px;min-width:100px;flex:1}
+.stat-label{font-size:8px;font-weight:700;letter-spacing:1.5px;color:var(--text3);text-transform:uppercase;margin-bottom:4px}
+.stat-value{font-family:var(--mono);font-size:18px;font-weight:700;color:var(--amber)}
+.stat-sub{font-family:var(--mono);font-size:9px;color:var(--text3);margin-top:2px}
+.section{background:var(--bg1);border:1px solid var(--border);border-radius:6px;padding:16px;margin-bottom:16px}
+.section-title{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:2px;color:var(--text3);margin-bottom:12px}
+
+.data-table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11px}
+.data-table th{text-align:left;padding:6px 8px;font-size:8px;font-weight:700;letter-spacing:1px;color:var(--text3);border-bottom:1px solid var(--border);text-transform:uppercase;white-space:nowrap}
+.data-table td{padding:5px 8px;border-bottom:1px solid var(--bg3);color:var(--text2)}
+.data-table tr:hover td{background:var(--bg2)}
+.pos{color:var(--green)}.neg{color:var(--red)}
+
+.badge{display:inline-block;padding:2px 8px;border-radius:3px;font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.5px}
+.badge-green{background:rgba(16,185,129,.15);color:var(--green);border:1px solid rgba(16,185,129,.3)}
+.badge-red{background:rgba(239,68,68,.15);color:var(--red);border:1px solid rgba(239,68,68,.3)}
+.badge-amber{background:rgba(245,158,11,.15);color:var(--amber);border:1px solid rgba(245,158,11,.3)}
+.badge-cyan{background:rgba(6,182,212,.15);color:var(--cyan);border:1px solid rgba(6,182,212,.3)}
+.badge-purple{background:rgba(139,92,246,.15);color:var(--purple);border:1px solid rgba(139,92,246,.3)}
+.badge-blue{background:rgba(59,130,246,.15);color:var(--blue);border:1px solid rgba(59,130,246,.3)}
+
+/* Ticker filter tabs */
+.ticker-row{display:flex;gap:6px;margin-bottom:16px;align-items:center}
+.ticker-btn{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:1px;padding:6px 16px;border-radius:3px;cursor:pointer;border:1px solid var(--border);background:var(--bg2);color:var(--text3);transition:all .15s}
+.ticker-btn:hover{border-color:var(--amber);color:var(--text1)}
+.ticker-btn.active{border-color:var(--amber);background:rgba(245,158,11,.1);color:var(--amber)}
+.audio-toggle{margin-left:auto;display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--text3);cursor:pointer;letter-spacing:1px}
+.audio-toggle input{accent-color:var(--amber)}
+
+/* Main layout */
+.main-grid{display:grid;grid-template-columns:1fr 300px;gap:16px}
+@media(max-width:900px){.main-grid{grid-template-columns:1fr}}
+
+/* Confidence bar */
+.conf-bar{display:inline-block;width:50px;height:6px;background:var(--bg3);border-radius:3px;overflow:hidden;vertical-align:middle;margin-right:4px}
+.conf-fill{height:100%;border-radius:3px}
+
+/* Level pills in sidebar */
+.level-group{margin-bottom:12px}
+.level-group-title{font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:1px;color:var(--text3);margin-bottom:6px}
+.level-item{display:flex;justify-content:space-between;padding:3px 0;font-family:var(--mono);font-size:10px;color:var(--text2);border-bottom:1px solid var(--bg3)}
+.level-label{color:var(--text3)}
+.level-value{color:var(--text1)}
+
+/* Sidebar ticker tabs */
+.sidebar-tabs{display:flex;gap:4px;margin-bottom:12px}
+.sidebar-tab{font-family:var(--mono);font-size:9px;font-weight:700;padding:4px 10px;border-radius:3px;cursor:pointer;border:1px solid var(--border);background:var(--bg2);color:var(--text3);letter-spacing:1px}
+.sidebar-tab:hover{color:var(--text1)}
+.sidebar-tab.active{border-color:var(--cyan);color:var(--cyan);background:rgba(6,182,212,.08)}
+
+/* Category colors for pattern badges */
+.cat-ict{background:rgba(139,92,246,.15);color:var(--purple);border:1px solid rgba(139,92,246,.3)}
+.cat-volume{background:rgba(6,182,212,.15);color:var(--cyan);border:1px solid rgba(6,182,212,.3)}
+.cat-classical{background:rgba(59,130,246,.15);color:var(--blue);border:1px solid rgba(59,130,246,.3)}
+.cat-momentum{background:rgba(245,158,11,.15);color:var(--amber);border:1px solid rgba(245,158,11,.3)}
+
+.no-data{text-align:center;padding:40px;color:var(--text4);font-family:var(--mono);font-size:11px;letter-spacing:1px}
+.pulse{animation:pulse-dot 2s ease-in-out infinite}
+@keyframes pulse-dot{0%,100%{opacity:.6}50%{opacity:1}}
+</style>
+</head>
+<body>
+
+<div id="header">
+  <div class="logo"><div class="logo-dot"></div>LAUNCH CONTROL</div>
+  <div class="nav-links">
+    <a href="/" class="nav-link">DASHBOARD</a>
+    <a href="/research" class="nav-link">RESEARCH</a>
+    <a href="/auto-trader" class="nav-link">AUTO-TRADER</a>
+    <span class="nav-link active">SCALPER</span>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- Ticker filter -->
+  <div class="ticker-row">
+    <button class="ticker-btn active" data-ticker="ALL">ALL</button>
+    <button class="ticker-btn" data-ticker="SPY">SPY</button>
+    <button class="ticker-btn" data-ticker="QQQ">QQQ</button>
+    <button class="ticker-btn" data-ticker="IWM">IWM</button>
+    <label class="audio-toggle">
+      <input type="checkbox" id="audioToggle"> ALERTS
+    </label>
+  </div>
+
+  <!-- Stats bar -->
+  <div class="stat-row">
+    <div class="stat">
+      <div class="stat-label">PATTERNS FIRED</div>
+      <div class="stat-value" id="statFired">0</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">ACTIVE SIGNALS</div>
+      <div class="stat-value" id="statActive">0</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">CALLS / PUTS</div>
+      <div class="stat-value" id="statDirection">--</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">ACTIVE FVGs</div>
+      <div class="stat-value" id="statFVGs">0</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">ACTIVE OBs</div>
+      <div class="stat-value" id="statOBs">0</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">TOP PATTERN</div>
+      <div class="stat-value" id="statTopPattern" style="font-size:12px">--</div>
+    </div>
+  </div>
+
+  <!-- Main content -->
+  <div class="main-grid">
+    <!-- Left: patterns table -->
+    <div>
+      <div class="section">
+        <div class="section-title">ACTIVE PATTERN SIGNALS</div>
+        <table class="data-table" id="patternTable">
+          <thead>
+            <tr>
+              <th>TIME</th>
+              <th>TICKER</th>
+              <th>PATTERN</th>
+              <th>DIR</th>
+              <th>CONF</th>
+              <th>ENTRY</th>
+              <th>STOP</th>
+              <th>TARGET</th>
+              <th>R:R</th>
+            </tr>
+          </thead>
+          <tbody id="patternBody">
+            <tr><td colspan="9" class="no-data">Waiting for market data...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="section">
+        <div class="section-title">PATTERN BREAKDOWN (SESSION)</div>
+        <table class="data-table" id="breakdownTable">
+          <thead>
+            <tr><th>PATTERN</th><th>CATEGORY</th><th>COUNT</th></tr>
+          </thead>
+          <tbody id="breakdownBody">
+            <tr><td colspan="3" class="no-data">No patterns detected yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Right: levels sidebar -->
+    <div>
+      <div class="section">
+        <div class="section-title">LEVELS & ZONES</div>
+        <div class="sidebar-tabs">
+          <button class="sidebar-tab active" data-sticker="SPY">SPY</button>
+          <button class="sidebar-tab" data-sticker="QQQ">QQQ</button>
+          <button class="sidebar-tab" data-sticker="IWM">IWM</button>
+        </div>
+        <div id="levelsContent">
+          <div class="no-data">No level data yet</div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">BY TICKER</div>
+        <div id="tickerBreakdown" style="font-family:var(--mono);font-size:11px;color:var(--text2)">
+          --
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const CATEGORY_MAP = {
+  ICT: 'cat-ict', 'Smart Money': 'cat-ict',
+  Volume: 'cat-volume', Microstructure: 'cat-volume',
+  Classical: 'cat-classical', 'Price Action': 'cat-classical',
+  Momentum: 'cat-momentum', 'Mean Reversion': 'cat-momentum',
+};
+
+function catClass(category) {
+  for (const [key, cls] of Object.entries(CATEGORY_MAP)) {
+    if ((category || '').includes(key)) return cls;
+  }
+  return 'badge-amber';
+}
+
+let activeTicker = 'ALL';
+let sidebarTicker = 'SPY';
+let audioEnabled = false;
+let lastPatternCount = 0;
+let audioCtx = null;
+
+// Ticker filter buttons
+document.querySelectorAll('.ticker-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.ticker-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    activeTicker = btn.dataset.ticker;
+    fetchPatterns();
+  });
+});
+
+// Sidebar ticker tabs
+document.querySelectorAll('.sidebar-tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.sidebar-tab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    sidebarTicker = btn.dataset.sticker;
+    fetchLevels();
+  });
+});
+
+// Audio toggle
+document.getElementById('audioToggle').addEventListener('change', e => {
+  audioEnabled = e.target.checked;
+});
+
+function playBeep() {
+  if (!audioEnabled) return;
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.type = 'sine';
+    osc.frequency.value = 880;
+    gain.gain.value = 0.15;
+    osc.start();
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+    osc.stop(audioCtx.currentTime + 0.3);
+  } catch (_) {}
+}
+
+function fmtTime(ts) {
+  const d = new Date(ts);
+  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+}
+
+function fmtPrice(p) {
+  return p ? '$' + Number(p).toFixed(2) : '--';
+}
+
+function confColor(c) {
+  if (c >= 80) return 'var(--green)';
+  if (c >= 70) return 'var(--amber)';
+  return 'var(--text3)';
+}
+
+function renderPatterns(patterns) {
+  const body = document.getElementById('patternBody');
+  if (!patterns.length) {
+    body.innerHTML = '<tr><td colspan="9" class="no-data">No active patterns' +
+      (activeTicker !== 'ALL' ? ' for ' + activeTicker : '') + '</td></tr>';
+    return;
+  }
+
+  // Check for new high-confidence patterns
+  if (patterns.length > lastPatternCount) {
+    const newOnes = patterns.slice(0, patterns.length - lastPatternCount);
+    if (newOnes.some(p => p.confidence >= 80)) playBeep();
+  }
+  lastPatternCount = patterns.length;
+
+  body.innerHTML = patterns.map(p => {
+    const dirCls = p.direction === 'CALL' ? 'pos' : 'neg';
+    const catCls = catClass(p.category);
+    const confPct = Math.min(100, p.confidence);
+    return `<tr>
+      <td>${fmtTime(p.timestamp)}</td>
+      <td style="font-weight:700;color:var(--text1)">${p.ticker}</td>
+      <td><span class="badge ${catCls}">${(p.pattern || '').replace(/_/g, ' ')}</span></td>
+      <td class="${dirCls}" style="font-weight:700">${p.direction}</td>
+      <td>
+        <span class="conf-bar"><span class="conf-fill" style="width:${confPct}%;background:${confColor(p.confidence)}"></span></span>
+        <span style="color:${confColor(p.confidence)}">${p.confidence}</span>
+      </td>
+      <td>${fmtPrice(p.entry)}</td>
+      <td>${fmtPrice(p.stop)}</td>
+      <td>${fmtPrice(p.target)}</td>
+      <td style="color:${p.riskReward >= 2 ? 'var(--green)' : 'var(--text2)'}">${p.riskReward ? p.riskReward.toFixed(1) + ':1' : '--'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderStats(stats) {
+  document.getElementById('statFired').textContent = stats.totalFired || 0;
+  document.getElementById('statFVGs').textContent = stats.activeFVGs || 0;
+  document.getElementById('statOBs').textContent = stats.activeOBs || 0;
+
+  const calls = stats.byDirection?.CALL || 0;
+  const puts = stats.byDirection?.PUT || 0;
+  document.getElementById('statDirection').innerHTML =
+    `<span class="pos">${calls}C</span> / <span class="neg">${puts}P</span>`;
+
+  // Top pattern
+  const byP = stats.byPattern || {};
+  const sorted = Object.entries(byP).sort((a, b) => b[1] - a[1]);
+  document.getElementById('statTopPattern').textContent =
+    sorted.length ? sorted[0][0].replace(/_/g, ' ') : '--';
+
+  // By ticker breakdown
+  const byT = stats.byTicker || {};
+  document.getElementById('tickerBreakdown').innerHTML =
+    Object.entries(byT).map(([t, c]) =>
+      `<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--bg3)"><span>${t}</span><span style="color:var(--amber)">${c}</span></div>`
+    ).join('') || '<span style="color:var(--text4)">--</span>';
+
+  // Pattern breakdown table
+  const breakdownBody = document.getElementById('breakdownBody');
+  if (!sorted.length) {
+    breakdownBody.innerHTML = '<tr><td colspan="3" class="no-data">No patterns detected yet</td></tr>';
+  } else {
+    breakdownBody.innerHTML = sorted.map(([pattern, count]) => {
+      const cat = guessCat(pattern);
+      return `<tr><td><span class="badge ${catClass(cat)}">${pattern.replace(/_/g, ' ')}</span></td><td style="color:var(--text3)">${cat}</td><td style="color:var(--amber)">${count}</td></tr>`;
+    }).join('');
+  }
+}
+
+function guessCat(pattern) {
+  const ict = ['FVG_RETEST','LIQUIDITY_SWEEP','AMD','ORDER_BLOCK','BREAKER_BLOCK','DISPLACEMENT'];
+  const vol = ['VOLUME_CLIMAX','VOLUME_DRYUP','DELTA_DIVERGENCE'];
+  const classical = ['ENGULFING_LEVEL','PIN_BAR','INSIDE_BAR','THREE_BAR_REVERSAL','DOUBLE_TOP','DOUBLE_BOTTOM'];
+  if (ict.includes(pattern)) return 'ICT';
+  if (vol.includes(pattern)) return 'Volume';
+  if (classical.includes(pattern)) return 'Classical';
+  return 'Momentum';
+}
+
+function renderLevels(data) {
+  const el = document.getElementById('levelsContent');
+  if (!data || (!data.fvgs?.length && !data.orderBlocks?.length && !data.swingPoints?.length)) {
+    el.innerHTML = '<div class="no-data">No level data yet</div>';
+    return;
+  }
+
+  let html = '';
+
+  if (data.fvgs?.length) {
+    html += '<div class="level-group"><div class="level-group-title">FAIR VALUE GAPS</div>';
+    data.fvgs.forEach(f => {
+      const dir = f.direction === 'CALL' ? 'BULL' : 'BEAR';
+      const cls = f.direction === 'CALL' ? 'pos' : 'neg';
+      html += `<div class="level-item"><span class="level-label ${cls}">${dir} FVG</span><span class="level-value">${fmtPrice(f.bottom)} - ${fmtPrice(f.top)}</span></div>`;
+    });
+    html += '</div>';
+  }
+
+  if (data.orderBlocks?.length) {
+    html += '<div class="level-group"><div class="level-group-title">ORDER BLOCKS</div>';
+    data.orderBlocks.forEach(ob => {
+      const dir = ob.direction === 'CALL' ? 'BULL' : 'BEAR';
+      const cls = ob.direction === 'CALL' ? 'pos' : 'neg';
+      html += `<div class="level-item"><span class="level-label ${cls}">${dir} OB</span><span class="level-value">${fmtPrice(ob.bottom)} - ${fmtPrice(ob.top)}</span></div>`;
+    });
+    html += '</div>';
+  }
+
+  if (data.swingPoints?.length) {
+    html += '<div class="level-group"><div class="level-group-title">SWING POINTS</div>';
+    data.swingPoints.forEach(sp => {
+      const cls = sp.type === 'HIGH' ? 'neg' : 'pos';
+      html += `<div class="level-item"><span class="level-label ${cls}">SW ${sp.type}</span><span class="level-value">${fmtPrice(sp.price)}</span></div>`;
+    });
+    html += '</div>';
+  }
+
+  el.innerHTML = html;
+}
+
+// ── Fetch loops ──────────────────────────
+
+async function fetchPatterns() {
+  try {
+    const q = activeTicker !== 'ALL' ? `?ticker=${activeTicker}` : '';
+    const res = await fetch('/api/scalper/patterns' + q);
+    const data = await res.json();
+    renderPatterns(data);
+    document.getElementById('statActive').textContent = data.length;
+  } catch (_) {}
+}
+
+async function fetchStats() {
+  try {
+    const res = await fetch('/api/scalper/stats');
+    renderStats(await res.json());
+  } catch (_) {}
+}
+
+async function fetchLevels() {
+  try {
+    const res = await fetch('/api/scalper/levels/' + sidebarTicker);
+    renderLevels(await res.json());
+  } catch (_) {}
+}
+
+// Initial fetch
+fetchPatterns();
+fetchStats();
+fetchLevels();
+
+// Polling
+setInterval(fetchPatterns, 3000);
+setInterval(fetchStats, 10000);
+setInterval(fetchLevels, 5000);
+</script>
+
+</body>
+</html>
