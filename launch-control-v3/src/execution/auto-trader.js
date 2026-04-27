@@ -182,8 +182,8 @@ async function checkForNewSignals() {
       SELECT * FROM lc_v3.signals
       WHERE status = 'ACTIVE'
         AND (auto_traded IS NULL OR auto_traded = false)
-        AND grade IN ('A+', 'A', 'A-', 'B+')
-        AND strategy IS NOT NULL
+        AND strategy = 'COMPOUND_SCALP'
+        AND ticker = 'IWM'
         AND (expires_at IS NULL OR expires_at > NOW())
       ORDER BY composite_raw DESC
       LIMIT 5
