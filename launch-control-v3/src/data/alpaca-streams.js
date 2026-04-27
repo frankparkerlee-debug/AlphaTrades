@@ -527,14 +527,29 @@ async function runCompoundDetection(ticker) {
   };
 
   const signals = detectCompoundSignals(ticker, bars, ctx);
+
+  if (signals.length > 0) {
+    logger.info(`[COMPOUND] ${ticker}: detector returned ${signals.length} raw signal(s): ${signals.map(s => `${s.pattern} ${s.direction} conf=${s.confidence}`).join(', ')}`);
+  }
   if (signals.length === 0) return;
 
   // Session trend filter: CALLs need price > VWAP or > open; PUTs need < VWAP or < open
   const price = bars[bars.length - 1].c;
   const filteredSignals = signals.filter(sig => {
-    if (sig.confidence < 65) return false;
-    if (sig.direction === 'CALL') return price > vwap || price > sessionOpen;
-    if (sig.direction === 'PUT') return price < vwap || price < sessionOpen;
+    if (sig.confidence < 65) {
+      logger.info(`[COMPOUND] ${ticker}: ${sig.pattern} ${sig.direction} REJECTED — confidence ${sig.confidence} < 65`);
+      return false;
+    }
+    if (sig.direction === 'CALL') {
+      const pass = price > vwap || price > sessionOpen;
+      if (!pass) logger.info(`[COMPOUND] ${ticker}: ${sig.pattern} CALL REJECTED — price ${price.toFixed(2)} < vwap ${vwap.toFixed(2)} AND < open ${sessionOpen.toFixed(2)}`);
+      return pass;
+    }
+    if (sig.direction === 'PUT') {
+      const pass = price < vwap || price < sessionOpen;
+      if (!pass) logger.info(`[COMPOUND] ${ticker}: ${sig.pattern} PUT REJECTED — price ${price.toFixed(2)} > vwap ${vwap.toFixed(2)} AND > open ${sessionOpen.toFixed(2)}`);
+      return pass;
+    }
     return false;
   });
 
