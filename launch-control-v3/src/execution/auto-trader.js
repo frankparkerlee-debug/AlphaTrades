@@ -180,11 +180,11 @@ async function checkForNewSignals() {
   try {
     const res = await query(`
       SELECT * FROM lc_v3.signals
-      WHERE created_at > NOW() - interval '5 minutes'
-        AND status = 'ACTIVE'
+      WHERE status = 'ACTIVE'
         AND (auto_traded IS NULL OR auto_traded = false)
         AND grade IN ('A+', 'A', 'A-', 'B+')
         AND strategy IS NOT NULL
+        AND (expires_at IS NULL OR expires_at > NOW())
       ORDER BY composite_raw DESC
       LIMIT 5
     `);
