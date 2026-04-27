@@ -383,6 +383,7 @@ function handleStockMessage(msg) {
       }
       if (REFERENCE_ETFS.includes(msg.S)) {
         updateMarketEtf(msg.S, msg);
+        updateTickerBar(msg.S, msg);  // also build bar history for pattern detection
         persistBar(msg.S, msg);
         // Run scalp pattern detection on ETFs that are scalp tickers
         if (SCALP_TICKERS.includes(msg.S)) {
