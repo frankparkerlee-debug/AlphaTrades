@@ -296,7 +296,7 @@ const STREAM_URL  = process.env.ALPACA_STREAM_URL || 'wss://stream.data.alpaca.m
 const API_KEY     = process.env.ALPACA_API_KEY;
 const API_SECRET  = process.env.ALPACA_SECRET_KEY;
 
-const REFERENCE_ETFS = ['SPY', 'QQQ', 'SMH', 'XLK', 'XLY', 'XLC', 'DIA'];
+const REFERENCE_ETFS = ['SPY', 'QQQ', 'IWM', 'SMH', 'XLK', 'XLY', 'XLC', 'DIA'];
 
 // Reconnection config
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 32000, 60000];

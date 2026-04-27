@@ -17,7 +17,7 @@ import logger from './utils/logger.js';
 import { isMarketOpen, nowET, todayStr } from './utils/time.js';
 import { getMarketSession, SESSION } from './utils/session.js';
 
-const REFERENCE_ETFS = ['SPY', 'QQQ', 'SMH', 'XLK', 'XLY', 'XLC', 'DIA'];
+const REFERENCE_ETFS = ['SPY', 'QQQ', 'IWM', 'SMH', 'XLK', 'XLY', 'XLC', 'DIA'];
 
 // ── STARTUP ────────────────────────────────────────────
 
