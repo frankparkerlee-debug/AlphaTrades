@@ -29,7 +29,7 @@ import {
   generateGapFillSignals,
   generateMomentumScalpSignals,
 } from './scripts/backtest/strategies/live-adapter.js';
-import { getRecentFlow } from './src/data/alpaca-streams.js';
+import { getRecentFlow, getBarFlowDiagnostics } from './src/data/alpaca-streams.js';
 import { startSentimentPoller, getSentimentPollerStats } from './src/sentiment/poller.js';
 import { getRecentSentiment, getSentimentRollup, getIngestCounts } from './src/sentiment/store.js';
 import { monitorOpenPositions } from './src/jobs/options-monitor.js';
@@ -267,6 +267,22 @@ app.get('/api/status', async (req, res) => {
   } catch (err) {
     res.json({ session: 'UNKNOWN', propagation: [], streams: {}, error: err.message });
   }
+});
+
+// Bar flow diagnostics — verify WebSocket bars are being received and persisted
+app.get('/api/bar-diagnostics', async (req, res) => {
+  const diag = getBarFlowDiagnostics();
+  const dbCheck = await db.query(`
+    SELECT COUNT(*) as today_bars, MAX(ts) as latest_bar
+    FROM lc_v3.bars
+    WHERE DATE(ts AT TIME ZONE 'America/New_York') = CURRENT_DATE
+  `);
+  res.json({
+    ...diag,
+    dbBarsToday: parseInt(dbCheck.rows[0].today_bars),
+    latestBarInDb: dbCheck.rows[0].latest_bar,
+    serverUpSince: global.serverStartTime || null,
+  });
 });
 
 // Pre-market briefing
@@ -3024,6 +3040,7 @@ app.get('*', (req, res) => {
 
 // ── START SERVER ──────────────────────────────────────────────────────────────
 const server = createServer(app);
+global.serverStartTime = new Date().toISOString();
 server.listen(PORT, () => {
   console.log(`[LC v3] Server running on port ${PORT}`);
   console.log(`[LC v3] Dashboard: http://localhost:${PORT}`);

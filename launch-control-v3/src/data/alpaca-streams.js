@@ -34,15 +34,30 @@ function getWindowKey(tsStr) {
   return `${Math.floor(floored / 60).toString().padStart(2, '0')}:${(floored % 60).toString().padStart(2, '0')}`;
 }
 
+let barPersistCount = 0;
+let barPersistErrors = 0;
+let barReceiveCount = 0;
+let lastBarLogTime = 0;
+
 function persistBar(ticker, msg) {
   const ts = msg.t;
   if (!ts) return;
+  barPersistCount++;
+  // Log bar flow every 60s so we can verify bars are actually being written
+  const now = Date.now();
+  if (now - lastBarLogTime > 60000) {
+    logger.info(`[BAR-PERSIST] ${barPersistCount} bars written, ${barPersistErrors} errors (last: ${ticker} @ ${ts})`);
+    lastBarLogTime = now;
+  }
   dbQuery(`
     INSERT INTO lc_v3.bars (ticker, ts, open, high, low, close, volume, vwap, session, window_key)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
     ON CONFLICT (ticker, ts) DO NOTHING
   `, [ticker, ts, msg.o, msg.h, msg.l, msg.c, msg.v, msg.vw || null, getBarSession(ts), getWindowKey(ts)])
-    .catch(err => logger.error(`[BAR-PERSIST] ${ticker} write failed: ${err.message}`));
+    .catch(err => {
+      barPersistErrors++;
+      logger.error(`[BAR-PERSIST] ${ticker} write failed: ${err.message}`);
+    });
 }
 
 // ── TRADE FLOW AGGREGATION ──────────────────────────────
@@ -136,6 +151,10 @@ async function flushFlowBuckets(minuteTs) {
  * @param {number} minutes - how many minutes of data (default 5)
  * @returns {{ avgBuyRatio: number|null, totalBuy: number, totalSell: number, minutes: number }}
  */
+export function getBarFlowDiagnostics() {
+  return { barReceiveCount, barPersistCount, barPersistErrors, trackedTickers: trackedTickers.length };
+}
+
 export function getRecentFlow(ticker, minutes = 5) {
   const arr = recentFlow.get(ticker);
   if (!arr || arr.length === 0) return { avgBuyRatio: null, totalBuy: 0, totalSell: 0, minutes: 0 };
@@ -357,7 +376,11 @@ function handleStockMessage(msg) {
       logger.info(`Stock stream subscribed: ${JSON.stringify(msg)}`);
       break;
 
-    case 'b': // bar
+    case 'b': { // bar
+      barReceiveCount++;
+      if (barReceiveCount <= 3 || barReceiveCount % 500 === 0) {
+        logger.info(`[WS-BAR] Received bar #${barReceiveCount}: ${msg.S} close=${msg.c} ts=${msg.t}`);
+      }
       if (REFERENCE_ETFS.includes(msg.S)) {
         updateMarketEtf(msg.S, msg);
         persistBar(msg.S, msg);
@@ -376,7 +399,7 @@ function handleStockMessage(msg) {
         if (onSignalCallback) onSignalCallback(msg.S);
       }
       break;
-
+    }
     case 't': // trade
       if (trackedTickers.includes(msg.S)) {
         recordTrade(msg.S, msg);
