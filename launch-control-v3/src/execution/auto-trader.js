@@ -140,8 +140,13 @@ export function stopAutoTrader() {
 /**
  * Main cycle — called every CYCLE_SECONDS.
  */
+let cycleCount = 0;
 async function runCycle() {
   if (!running || !isMarketHours()) return;
+  cycleCount++;
+  if (cycleCount % 20 === 1) { // log every ~5 min (20 x 15s)
+    console.log(`[AUTO-TRADER] Heartbeat: cycle #${cycleCount}, open trades: ${openTrades.size}, market hours: true`);
+  }
 
   try {
     // 1. Monitor open positions for exits
@@ -189,7 +194,11 @@ async function checkForNewSignals() {
       LIMIT 5
     `);
     signals = res.rows;
-  } catch {
+    if (signals.length > 0) {
+      console.log(`[AUTO-TRADER] Found ${signals.length} ACTIVE compound scalp signal(s): ${signals.map(s => `${s.signal_id?.slice(0,8)} ${s.direction} grade=${s.grade}`).join(', ')}`);
+    }
+  } catch (err) {
+    console.error(`[AUTO-TRADER] Signal query failed: ${err.message}`);
     return;
   }
 
@@ -359,7 +368,7 @@ async function monitorOpenPositions() {
       const holdMinutes = (Date.now() - trade.entryTime) / 60000;
       const exits = trade.exits;
 
-      // Update peak P&L for trailing
+      // Update peak P&L for trailing (always track, even between bar closes)
       trade.peakPnlPct = Math.max(trade.peakPnlPct, pnlPct);
 
       // Compound scalp breakeven lock: once +2% reached, stop moves to 0%
@@ -367,22 +376,30 @@ async function monitorOpenPositions() {
         trade.breakEvenLocked = true;
       }
 
+      // Close-based stops: only evaluate stop/trail on bar close (once per minute).
+      // 0DTE options have massive intra-bar wicks — checking every 15s causes
+      // premature stop-outs. Backtest showed 33% of put stops were wick-kills
+      // where bar low hit -3% but close was +2.4% avg.
+      const currentMinute = Math.floor(Date.now() / 60000);
+      const isBarClose = !exits.closeBasedStops || currentMinute !== (trade.lastStopCheckMinute || 0);
+      if (isBarClose && exits.closeBasedStops) {
+        trade.lastStopCheckMinute = currentMinute;
+      }
+
       let exitReason = null;
 
       // Compute effective stop level for compound scalp trailing model
       let effectiveStop = exits.lossCutPct;
       if (trade.breakEvenLocked) {
-        // Breakeven locked — stop is at least 0%
         effectiveStop = 0;
       }
       if (trade.peakPnlPct >= exits.trailActivatePct) {
-        // Trail active — stop is peak * keepPct (at least breakeven if locked)
         const trailStop = trade.peakPnlPct * exits.trailGiveBack;
         effectiveStop = Math.max(effectiveStop, trailStop);
       }
 
-      // 1. Stop check (covers initial stop, breakeven, and trailing)
-      if (pnlPct <= effectiveStop) {
+      // 1. Stop check — only on bar close for closeBasedStops strategies
+      if (isBarClose && pnlPct <= effectiveStop) {
         exitReason = trade.peakPnlPct >= exits.trailActivatePct ? 'TRAIL' :
                      trade.breakEvenLocked ? 'BREAKEVEN' : 'CUT';
       }
@@ -390,7 +407,7 @@ async function monitorOpenPositions() {
       else if (pnlPct >= exits.targetPct) {
         exitReason = 'TARGET';
       }
-      // 3. Time backstop
+      // 3. Time backstop (always enforced, regardless of close-based)
       else if (holdMinutes >= exits.maxHoldMinutes) {
         exitReason = 'TIME';
       }

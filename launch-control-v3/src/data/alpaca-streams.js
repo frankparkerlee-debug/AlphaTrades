@@ -478,7 +478,7 @@ function resetCompoundDay() {
 
 async function runCompoundDetection(ticker) {
   const ts = getTickerState(ticker);
-  if (!ts || !ts.bars || ts.bars.length < 15) return;
+  if (!ts || !ts.bars || ts.bars.length < 10) return;
 
   resetCompoundDay();
 
@@ -616,9 +616,9 @@ async function runCompoundDetection(ticker) {
     compoundState.daySignals[ticker] = dayCount + 1;
 
     logger.info(
-      `[COMPOUND] SIGNAL: ${ticker} ${best.direction} ${best.pattern} conf=${best.confidence} ` +
+      `[COMPOUND] SIGNAL WRITTEN: ${ticker} ${best.direction} ${best.pattern} conf=${best.confidence} ` +
       `contract=${contract.symbol} mid=$${contract.mid.toFixed(2)} ` +
-      `(day #${dayCount + 1})`
+      `TTL=5min status=ACTIVE (day #${dayCount + 1})`
     );
   } catch (err) {
     logger.error(`[COMPOUND] Signal write failed: ${err.message}`);
