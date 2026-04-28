@@ -585,7 +585,7 @@ async function runCompoundDetection(ticker) {
         contract_delta, contract_iv,
         flags
       ) VALUES (
-        NOW() + interval '60 seconds', 'ACTIVE', $1, $2, 'COMPOUND',
+        NOW() + interval '5 minutes', 'ACTIVE', $1, $2, 'COMPOUND',
         $3, $4, 'COMPOUND_SCALP',
         $5, $6,
         $7, $8, $9, $10,
