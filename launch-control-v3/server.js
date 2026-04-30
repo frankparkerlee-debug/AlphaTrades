@@ -35,6 +35,7 @@ import { getRecentSentiment, getSentimentRollup, getIngestCounts } from './src/s
 import { monitorOpenPositions } from './src/jobs/options-monitor.js';
 import { scoreContinuation } from './src/jobs/continuation-scorer.js';
 import { startAutoTrader, stopAutoTrader, getAutoTraderStatus } from './src/execution/auto-trader.js';
+import { getAccount as getAlpacaAccount, getPositions as getAlpacaPositions } from './src/execution/alpaca-orders.js';
 import { manualHalt, resume as resumeTrading, getDailyState } from './src/execution/risk-manager.js';
 import { getActiveScalpPatterns, getScalpSessionStats, getScalpLevels, SCALP_TICKERS } from './src/scalper/scalp-state.js';
 
@@ -283,6 +284,214 @@ app.get('/api/bar-diagnostics', async (req, res) => {
     latestBarInDb: dbCheck.rows[0].latest_bar,
     serverUpSince: global.serverStartTime || null,
   });
+});
+
+// Daily review snapshot — consumed by the scheduled remote agent.
+// Returns everything needed to assess pipeline health, breakages,
+// slippage, and opportunities for strategy refinement.
+app.get('/api/daily-review', async (req, res) => {
+  try {
+    const dayOffset = parseInt(req.query.dayOffset || '0', 10); // 0=today, 1=yesterday
+    const trailingDays = Math.min(parseInt(req.query.trailingDays || '20', 10), 90);
+    const dateExpr = `(CURRENT_DATE - INTERVAL '${dayOffset} days')`;
+
+    // Today's compound scalp signals (full detail)
+    const sigs = await db.query(`
+      SELECT signal_id, ticker, direction, grade, status, auto_traded,
+             composite_raw, price_at_signal,
+             contract_symbol, contract_strike, contract_mid,
+             flags,
+             created_at AT TIME ZONE 'America/New_York' AS created_et,
+             expires_at AT TIME ZONE 'America/New_York' AS expires_et,
+             EXTRACT(EPOCH FROM (expires_at - created_at)) AS ttl_seconds
+        FROM lc_v3.signals
+       WHERE strategy = 'COMPOUND_SCALP'
+         AND DATE(created_at AT TIME ZONE 'America/New_York') = ${dateExpr}
+       ORDER BY created_at DESC
+    `);
+
+    // Today's paper trades (slippage = entry_contract_mid vs entry_stock_price reflects fill quality)
+    const trades = await db.query(`
+      SELECT paper_id, signal_id, ticker, direction, strategy, grade,
+             entry_time AT TIME ZONE 'America/New_York' AS entry_et,
+             exit_time AT TIME ZONE 'America/New_York' AS exit_et,
+             entry_stock_price, entry_contract_mid, entry_contract_symbol,
+             exit_contract_est, exit_reason,
+             status, hit_t1, hit_t2, hit_t3, hit_stop,
+             final_pnl_pct, final_pnl_dollars, peak_pnl_pct, max_adverse_pnl_pct,
+             outcome, auto_traded
+        FROM lc_v3.paper_trades
+       WHERE auto_traded = true
+         AND DATE(created_at AT TIME ZONE 'America/New_York') = ${dateExpr}
+       ORDER BY entry_time DESC
+    `);
+
+    // IWM bar coverage today
+    const bars = await db.query(`
+      SELECT COUNT(*) AS bar_count,
+             MIN(ts) AS first_bar,
+             MAX(ts) AS last_bar
+        FROM lc_v3.bars
+       WHERE ticker = 'IWM'
+         AND DATE(ts AT TIME ZONE 'America/New_York') = ${dateExpr}
+    `);
+
+    // Trailing N-day baseline (excludes today)
+    const trailing = await db.query(`
+      SELECT
+        COUNT(*) AS trades,
+        SUM(CASE WHEN outcome = 'WIN' THEN 1 ELSE 0 END) AS wins,
+        SUM(CASE WHEN outcome = 'LOSS' THEN 1 ELSE 0 END) AS losses,
+        ROUND(AVG(final_pnl_pct)::numeric, 2) AS avg_pnl_pct,
+        ROUND(SUM(final_pnl_dollars)::numeric, 2) AS total_pnl_dollars,
+        SUM(CASE WHEN exit_reason = 'TIME' THEN 1 ELSE 0 END) AS time_exits,
+        SUM(CASE WHEN exit_reason = 'CUT' THEN 1 ELSE 0 END) AS cut_exits,
+        SUM(CASE WHEN exit_reason = 'TRAIL' THEN 1 ELSE 0 END) AS trail_exits,
+        SUM(CASE WHEN exit_reason = 'BREAKEVEN' THEN 1 ELSE 0 END) AS breakeven_exits,
+        SUM(CASE WHEN exit_reason = 'EXPIRED_0DTE' THEN 1 ELSE 0 END) AS expired_0dte
+      FROM lc_v3.paper_trades
+      WHERE auto_traded = true
+        AND status = 'CLOSED'
+        AND DATE(created_at AT TIME ZONE 'America/New_York')
+            BETWEEN ${dateExpr} - INTERVAL '${trailingDays} days'
+                AND ${dateExpr} - INTERVAL '1 day'
+    `);
+
+    // Per-pattern WR over trailing window (look inside flags JSON)
+    const byPattern = await db.query(`
+      SELECT
+        s.flags->>'pattern' AS pattern,
+        COUNT(p.*) AS trades,
+        SUM(CASE WHEN p.outcome = 'WIN' THEN 1 ELSE 0 END) AS wins,
+        ROUND(AVG(p.final_pnl_pct)::numeric, 2) AS avg_pnl_pct
+      FROM lc_v3.paper_trades p
+      JOIN lc_v3.signals s ON s.signal_id = p.signal_id
+      WHERE p.auto_traded = true
+        AND p.status = 'CLOSED'
+        AND s.strategy = 'COMPOUND_SCALP'
+        AND DATE(p.created_at AT TIME ZONE 'America/New_York')
+            BETWEEN ${dateExpr} - INTERVAL '${trailingDays} days'
+                AND ${dateExpr}
+      GROUP BY s.flags->>'pattern'
+      ORDER BY trades DESC
+    `);
+
+    // Confidence bucket WR (signal grade distribution vs outcome)
+    const byGrade = await db.query(`
+      SELECT
+        s.grade,
+        COUNT(p.*) AS trades,
+        SUM(CASE WHEN p.outcome = 'WIN' THEN 1 ELSE 0 END) AS wins,
+        ROUND(AVG(p.final_pnl_pct)::numeric, 2) AS avg_pnl_pct
+      FROM lc_v3.paper_trades p
+      JOIN lc_v3.signals s ON s.signal_id = p.signal_id
+      WHERE p.auto_traded = true
+        AND p.status = 'CLOSED'
+        AND s.strategy = 'COMPOUND_SCALP'
+        AND DATE(p.created_at AT TIME ZONE 'America/New_York')
+            BETWEEN ${dateExpr} - INTERVAL '${trailingDays} days'
+                AND ${dateExpr}
+      GROUP BY s.grade
+      ORDER BY s.grade
+    `);
+
+    // Time-of-day bucket WR (30-min buckets in ET)
+    const byTimeOfDay = await db.query(`
+      SELECT
+        EXTRACT(HOUR FROM (p.entry_time AT TIME ZONE 'America/New_York')) AS hour_et,
+        FLOOR(EXTRACT(MINUTE FROM (p.entry_time AT TIME ZONE 'America/New_York')) / 30) * 30 AS minute_bucket,
+        COUNT(*) AS trades,
+        SUM(CASE WHEN p.outcome = 'WIN' THEN 1 ELSE 0 END) AS wins,
+        ROUND(AVG(p.final_pnl_pct)::numeric, 2) AS avg_pnl_pct
+      FROM lc_v3.paper_trades p
+      JOIN lc_v3.signals s ON s.signal_id = p.signal_id
+      WHERE p.auto_traded = true
+        AND p.status = 'CLOSED'
+        AND s.strategy = 'COMPOUND_SCALP'
+        AND DATE(p.created_at AT TIME ZONE 'America/New_York')
+            BETWEEN ${dateExpr} - INTERVAL '${trailingDays} days'
+                AND ${dateExpr}
+      GROUP BY hour_et, minute_bucket
+      ORDER BY hour_et, minute_bucket
+    `);
+
+    // Alpaca account snapshot
+    let alpaca = null;
+    try {
+      const acct = await getAlpacaAccount();
+      const positions = await getAlpacaPositions().catch(() => []);
+      alpaca = {
+        equity: parseFloat(acct.equity || acct.portfolio_value || 0),
+        cash: parseFloat(acct.cash || 0),
+        buying_power: parseFloat(acct.buying_power || 0),
+        status: acct.status,
+        position_count: positions.length,
+        positions: positions.map(p => ({
+          symbol: p.symbol, qty: p.qty, market_value: p.market_value,
+          unrealized_pl: p.unrealized_pl, unrealized_plpc: p.unrealized_plpc,
+        })),
+      };
+    } catch (err) {
+      alpaca = { error: err.message };
+    }
+
+    // Aggregates for today
+    const sigCounts = sigs.rows.reduce((acc, s) => {
+      acc.total++;
+      acc.by_status[s.status] = (acc.by_status[s.status] || 0) + 1;
+      acc.by_grade[s.grade] = (acc.by_grade[s.grade] || 0) + 1;
+      if (s.auto_traded) acc.picked_up++;
+      return acc;
+    }, { total: 0, picked_up: 0, by_status: {}, by_grade: {} });
+
+    const tradeCounts = trades.rows.reduce((acc, t) => {
+      acc.total++;
+      if (t.status === 'OPEN' || t.status === 'PENDING_ENTRY') acc.open++;
+      if (t.outcome === 'WIN') acc.wins++;
+      if (t.outcome === 'LOSS') acc.losses++;
+      acc.by_exit[t.exit_reason || 'OPEN'] = (acc.by_exit[t.exit_reason || 'OPEN'] || 0) + 1;
+      acc.total_pnl_dollars += parseFloat(t.final_pnl_dollars || 0);
+      return acc;
+    }, { total: 0, open: 0, wins: 0, losses: 0, by_exit: {}, total_pnl_dollars: 0 });
+
+    // Pipeline anomaly flags (let the agent reason about them)
+    const flags = [];
+    const barCount = parseInt(bars.rows[0].bar_count, 10);
+    if (barCount < 200) flags.push({ kind: 'LOW_BAR_COUNT', detail: `IWM only ${barCount} bars today (expect 300+ during full session)` });
+    if (sigCounts.total > 0 && tradeCounts.total === 0) flags.push({ kind: 'PIPELINE_LEAK', detail: `${sigCounts.total} signals fired but 0 trades placed` });
+    const expiredCount = sigCounts.by_status.EXPIRED || 0;
+    if (sigCounts.total > 0 && expiredCount === sigCounts.total) flags.push({ kind: 'ALL_EXPIRED', detail: `All ${sigCounts.total} signals expired without pickup — check auto-trader cycle and TTL` });
+    const ttls = sigs.rows.map(s => parseFloat(s.ttl_seconds)).filter(Boolean);
+    if (ttls.length && Math.min(...ttls) < 120) flags.push({ kind: 'SHORT_TTL', detail: `Some signals had TTL < 2min (min=${Math.min(...ttls)}s) — should be 300s` });
+
+    res.json({
+      generated_at: new Date().toISOString(),
+      day_offset: dayOffset,
+      trailing_days: trailingDays,
+      today: {
+        signals: sigCounts,
+        signal_rows: sigs.rows,
+        trades: tradeCounts,
+        trade_rows: trades.rows,
+        bars_iwm: {
+          count: barCount,
+          first: bars.rows[0].first_bar,
+          last: bars.rows[0].last_bar,
+        },
+      },
+      trailing: {
+        summary: trailing.rows[0],
+        by_pattern: byPattern.rows,
+        by_grade: byGrade.rows,
+        by_time_of_day: byTimeOfDay.rows,
+      },
+      alpaca,
+      anomaly_flags: flags,
+    });
+  } catch (err) {
+    console.error('[daily-review] failed:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Pre-market briefing
