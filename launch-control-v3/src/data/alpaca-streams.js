@@ -16,6 +16,7 @@ import {
   SCALP_TICKERS, updateScalpState, addDetectedPattern,
 } from '../scalper/scalp-state.js';
 import { selectCompoundScalpContract } from '../options/contract-selector.js';
+import { isMarketHours } from '../execution/risk-manager.js';
 
 // ── BAR PERSISTENCE ─────────────────────────────────────
 function getBarSession(tsStr) {
@@ -477,6 +478,11 @@ function resetCompoundDay() {
 }
 
 async function runCompoundDetection(ticker) {
+  // Compound scalp was backtested 9:30-16:00 ET only. Premarket bars produce
+  // junk signals (no session VWAP, no opening range) that burn through the
+  // daily 7-signal cap before the market even opens.
+  if (!isMarketHours()) return;
+
   const ts = getTickerState(ticker);
   if (!ts || !ts.bars || ts.bars.length < 10) return;
 

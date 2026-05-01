@@ -704,18 +704,19 @@ async function recordTradeEntry(trade) {
   try {
     const res = await query(`
       INSERT INTO lc_v3.paper_trades (
-        signal_id, ticker, direction, strategy, status,
+        signal_id, ticker, direction, strategy, grade, status,
         entry_stock_price, entry_contract_mid, entry_contract_symbol,
         entry_contract_strike, entry_contract_expiry,
         entry_contract_delta, entry_contract_iv,
         position_size_pct, auto_traded
-      ) VALUES ($1,$2,$3,$4,'OPEN',$5,$6,$7,$8,$9,$10,$11,$12,TRUE)
+      ) VALUES ($1,$2,$3,$4,$5,'OPEN',$6,$7,$8,$9,$10,$11,$12,$13,TRUE)
       RETURNING paper_id
     `, [
       trade.signalId,
       trade.ticker,
       trade.direction,
       trade.strategy,
+      trade.grade || null,
       trade.entryPrice,
       trade.fillPrice || trade.entryPremium,
       trade.contractSymbol,
@@ -725,59 +726,68 @@ async function recordTradeEntry(trade) {
       trade.iv,
       SIZE_PCT,
     ]);
-    // Store paper_id so exits can match exactly
     if (res.rows?.[0]?.paper_id) {
       trade.paperId = res.rows[0].paper_id;
+      console.log(`[AUTO-TRADER] paper_trades INSERTED: ${trade.paperId} (${trade.ticker} ${trade.direction})`);
     }
   } catch (err) {
-    console.error(`[AUTO-TRADER] recordTradeEntry failed: ${err.message}`);
+    console.error(`[AUTO-TRADER] recordTradeEntry FAILED for ${trade.ticker} ${trade.direction}: ${err.message}`);
+    console.error(`[AUTO-TRADER] entry payload: signalId=${trade.signalId} contract=${trade.contractSymbol} strike=${trade.strike} expiry=${trade.expiry}`);
   }
 }
 
 async function recordTradeExit(trade, exitReason, pnlPct, pnlDollars) {
+  const outcome = pnlPct > 0 ? 'WIN' : pnlPct < 0 ? 'LOSS' : 'FLAT';
+  const pnlPctRounded = parseFloat(pnlPct.toFixed(2));
+  const pnlDollarsRounded = Math.round(pnlDollars);
+
   try {
-    // Prefer paper_id for exact match, fall back to signal_id + ticker
     if (trade.paperId) {
       await query(`
         UPDATE lc_v3.paper_trades SET
-          status = 'CLOSED',
-          exit_time = NOW(),
-          exit_reason = $1,
-          final_pnl_pct = $2,
-          final_pnl_dollars = $3,
-          outcome = $4
+          status = 'CLOSED', exit_time = NOW(),
+          exit_reason = $1, final_pnl_pct = $2,
+          final_pnl_dollars = $3, outcome = $4
         WHERE paper_id = $5
-      `, [
-        exitReason,
-        parseFloat(pnlPct.toFixed(2)),
-        Math.round(pnlDollars),
-        pnlPct > 0 ? 'WIN' : pnlPct < 0 ? 'LOSS' : 'FLAT',
-        trade.paperId,
-      ]);
-    } else {
-      await query(`
-        UPDATE lc_v3.paper_trades SET
-          status = 'CLOSED',
-          exit_time = NOW(),
-          exit_reason = $1,
-          final_pnl_pct = $2,
-          final_pnl_dollars = $3,
-          outcome = $4
-        WHERE signal_id = $5
-          AND ticker = $6
-          AND status = 'OPEN'
-          AND auto_traded = TRUE
-      `, [
-        exitReason,
-        parseFloat(pnlPct.toFixed(2)),
-        Math.round(pnlDollars),
-        pnlPct > 0 ? 'WIN' : pnlPct < 0 ? 'LOSS' : 'FLAT',
-        trade.signalId,
-        trade.ticker,
-      ]);
+      `, [exitReason, pnlPctRounded, pnlDollarsRounded, outcome, trade.paperId]);
+      return;
     }
+
+    // No paper_id — entry insert never landed. Try update by signal_id, then
+    // fall back to a full INSERT so the trade is captured (was the silent loss bug).
+    const upd = await query(`
+      UPDATE lc_v3.paper_trades SET
+        status = 'CLOSED', exit_time = NOW(),
+        exit_reason = $1, final_pnl_pct = $2,
+        final_pnl_dollars = $3, outcome = $4
+      WHERE signal_id = $5 AND ticker = $6
+        AND status = 'OPEN' AND auto_traded = TRUE
+      RETURNING paper_id
+    `, [exitReason, pnlPctRounded, pnlDollarsRounded, outcome, trade.signalId, trade.ticker]);
+
+    if (upd.rowCount > 0) return;
+
+    // Fallback INSERT — captures trades whose entry insert silently failed
+    console.warn(`[AUTO-TRADER] No paper_trades row for ${trade.ticker} ${trade.direction} — inserting closed record retroactively`);
+    await query(`
+      INSERT INTO lc_v3.paper_trades (
+        signal_id, ticker, direction, strategy, grade, status,
+        entry_stock_price, entry_contract_mid, entry_contract_symbol,
+        entry_contract_strike, entry_contract_expiry,
+        entry_contract_delta, entry_contract_iv,
+        position_size_pct, auto_traded,
+        entry_time, exit_time, exit_reason,
+        final_pnl_pct, final_pnl_dollars, outcome
+      ) VALUES ($1,$2,$3,$4,$5,'CLOSED',$6,$7,$8,$9,$10,$11,$12,$13,TRUE,
+                to_timestamp($14::bigint / 1000.0), NOW(), $15, $16, $17, $18)
+    `, [
+      trade.signalId, trade.ticker, trade.direction, trade.strategy, trade.grade || null,
+      trade.entryPrice, trade.fillPrice || trade.entryPremium, trade.contractSymbol,
+      trade.strike, trade.expiry, trade.delta, trade.iv, SIZE_PCT,
+      trade.entryTime, exitReason, pnlPctRounded, pnlDollarsRounded, outcome,
+    ]);
   } catch (err) {
-    console.error(`[AUTO-TRADER] recordTradeExit failed: ${err.message}`);
+    console.error(`[AUTO-TRADER] recordTradeExit FAILED for ${trade.ticker}: ${err.message}`);
   }
 }
 
