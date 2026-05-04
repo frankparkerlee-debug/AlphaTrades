@@ -153,22 +153,23 @@ export function updatePositionCount(count) {
  * Check if within market hours (ET).
  */
 export function isMarketHours() {
-  const now = new Date();
-  // Convert to ET (rough: UTC-5 in winter, UTC-4 in summer)
-  const etOffset = isDST(now) ? -4 : -5;
-  const etHour = (now.getUTCHours() + etOffset + 24) % 24;
-  const etMin = now.getUTCMinutes();
+  // Use Intl to get true ET wall-clock time, regardless of server timezone.
+  // The previous implementation used date.getTimezoneOffset() which returns 0
+  // on Render's UTC servers, causing isDST() to always return false and
+  // shifting the market window 1 hour late during EDT (March-November).
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(new Date());
+  const etHour = parseInt(parts.find(p => p.type === 'hour').value, 10) % 24;
+  const etMin = parseInt(parts.find(p => p.type === 'minute').value, 10);
 
   const afterOpen = etHour > MARKET_OPEN_HOUR || (etHour === MARKET_OPEN_HOUR && etMin >= MARKET_OPEN_MIN);
   const beforeClose = etHour < MARKET_CLOSE_HOUR || (etHour === MARKET_CLOSE_HOUR && etMin === 0);
 
   return afterOpen && beforeClose;
-}
-
-function isDST(date) {
-  const jan = new Date(date.getFullYear(), 0, 1);
-  const jul = new Date(date.getFullYear(), 6, 1);
-  return date.getTimezoneOffset() < Math.max(jan.getTimezoneOffset(), jul.getTimezoneOffset());
 }
 
 /**
